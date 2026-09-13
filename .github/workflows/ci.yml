@@ -5,18 +5,42 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: npm
-      - run: npm install
+      - run: npm ci
       - run: npm run check
+
+  live-smoke:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    env:
+      BIRDEYE_API_KEY: ${{ secrets.BIRDEYE_API_KEY }}
+      BIRDEYE_MAX_RPM: '50'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Verify Birdeye secret is configured
+        shell: bash
+        run: |
+          if [ -z "$BIRDEYE_API_KEY" ]; then
+            echo "::error::BIRDEYE_API_KEY repository secret is missing"
+            exit 1
+          fi
+      - name: Birdeye live discovery smoke test
+        run: npm run smoke:birdeye
