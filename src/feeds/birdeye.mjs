@@ -1,3 +1,5 @@
+import { drainDirectCreates } from './directCreateQueue.mjs';
+
 const BASE_URL = 'https://public-api.birdeye.so';
 
 const rawMaxRpm = Number(process.env.BIRDEYE_MAX_RPM ?? 50);
@@ -77,17 +79,45 @@ async function birdeyeGet(apiKey, path, params = {}, { timeoutMs = 8000 } = {}) 
   }
 }
 
-export async function fetchNewListings(apiKey, { limit = 20 } = {}) {
-  if (!apiKey) return [];
-  const body = await birdeyeGet(apiKey, '/defi/v2/tokens/new_listing', {
-    limit: Math.max(1, Math.min(20, limit)),
-    meme_platform_enabled: true
-  });
-  const items = body?.data?.items ?? body?.data?.tokens ?? body?.data ?? [];
-  if (!Array.isArray(items)) return [];
+const mergeDiscovery = (direct, listed) => {
+  const merged = new Map();
+  for (const item of [...direct, ...listed]) {
+    if (!item?.address) continue;
+    const previous = merged.get(item.address) ?? {};
+    const previousListed = Number(previous.listedAt);
+    const nextListed = Number(item.listedAt);
+    merged.set(item.address, {
+      ...previous,
+      ...item,
+      imageUrl: item.imageUrl ?? previous.imageUrl,
+      symbol: item.symbol && item.symbol !== 'UNKNOWN' && item.symbol !== 'NEW' ? item.symbol : (previous.symbol ?? item.symbol),
+      name: item.name && item.name !== 'Unknown' && item.name !== 'New Pump.fun coin' ? item.name : (previous.name ?? item.name),
+      listedAt: Number.isFinite(previousListed) && Number.isFinite(nextListed)
+        ? Math.min(previousListed, nextListed)
+        : (Number.isFinite(nextListed) ? nextListed : previousListed)
+    });
+  }
+  return [...merged.values()];
+};
 
+export async function fetchNewListings(apiKey, { limit = 20 } = {}) {
+  const direct = drainDirectCreates(50);
+  if (!apiKey) return direct;
+
+  let body;
+  try {
+    body = await birdeyeGet(apiKey, '/defi/v2/tokens/new_listing', {
+      limit: Math.max(1, Math.min(20, limit)),
+      meme_platform_enabled: true
+    });
+  } catch (error) {
+    if (direct.length) return direct;
+    throw error;
+  }
+
+  const items = body?.data?.items ?? body?.data?.tokens ?? body?.data ?? [];
   const now = Date.now();
-  return items.map((x) => {
+  const listed = Array.isArray(items) ? items.map((x) => {
     const listedSeconds = asNumber(first(x, ['liquidityAddedAt', 'listedAt', 'createdAt']), Math.floor(now / 1000));
     return {
       address: String(first(x, ['address', 'tokenAddress']) ?? ''),
@@ -100,7 +130,9 @@ export async function fetchNewListings(apiKey, { limit = 20 } = {}) {
       priceUsd: asNumber(first(x, ['price', 'priceUsd'])),
       liquidityUsd: asNumber(first(x, ['liquidity', 'liquidityUsd']))
     };
-  }).filter((x) => x.address);
+  }).filter((x) => x.address) : [];
+
+  return mergeDiscovery(direct, listed);
 }
 
 export async function fetchTokenOverview(apiKey, address) {
