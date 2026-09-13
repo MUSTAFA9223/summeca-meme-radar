@@ -1,3 +1,4 @@
+import { TelegramController } from './bot/telegramController.mjs';
 import { env } from './config/env.mjs';
 import { scoreToken } from './core/scoring.mjs';
 import { enrichTokenSnapshot, fetchNewListings } from './feeds/birdeye.mjs';
@@ -41,7 +42,32 @@ async function resolveTelegramChatId() {
   }
 }
 
-const telegram = new TelegramNotifier(env.telegramBotToken, await resolveTelegramChatId(), env.telegramLanguage);
+const runtime = {
+  language: env.telegramLanguage,
+  alertsEnabled: true,
+  scannerPaused: false,
+  walletAddress: ''
+};
+
+if (appSettings.enabled) {
+  try {
+    const [language, alerts, paused, wallet] = await Promise.all([
+      appSettings.get('telegram_language'),
+      appSettings.get('alerts_enabled'),
+      appSettings.get('scanner_paused'),
+      appSettings.get('wallet_address')
+    ]);
+    if (['ar', 'en', 'bilingual'].includes(String(language))) runtime.language = String(language);
+    if (alerts != null) runtime.alertsEnabled = String(alerts) !== 'false';
+    if (paused != null) runtime.scannerPaused = String(paused) === 'true';
+    if (wallet) runtime.walletAddress = String(wallet);
+  } catch (error) {
+    console.error('[runtime:settings-read]', error.message);
+  }
+}
+
+const telegramChatId = await resolveTelegramChatId();
+const telegram = new TelegramNotifier(env.telegramBotToken, telegramChatId, runtime.language);
 const trader = new PaperTrader({
   startingUsd: env.paperStartingUsd,
   tradeSizeUsd: env.paperTradeSizeUsd,
@@ -49,6 +75,16 @@ const trader = new PaperTrader({
   stopLossPct: env.paperStopLossPct,
   peakHunterStartPct: env.peakHunterStartPct
 });
+const telegramController = new TelegramController({
+  token: env.telegramBotToken,
+  chatId: telegramChatId,
+  notifier: telegram,
+  settings: appSettings,
+  store,
+  runtime,
+  heliusApiKey: env.heliusApiKey
+});
+
 const candidates = new Map();
 const securityChecked = new Set();
 let ticking = false;
@@ -143,6 +179,7 @@ async function liveSnapshots() {
 }
 
 async function tick(trigger = 'poll') {
+  if (runtime.scannerPaused) return false;
   if (ticking) return false;
   ticking = true;
   try {
@@ -160,7 +197,7 @@ async function tick(trigger = 'poll') {
         const result = trader.update(s, scores);
         if (result.closed) {
           await persistExit(s, scores, result.closed, refs);
-          await telegram.exit(result.closed);
+          if (runtime.alertsEnabled) await telegram.exit(result.closed);
         }
         continue;
       }
@@ -173,6 +210,7 @@ async function tick(trigger = 'poll') {
         trigger,
         database: store.enabled ? 'supabase' : 'disabled',
         telegram: telegram.enabled ? 'linked' : 'disabled',
+        alerts: runtime.alertsEnabled,
         token: s.symbol,
         address: s.address,
         scores,
@@ -183,7 +221,9 @@ async function tick(trigger = 'poll') {
         },
         paperEntry: Boolean(p)
       }));
-      if (scores.entry >= env.entryScoreThreshold) await telegram.signal(s, scores, p ?? undefined);
+      if (runtime.alertsEnabled && scores.entry >= env.entryScoreThreshold) {
+        await telegram.signal(s, scores, p ?? undefined);
+      }
     }
     return true;
   } finally {
@@ -199,7 +239,7 @@ function startHeliusWakeups() {
     programIds: env.heliusProgramIds,
     staleAfterMs: env.heliusStaleAfterMs,
     onEvent: (event) => {
-      if (event.err) return;
+      if (event.err || runtime.scannerPaused) return;
       if (!['create', 'migrate'].includes(event.kind)) return;
 
       const now = Date.now();
@@ -221,6 +261,7 @@ function startHeliusWakeups() {
 
 function shutdown(signal) {
   console.log(`[shutdown] ${signal}`);
+  telegramController.stop();
   heliusStream?.stop();
   process.exit(0);
 }
@@ -230,7 +271,8 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.5 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram alerts (${env.telegramLanguage})` : ''}`);
+console.log(`SUMMECA Meme Radar v0.6 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''}`);
+await telegramController.start();
 startHeliusWakeups();
 await tick('startup');
 setInterval(() => tick('fallback-poll').catch((err) => console.error('[tick]', err)), env.birdeyePollMs);
