@@ -5,6 +5,7 @@
   "type": "module",
   "description": "Solana meme-token early momentum scanner with paper trading, persistence, Telegram controls, and read-only wallet monitoring.",
   "scripts": {
+    "start": "node src/index.mjs",
     "dev": "node src/index.mjs",
     "test": "node --test tests/*.test.mjs",
     "check": "node --check src/index.mjs && node --check src/bot/telegramController.mjs && node --check src/feeds/heliusWs.mjs && node --check src/storage/supabaseStore.mjs && node --check src/storage/appSettings.mjs && node --check src/notifiers/telegram.mjs && node --check scripts/birdeye-smoke.mjs && node --check scripts/helius-smoke.mjs && node --check scripts/helius-ws-smoke.mjs && node --check scripts/supabase-smoke.mjs && node --check scripts/telegram-smoke.mjs && node --test tests/*.test.mjs",
