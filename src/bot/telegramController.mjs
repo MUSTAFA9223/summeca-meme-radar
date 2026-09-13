@@ -1,11 +1,13 @@
+import { fetchHeliusAssetMetadata } from '../feeds/heliusAsset.mjs';
 import { normalizeTelegramLanguage, telegramApi } from '../notifiers/telegram.mjs';
 
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const short = (value) => value ? `${value.slice(0, 5)}…${value.slice(-5)}` : '—';
 const yesNo = (value, ar = true) => ar ? (value ? 'نعم' : 'لا') : (value ? 'Yes' : 'No');
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class TelegramController {
-  constructor({ token, chatId, notifier, settings, store, runtime, heliusApiKey, onPaperBuy }) {
+  constructor({ token, chatId, notifier, settings, store, runtime, heliusApiKey, onPaperBuy, getRecentCreates }) {
     this.token = token;
     this.chatId = String(chatId ?? '');
     this.notifier = notifier;
@@ -14,6 +16,7 @@ export class TelegramController {
     this.runtime = runtime;
     this.heliusApiKey = heliusApiKey ?? '';
     this.onPaperBuy = typeof onPaperBuy === 'function' ? onPaperBuy : null;
+    this.getRecentCreates = typeof getRecentCreates === 'function' ? getRecentCreates : (() => []);
     this.offset = 0;
     this.stopped = true;
     this.awaitingWallet = false;
@@ -42,6 +45,7 @@ export class TelegramController {
   mainKeyboard() {
     return [
       [{ text: '📊 الحالة', callback_data: 'menu:status' }, { text: '🔥 آخر الإشارات', callback_data: 'menu:signals' }],
+      [{ text: '🆕 العملات الجديدة', callback_data: 'menu:newcoins' }],
       [{ text: '🧪 الصفقات التجريبية', callback_data: 'menu:trades' }, { text: '👛 المحفظة', callback_data: 'menu:wallet' }],
       [{ text: '⚙️ الإعدادات', callback_data: 'menu:settings' }, { text: '🛡️ الحماية', callback_data: 'menu:safety' }],
       [{ text: '❓ المساعدة', callback_data: 'menu:help' }]
@@ -50,8 +54,8 @@ export class TelegramController {
 
   async showMainMenu() {
     return this.#send(this.#pick(
-      '🤖 SUMMECA Meme Radar\n\nاختر من لوحة التحكم:',
-      '🤖 SUMMECA Meme Radar\n\nChoose from the control panel:'
+      '🤖 SUMMECA Meme Radar\n\nالتنبيهات التلقائية مخصصة للزخم/الدخول القوي. العملات الجديدة تجدها يدويًا من زر «🆕 العملات الجديدة».',
+      '🤖 SUMMECA Meme Radar\n\nAutomatic alerts are reserved for strong momentum/entry signals. Browse raw new launches from “🆕 New coins”.'
     ), this.mainKeyboard());
   }
 
@@ -59,7 +63,8 @@ export class TelegramController {
     const ar = [
       '📊 حالة الرادار', '',
       `الرادار: ${this.runtime.scannerPaused ? '⏸️ متوقف مؤقتًا' : '🟢 يعمل'}`,
-      `التنبيهات: ${this.runtime.alertsEnabled ? '🔔 مفعلة' : '🔕 متوقفة'}`,
+      `تنبيهات الزخم: ${this.runtime.alertsEnabled ? '🔔 مفعلة' : '🔕 متوقفة'}`,
+      'تنبيهات إنشاء العملات: 🔇 مخفية — داخل قسم العملات الجديدة',
       `اللغة: ${this.runtime.language}`,
       `التداول الحقيقي: 🔒 مغلق`,
       `الوضع: 🧪 تداول تجريبي فقط`,
@@ -69,7 +74,8 @@ export class TelegramController {
     const en = [
       '📊 Radar status', '',
       `Scanner: ${this.runtime.scannerPaused ? '⏸️ Paused' : '🟢 Running'}`,
-      `Alerts: ${this.runtime.alertsEnabled ? '🔔 Enabled' : '🔕 Disabled'}`,
+      `Momentum alerts: ${this.runtime.alertsEnabled ? '🔔 Enabled' : '🔕 Disabled'}`,
+      'Raw create alerts: 🔇 Hidden — browse them under New coins',
       `Language: ${this.runtime.language}`,
       'Live trading: 🔒 Locked',
       'Mode: 🧪 Paper trading only',
@@ -81,12 +87,12 @@ export class TelegramController {
 
   async #showSettings() {
     const text = this.#pick(
-      '⚙️ الإعدادات\n\nيمكنك تغيير اللغة، التنبيهات، وتشغيل/إيقاف الرادار من هنا.',
-      '⚙️ Settings\n\nChange language, alerts, and pause/resume the scanner here.'
+      '⚙️ الإعدادات\n\nيمكنك تغيير اللغة، تنبيهات الزخم، وتشغيل/إيقاف الرادار من هنا.',
+      '⚙️ Settings\n\nChange language, momentum alerts, and pause/resume the scanner here.'
     );
     return this.#send(text, [
       [{ text: '🌐 اللغة', callback_data: 'settings:language' }],
-      [{ text: this.runtime.alertsEnabled ? '🔕 إيقاف التنبيهات' : '🔔 تشغيل التنبيهات', callback_data: 'settings:alerts' }],
+      [{ text: this.runtime.alertsEnabled ? '🔕 إيقاف تنبيهات الزخم' : '🔔 تشغيل تنبيهات الزخم', callback_data: 'settings:alerts' }],
       [{ text: this.runtime.scannerPaused ? '▶️ تشغيل الرادار' : '⏸️ إيقاف الرادار مؤقتًا', callback_data: 'settings:scanner' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
     ]);
@@ -148,17 +154,73 @@ export class TelegramController {
     return Number(body?.result?.value ?? 0) / 1_000_000_000;
   }
 
+  async #showNewCoins() {
+    const rows = this.getRecentCreates().slice(0, 5);
+    if (!rows.length) {
+      return this.#send(this.#pick(
+        '🆕 لا توجد عملات إنشاء جديدة محفوظة منذ آخر تشغيل.',
+        '🆕 No recent create events have been captured since the last restart.'
+      ), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
+    }
+
+    await this.#send(this.#pick(
+      '🆕 أحدث العملات التي تم إنشاؤها\n\nهذه قائمة خام للعرض عند الطلب فقط، وليست إشارات دخول. التنبيه التلقائي سيصلك فقط إذا ظهر زخم قوي.',
+      '🆕 Latest created coins\n\nThis is an on-demand raw list, not entry signals. Automatic alerts are only sent after strong momentum appears.'
+    ), [[{ text: '🔄 تحديث', callback_data: 'menu:newcoins' }, { text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
+
+    for (const row of rows) {
+      const address = String(row.address ?? '');
+      if (!SOLANA_ADDRESS.test(address)) continue;
+      let meta = {};
+      if (this.heliusApiKey) {
+        try { meta = await fetchHeliusAssetMetadata(this.heliusApiKey, address); } catch {}
+      }
+      const symbol = meta.symbol ?? row.symbol ?? 'NEW';
+      const name = meta.name ?? row.name ?? 'New Pump.fun coin';
+      const ageSec = Math.max(0, Math.round((Date.now() - Number(row.createdAt ?? Date.now())) / 1000));
+      const caption = this.#pick(
+        `🆕 ${symbol} — ${name}\nالعمر: ${ageSec}ث\nالحالة: لم تعتمد كإشارة دخول\nCA: ${address}`,
+        `🆕 ${symbol} — ${name}\nAge: ${ageSec}s\nStatus: not approved as an entry signal\nCA: ${address}`
+      );
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: this.runtime.language === 'en' ? '📋 Copy CA' : '📋 نسخ CA', copy_text: { text: address } }],
+          [{ text: this.runtime.language === 'en' ? '📄 Send CA only' : '📄 إرسال CA فقط', callback_data: `token:ca:${address}` }],
+          [
+            { text: '⚡ Pump.fun', url: `https://pump.fun/coin/${encodeURIComponent(address)}` },
+            { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(address)}` }
+          ]
+        ]
+      };
+      if (meta.imageUrl) {
+        try {
+          await telegramApi(this.token, 'sendPhoto', {
+            chat_id: this.chatId,
+            photo: meta.imageUrl,
+            caption,
+            reply_markup: keyboard
+          });
+        } catch {
+          await telegramApi(this.token, 'sendMessage', { chat_id: this.chatId, text: caption, reply_markup: keyboard });
+        }
+      } else {
+        await telegramApi(this.token, 'sendMessage', { chat_id: this.chatId, text: caption, reply_markup: keyboard });
+      }
+      await wait(250);
+    }
+  }
+
   async #showSignals() {
     let rows = [];
     try { rows = await this.store.listRecentSignals(5); } catch {}
     if (!rows.length) {
-      return this.#send(this.#pick('🔥 لا توجد إشارات محفوظة بعد.', '🔥 No stored signals yet.'), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
+      return this.#send(this.#pick('🔥 لا توجد إشارات زخم محفوظة بعد.', '🔥 No stored momentum signals yet.'), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
     }
     const lines = rows.map((row, i) => {
       const token = row.tokens ?? {};
       return `${i + 1}. ${token.symbol ?? 'TOKEN'} | Entry ${row.entry_score ?? '—'} | Moon ${row.moon_score ?? '—'} | Risk ${row.risk_score ?? '—'}`;
     });
-    return this.#send(`🔥 ${this.#pick('آخر الإشارات', 'Recent signals')}\n\n${lines.join('\n')}`, [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
+    return this.#send(`🔥 ${this.#pick('آخر إشارات الزخم/الدخول', 'Recent momentum/entry signals')}\n\n${lines.join('\n')}`, [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showTrades() {
@@ -184,8 +246,8 @@ export class TelegramController {
 
   async #showHelp() {
     return this.#send(this.#pick(
-      '❓ المساعدة\n\n/start أو /menu لفتح لوحة التحكم.\nمن أي تنبيه عملة اضغط «🧪 دخول من البوت — Paper» ثم اختر نسبة أو مبلغ بالدولار.\nيمكنك ربط عنوان Solana العام من قسم المحفظة. لا ترسل أي مفتاح خاص أو كلمات الاسترداد.',
-      '❓ Help\n\nUse /start or /menu to open the control panel.\nFrom a token alert tap “🧪 In-bot entry — Paper” and choose a percentage or USD amount.\nYou can link a public Solana address from Wallet. Never send a private key or recovery phrase.'
+      '❓ المساعدة\n\n/start أو /menu لفتح لوحة التحكم.\n«🆕 العملات الجديدة» يعرض العقود الخام عند الطلب ولا يرسلها كتنبيهات.\nالتنبيه الرئيسي مخصص للعملات ذات الزخم/الدخول القوي، ومنه يمكنك اختيار دخول Paper بالنسبة أو بالدولار.\nلا ترسل أي مفتاح خاص أو كلمات الاسترداد.',
+      '❓ Help\n\nUse /start or /menu to open the control panel.\n“🆕 New coins” shows raw creates on demand and does not push them as alerts.\nMain alerts are reserved for strong momentum/entry signals, where PAPER sizing by percent or USD is available.\nNever send a private key or recovery phrase.'
     ), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
@@ -259,6 +321,7 @@ export class TelegramController {
 
     if (data === 'menu:home') return this.showMainMenu();
     if (data === 'menu:status') return this.#showStatus();
+    if (data === 'menu:newcoins') return this.#showNewCoins();
     if (data === 'menu:signals') return this.#showSignals();
     if (data === 'menu:trades') return this.#showTrades();
     if (data === 'menu:wallet') return this.#showWallet();
