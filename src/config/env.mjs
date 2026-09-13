@@ -25,6 +25,11 @@ const csv = (name, fallback = '') => String(process.env[name] ?? fallback)
   .map((value) => value.trim())
   .filter(Boolean);
 
+const language = (name, fallback = 'ar') => {
+  const value = String(process.env[name] ?? fallback).trim().toLowerCase();
+  return ['ar', 'en', 'bilingual'].includes(value) ? value : fallback;
+};
+
 export const env = {
   birdeyeApiKey: process.env.BIRDEYE_API_KEY ?? '',
   birdeyePollMs: Math.max(5000, num('BIRDEYE_POLL_MS', 10000)),
@@ -42,6 +47,7 @@ export const env = {
 
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
+  telegramLanguage: language('TELEGRAM_LANGUAGE', 'ar'),
   liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? 'false') === 'true',
   minLiquidityUsd: num('MIN_LIQUIDITY_USD', 8000),
   entryScoreThreshold: num('ENTRY_SCORE_THRESHOLD', 82),
