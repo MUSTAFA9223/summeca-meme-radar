@@ -183,4 +183,18 @@ export class SupabaseStore {
     this.#tradeIds.delete(snapshot.address);
     return id;
   }
+
+  async listRecentSignals(limit = 5) {
+    if (!this.enabled) return [];
+    const safeLimit = Math.max(1, Math.min(10, Number(limit) || 5));
+    const rows = await this.#request(`signals?select=created_at,signal_type,entry_score,moon_score,risk_score,tokens(symbol,address)&order=created_at.desc&limit=${safeLimit}`);
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  async listRecentPaperTrades(limit = 5) {
+    if (!this.enabled) return [];
+    const safeLimit = Math.max(1, Math.min(10, Number(limit) || 5));
+    const rows = await this.#request(`paper_trades?select=status,opened_at,closed_at,pnl_pct,entry_price_usd,exit_price_usd,tokens(symbol,address)&order=opened_at.desc&limit=${safeLimit}`);
+    return Array.isArray(rows) ? rows : [];
+  }
 }
