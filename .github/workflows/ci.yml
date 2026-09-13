@@ -28,6 +28,8 @@ jobs:
     env:
       BIRDEYE_API_KEY: ${{ secrets.BIRDEYE_API_KEY }}
       HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
       BIRDEYE_MAX_RPM: '50'
     steps:
       - uses: actions/checkout@v4
@@ -39,17 +41,17 @@ jobs:
       - name: Verify live provider secrets are configured
         shell: bash
         run: |
-          if [ -z "$BIRDEYE_API_KEY" ]; then
-            echo "::error::BIRDEYE_API_KEY repository secret is missing"
-            exit 1
-          fi
-          if [ -z "$HELIUS_API_KEY" ]; then
-            echo "::error::HELIUS_API_KEY repository secret is missing"
-            exit 1
-          fi
+          for name in BIRDEYE_API_KEY HELIUS_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name repository secret is missing"
+              exit 1
+            fi
+          done
       - name: Birdeye live discovery smoke test
         run: npm run smoke:birdeye
       - name: Helius mainnet RPC smoke test
         run: npm run smoke:helius
       - name: Helius Pump.fun WebSocket subscription smoke test
         run: npm run smoke:helius-ws
+      - name: Supabase write-read-delete smoke test
+        run: npm run smoke:supabase
