@@ -22,9 +22,9 @@ const num = (name, fallback) => {
 
 export const env = {
   birdeyeApiKey: process.env.BIRDEYE_API_KEY ?? '',
-  birdeyePollMs: Math.max(2000, num('BIRDEYE_POLL_MS', 5000)),
-  discoveryBatchSize: Math.max(1, Math.min(20, Math.floor(num('DISCOVERY_BATCH_SIZE', 20)))),
-  maxTrackedTokens: Math.max(1, Math.min(20, Math.floor(num('MAX_TRACKED_TOKENS', 8)))),
+  birdeyePollMs: Math.max(5000, num('BIRDEYE_POLL_MS', 10000)),
+  discoveryBatchSize: Math.max(1, Math.min(20, Math.floor(num('DISCOVERY_BATCH_SIZE', 10)))),
+  maxTrackedTokens: Math.max(1, Math.min(10, Math.floor(num('MAX_TRACKED_TOKENS', 3)))),
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
   liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? 'false') === 'true',
@@ -34,7 +34,7 @@ export const env = {
   maxTokenAgeSeconds: num('MAX_TOKEN_AGE_SECONDS', 300),
   paperStartingUsd: num('PAPER_STARTING_USD', 1000),
   paperTradeSizeUsd: num('PAPER_TRADE_SIZE_USD', 25),
-  maxOpenPositions: Math.max(1, Math.floor(num('MAX_OPEN_POSITIONS', 4))),
+  maxOpenPositions: Math.max(1, Math.min(3, Math.floor(num('MAX_OPEN_POSITIONS', 2)))),
   paperStopLossPct: num('PAPER_STOP_LOSS_PCT', 22),
   peakHunterStartPct: num('PEAK_HUNTER_START_PCT', 200)
 };
