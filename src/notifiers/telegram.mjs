@@ -1,4 +1,4 @@
-async function telegramApi(token, method, body = {}) {
+export async function telegramApi(token, method, body = {}) {
   if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
   const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
     method: 'POST',
@@ -33,7 +33,7 @@ export async function discoverPrivateStartChat(token) {
   return ids[0];
 }
 
-const normalizeLanguage = (language) => {
+export const normalizeTelegramLanguage = (language) => {
   const value = String(language ?? 'ar').trim().toLowerCase();
   return ['ar', 'en', 'bilingual'].includes(value) ? value : 'ar';
 };
@@ -53,11 +53,15 @@ export class TelegramNotifier {
   constructor(token, chatId, language = 'ar') {
     this.token = token;
     this.chatId = chatId;
-    this.language = normalizeLanguage(language);
+    this.language = normalizeTelegramLanguage(language);
   }
 
   get enabled() {
     return Boolean(this.token && this.chatId);
+  }
+
+  setLanguage(language) {
+    this.language = normalizeTelegramLanguage(language);
   }
 
   async #send(text) {
