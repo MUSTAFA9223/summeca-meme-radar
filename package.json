@@ -1,9 +1,9 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
-  "description": "Solana meme-token early momentum scanner with Pump.fun direct-create alerts, manual buy links, paper trading, persistence, Telegram controls, read-only wallet monitoring, and threaded signal performance updates.",
+  "description": "Solana meme-token early momentum scanner with Pump.fun direct-create alerts, in-bot paper entry sizing by percent or USD, adaptive paper risk controls, persistence, Telegram controls, read-only wallet monitoring, and threaded signal performance updates.",
   "scripts": {
     "start": "node src/index.mjs",
     "dev": "node src/index.mjs",
