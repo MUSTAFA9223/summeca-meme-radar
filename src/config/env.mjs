@@ -54,9 +54,9 @@ export const env = {
   moonScoreThreshold: num('MOON_SCORE_THRESHOLD', 88),
   maxTokenAgeSeconds: num('MAX_TOKEN_AGE_SECONDS', 300),
   paperStartingUsd: num('PAPER_STARTING_USD', 1000),
-  paperTradeSizeUsd: num('PAPER_TRADE_SIZE_USD', 25),
+  paperTradeSizeUsd: num('PAPER_TRADE_SIZE_USD', 100),
   maxOpenPositions: Math.max(1, Math.min(3, Math.floor(num('MAX_OPEN_POSITIONS', 2)))),
-  paperStopLossPct: num('PAPER_STOP_LOSS_PCT', 22),
+  paperStopLossPct: num('PAPER_STOP_LOSS_PCT', 10),
   peakHunterStartPct: num('PEAK_HUNTER_START_PCT', 200)
 };
 
