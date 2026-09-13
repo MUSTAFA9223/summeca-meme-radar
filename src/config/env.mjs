@@ -37,6 +37,9 @@ export const env = {
   heliusTriggerMinMs: Math.max(1200, num('HELIUS_TRIGGER_MIN_MS', 1500)),
   heliusStaleAfterMs: Math.max(30_000, num('HELIUS_STALE_AFTER_MS', 75_000)),
 
+  supabaseUrl: process.env.SUPABASE_URL ?? '',
+  supabaseSecretKey: process.env.SUPABASE_SECRET_KEY ?? '',
+
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
   liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? 'false') === 'true',
