@@ -57,13 +57,15 @@ const sourceLabel = (source) => {
   return source ? String(source) : 'Solana';
 };
 
-const tokenKeyboard = (address, language = 'ar') => {
+const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
   const mint = String(address ?? '').trim();
   if (!mint) return undefined;
   const ar = language !== 'en';
   return {
     inline_keyboard: [
       [{ text: ar ? '📋 نسخ عنوان العملة CA' : '📋 Copy token CA', copy_text: { text: mint } }],
+      [{ text: ar ? '📄 إرسال CA فقط' : '📄 Send CA only', callback_data: `token:ca:${mint}` }],
+      ...(early ? [[{ text: ar ? '⚡ شراء يدوي — Pump.fun' : '⚡ Manual buy — Pump.fun', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
       [
         { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` },
         { text: '🔥 Fomo', url: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` }
@@ -114,7 +116,37 @@ export class TelegramNotifier {
     ));
   }
 
-  async signal(s, sc, p) {
+  async earlyCreate(candidate, event = {}) {
+    if (!this.enabled || !candidate?.address) return null;
+    const mint = String(candidate.address);
+    const ar = [
+      '⚡ NEW CREATE — تم إنشاء عملة الآن',
+      '',
+      `${candidate.symbol && candidate.symbol !== 'NEW' ? candidate.symbol : 'عملة Pump.fun جديدة'}${candidate.name && candidate.name !== 'New Pump.fun coin' ? ` — ${candidate.name}` : ''}`,
+      'المرحلة: 🟢 إنشاء مباشر على Pump.fun',
+      `Slot: ${event.slot ?? '—'}`,
+      '',
+      '⚠️ لم تجتز العملة بعد فحوص السيولة والأمان والزخم.',
+      'الشراء هنا اختياري ويدوي فقط، ومخاطر هذه المرحلة مرتفعة جدًا.',
+      '',
+      `CA: ${mint}`
+    ].join('\n');
+    const en = [
+      '⚡ NEW CREATE — coin created now',
+      '',
+      `${candidate.symbol && candidate.symbol !== 'NEW' ? candidate.symbol : 'New Pump.fun coin'}${candidate.name && candidate.name !== 'New Pump.fun coin' ? ` — ${candidate.name}` : ''}`,
+      'Stage: 🟢 direct Pump.fun creation',
+      `Slot: ${event.slot ?? '—'}`,
+      '',
+      '⚠️ Liquidity, safety, and momentum checks have NOT passed yet.',
+      'Any buy at this stage is optional and manual only; risk is extremely high.',
+      '',
+      `CA: ${mint}`
+    ].join('\n');
+    return this.#send(this.#pick(ar, en), { reply_markup: tokenKeyboard(mint, this.language, { early: true }) });
+  }
+
+  async signal(s, sc, p, { replyToMessageId = null } = {}) {
     const currentPrice = price(s.priceUsd);
     const buyers = Number(s.buys30s ?? 0);
     const sellers = Number(s.sells30s ?? 0);
@@ -160,19 +192,23 @@ export class TelegramNotifier {
 
     const text = this.#pick(ar, en);
     const replyMarkup = tokenKeyboard(s.address, this.language);
+    const reply = replyToMessageId ? {
+      reply_parameters: { message_id: Number(replyToMessageId), allow_sending_without_reply: true }
+    } : {};
     if (s.imageUrl) {
       try {
         return await telegramApi(this.token, 'sendPhoto', {
           chat_id: this.chatId,
           photo: s.imageUrl,
           caption: text,
+          ...reply,
           ...(replyMarkup ? { reply_markup: replyMarkup } : {})
         });
       } catch (error) {
         console.warn('[telegram:photo]', error.message);
       }
     }
-    return this.#send(text, replyMarkup ? { reply_markup: replyMarkup } : {});
+    return this.#send(text, { ...reply, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
   }
 
   async signalUpdate(s, sc, event) {
