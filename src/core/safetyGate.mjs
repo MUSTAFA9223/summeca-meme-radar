@@ -2,7 +2,12 @@ const text = (value) => String(value ?? '').toLowerCase();
 
 const securityCritical = (blocker) => /honeypot|freeze authority active|mint authority active|developer is selling|top-10 concentration|insider concentration|bundler concentration/.test(text(blocker));
 
-const isDexVenue = (source) => /pumpswap|pump_amm|raydium|meteora|orca|dexscreener/.test(text(source));
+const isDexVenue = (source) => {
+  const value = text(source);
+  if (/pumpfun|pump_fun|bonding/.test(value)) return false;
+  return /pumpswap|pump_amm|raydium|meteora|orca/.test(value)
+    || (value.includes('dexscreener') && !value.includes('pump'));
+};
 
 export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   const blockers = Array.isArray(scores.blockers) ? scores.blockers.map(String) : [];
@@ -22,9 +27,8 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   if (Number.isFinite(risk) && risk > 40) reasons.push(`risk score ${risk}/100`);
   for (const blocker of blockers.filter(securityCritical)) reasons.push(blocker);
 
-  // Once a token is on a DEX/PumpSwap, near-zero liquidity is an emergency signal.
-  // Pump.fun bonding-curve creates are handled separately and are not rejected solely
-  // because they do not expose traditional LP liquidity yet.
+  // Once a token is on a conventional DEX/PumpSwap, near-zero liquidity is an
+  // emergency signal. Pump.fun bonding-curve coins are excluded from this LP rule.
   if (isDexVenue(snapshot.source) && Number.isFinite(liquidity) && liquidity > 0 && liquidity < 1000) {
     const reason = `DEX liquidity critically low ($${liquidity.toFixed(2)})`;
     reasons.push(reason);
