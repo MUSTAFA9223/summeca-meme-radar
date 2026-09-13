@@ -10,7 +10,12 @@ const safeSnapshot = {
   sells30s: 2,
   volume5mUsd: 5000,
   marketDataVerified: true,
-  securityVerified: true
+  securityVerified: true,
+  honeypot: false,
+  mintAuthorityDisabled: true,
+  freezeAuthorityDisabled: true,
+  top10HolderPct: 22,
+  creatorPct: 2
 };
 
 const safeScores = { risk: 20, blockers: [] };
@@ -34,6 +39,31 @@ test('blocks a signal with no valid price', () => {
   assert.ok(result.reasons.includes('price unavailable'));
 });
 
+test('blocks automatic entry until a real sell has been observed', () => {
+  const result = evaluateSignalSafety({ ...safeSnapshot, sells30s: 0 }, safeScores);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.includes('no verified sell observed'));
+});
+
+test('fails closed when authority and honeypot checks are not explicit', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    honeypot: undefined,
+    mintAuthorityDisabled: undefined,
+    freezeAuthorityDisabled: undefined
+  }, safeScores);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.includes('honeypot status not explicitly safe'));
+  assert.ok(result.reasons.includes('mint authority not verified disabled'));
+  assert.ok(result.reasons.includes('freeze authority not verified disabled'));
+});
+
+test('blocks dangerous known holder concentration', () => {
+  const result = evaluateSignalSafety({ ...safeSnapshot, top10HolderPct: 55 }, { risk: 30, blockers: [] });
+  assert.equal(result.ok, false);
+  assert.match(result.reasons.join(' '), /top-10 concentration/i);
+});
+
 test('treats critically low PumpSwap liquidity as emergency', () => {
   const result = evaluateSignalSafety({
     ...safeSnapshot,
@@ -47,7 +77,7 @@ test('treats critically low PumpSwap liquidity as emergency', () => {
 });
 
 test('treats verified honeypot as emergency', () => {
-  const result = evaluateSignalSafety(safeSnapshot, { risk: 100, blockers: ['honeypot flag'] });
+  const result = evaluateSignalSafety({ ...safeSnapshot, honeypot: true }, { risk: 100, blockers: ['honeypot flag'] });
   assert.equal(result.ok, false);
   assert.equal(result.emergency, true);
   assert.ok(result.emergencyReasons.includes('honeypot flag'));
