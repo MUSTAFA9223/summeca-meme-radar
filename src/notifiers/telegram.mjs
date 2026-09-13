@@ -57,6 +57,14 @@ const sourceLabel = (source) => {
   return source ? String(source) : 'Solana';
 };
 
+const phantomSwapUrl = (mint, side = 'buy') => {
+  const caip19 = `solana:101/address:${mint}`;
+  if (side === 'sell') {
+    return `https://phantom.app/ul/v1/swap?buy=&sell=${encodeURIComponent(caip19)}`;
+  }
+  return `https://phantom.app/ul/v1/swap?buy=${encodeURIComponent(caip19)}&sell=`;
+};
+
 const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
   const mint = String(address ?? '').trim();
   if (!mint) return undefined;
@@ -64,17 +72,21 @@ const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
   return {
     inline_keyboard: [
       [
-        { text: ar ? '🟢 شراء' : '🟢 Buy', callback_data: `paper:menu:${mint}` },
-        { text: ar ? '🔴 بيع' : '🔴 Sell', callback_data: `paper:sellmenu:${mint}` },
+        { text: ar ? '🟢 شراء حقيقي' : '🟢 Live buy', url: phantomSwapUrl(mint, 'buy') },
+        { text: ar ? '🔴 بيع حقيقي' : '🔴 Live sell', url: phantomSwapUrl(mint, 'sell') },
         { text: ar ? '📋 العقد' : '📋 CA', copy_text: { text: mint } }
       ],
       [
-        { text: '10%', callback_data: `paper:buy:p10:${mint}` },
-        { text: '20%', callback_data: `paper:buy:p20:${mint}` },
-        { text: '50%', callback_data: `paper:buy:p50:${mint}` },
-        { text: '100%', callback_data: `paper:buy:p100:${mint}` }
+        { text: ar ? '🧪 شراء Paper' : '🧪 Paper buy', callback_data: `paper:menu:${mint}` },
+        { text: ar ? '🧪 بيع Paper' : '🧪 Paper sell', callback_data: `paper:sellmenu:${mint}` }
       ],
-      [{ text: ar ? '💵 شراء بمبلغ دولار' : '💵 Buy by USD amount', callback_data: `paper:custom:${mint}` }],
+      [
+        { text: '🧪 10%', callback_data: `paper:buy:p10:${mint}` },
+        { text: '🧪 20%', callback_data: `paper:buy:p20:${mint}` },
+        { text: '🧪 50%', callback_data: `paper:buy:p50:${mint}` },
+        { text: '🧪 100%', callback_data: `paper:buy:p100:${mint}` }
+      ],
+      [{ text: ar ? '🧪 💵 Paper بمبلغ دولار' : '🧪 💵 Paper by USD amount', callback_data: `paper:custom:${mint}` }],
       [{ text: ar ? '📄 إرسال CA فقط' : '📄 Send CA only', callback_data: `token:ca:${mint}` }],
       ...(early ? [[{ text: ar ? '⚡ فتح Pump.fun يدويًا' : '⚡ Open Pump.fun manually', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
       [
@@ -124,8 +136,8 @@ export class TelegramNotifier {
 
   async test() {
     return this.#send(this.#pick(
-      '✅ تم ربط SUMMECA Meme Radar بنجاح\n\nالتنبيهات الحية جاهزة. التداول الحقيقي ما زال مغلقًا، والوضع الحالي تداول تجريبي فقط.',
-      '✅ SUMMECA Meme Radar connected\n\nLive alerts are ready. Trading remains PAPER ONLY.'
+      '✅ تم ربط SUMMECA Meme Radar بنجاح\n\nتنبيهات الرادار جاهزة. الشراء/البيع الحقيقي متاح عبر أزرار Phantom مع تأكيدك داخل المحفظة؛ البوت نفسه لا يحتفظ بمفتاح خاص ولا يوقّع عنك.',
+      '✅ SUMMECA Meme Radar connected\n\nRadar alerts are ready. Wallet-confirmed live buy/sell links open Phantom for your approval; the bot never stores your private key or signs for you.'
     ));
   }
 
@@ -140,7 +152,7 @@ export class TelegramNotifier {
       `Slot: ${event.slot ?? '—'}`,
       '',
       '⚠️ لم تجتز العملة بعد فحوص السيولة والأمان والزخم.',
-      'يمكنك اختيار دخول تجريبي من داخل البوت بالنسبة أو بالدولار. إذا لم يظهر السعر بعد، يحجز البوت الطلب وينفذه Paper عند أول سعر صالح.',
+      'يمكنك فتح مبادلة Phantom الحقيقية من الأزرار ثم تأكيدها داخل المحفظة، أو استخدام Paper للاختبار.',
       '',
       `CA: ${mint}`
     ].join('\n');
@@ -152,7 +164,7 @@ export class TelegramNotifier {
       `Slot: ${event.slot ?? '—'}`,
       '',
       '⚠️ Liquidity, safety, and momentum checks have NOT passed yet.',
-      'You can choose an in-bot PAPER entry by percentage or USD. If price is not available yet, the paper order waits for the first valid price.',
+      'You may open a real Phantom swap from the buttons and approve it in-wallet, or use PAPER for testing.',
       '',
       `CA: ${mint}`
     ].join('\n');
@@ -170,7 +182,7 @@ export class TelegramNotifier {
       '',
       `${s.symbol} — ${s.name}`,
       `المصدر/منصة الإطلاق: ${venue}`,
-      'فتح/تحقق: Phantom أو Fomo من الأزرار أسفل التنبيه',
+      'التداول الحقيقي: زر الشراء/البيع يفتح Phantom على نفس العملة ويطلب تأكيدك داخل المحفظة.',
       `السعر: ${currentPrice ? `$${currentPrice}` : 'غير متاح بعد'}`,
       `السيولة: $${money(s.liquidityUsd)}`,
       `🟢 المشترون 30ث: ${buyers} | 🔴 البائعون 30ث: ${sellers}`,
@@ -189,7 +201,7 @@ export class TelegramNotifier {
       '',
       `${s.symbol} — ${s.name}`,
       `Launch/source venue: ${venue}`,
-      'Open/verify: Phantom or Fomo using the buttons below',
+      'Live trading: Buy/Sell opens Phantom for this token and requires your in-wallet approval.',
       `Price: ${currentPrice ? `$${currentPrice}` : 'not available yet'}`,
       `Liquidity: $${money(s.liquidityUsd)}`,
       `🟢 Buys 30s: ${buyers} | 🔴 Sells 30s: ${sellers}`,
