@@ -3,6 +3,9 @@ import crypto from 'node:crypto';
 const PRIVY_API = 'https://api.privy.io';
 const SOLANA_MAINNET_CAIP2 = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
 
+// Privy authorization signatures use RFC 8785 canonical JSON + ECDSA P-256/SHA-256
+// with DER signatures. Our payload only contains plain JSON values, so this compact
+// canonicalizer is sufficient for the Wallet API request shape used below.
 function canonicalize(value) {
   if (value === null || typeof value !== 'object') {
     if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('Cannot canonicalize non-finite number');
@@ -49,18 +52,9 @@ export class PrivySolanaWallet {
     return Boolean(this.appId && this.appSecret && this.walletId && this.walletAddress);
   }
 
-  async signAndSendTransaction(transaction, { referenceId } = {}) {
+  async #walletRpc(body) {
     if (!this.configured) throw new Error('Privy wallet is not fully configured');
-    const serialized = String(transaction ?? '').trim();
-    if (!serialized) throw new Error('Serialized Solana transaction is required');
-
     const url = `${PRIVY_API}/v1/wallets/${encodeURIComponent(this.walletId)}/rpc`;
-    const body = {
-      method: 'signAndSendTransaction',
-      caip2: SOLANA_MAINNET_CAIP2,
-      params: { transaction: serialized, encoding: 'base64' },
-      ...(referenceId ? { reference_id: String(referenceId).slice(0, 64) } : {})
-    };
     const expiry = Date.now() + 30_000;
     const signature = authorizationSignature({
       url,
@@ -84,9 +78,33 @@ export class PrivySolanaWallet {
     });
     const payload = await response.json().catch(() => null);
     if (!response.ok) {
-      const message = payload?.message ?? payload?.error ?? `HTTP ${response.status}`;
-      throw new Error(`Privy sign/send failed: ${message}`);
+      const message = payload?.message ?? payload?.error ?? payload?.detail ?? `HTTP ${response.status}`;
+      throw new Error(`Privy wallet RPC failed: ${message}`);
     }
+    return payload;
+  }
+
+  async signTransaction(transaction) {
+    const serialized = String(transaction ?? '').trim();
+    if (!serialized) throw new Error('Serialized Solana transaction is required');
+    const payload = await this.#walletRpc({
+      method: 'signTransaction',
+      params: { transaction: serialized, encoding: 'base64' }
+    });
+    const signed = payload?.data?.signed_transaction ?? payload?.signed_transaction;
+    if (!signed) throw new Error('Privy signTransaction returned no signed transaction');
+    return String(signed);
+  }
+
+  async signAndSendTransaction(transaction, { referenceId } = {}) {
+    const serialized = String(transaction ?? '').trim();
+    if (!serialized) throw new Error('Serialized Solana transaction is required');
+    const payload = await this.#walletRpc({
+      method: 'signAndSendTransaction',
+      caip2: SOLANA_MAINNET_CAIP2,
+      params: { transaction: serialized, encoding: 'base64' },
+      ...(referenceId ? { reference_id: String(referenceId).slice(0, 64) } : {})
+    });
     const hash = payload?.data?.hash ?? payload?.hash;
     if (!hash) throw new Error('Privy sign/send returned no transaction hash');
     return {
