@@ -1,4 +1,8 @@
-export const PUMP_FUN_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
+import { enqueueDirectCreate } from './directCreateQueue.mjs';
+import { fetchHeliusAssetMetadata } from './heliusAsset.mjs';
+import { PUMP_FUN_PROGRAM_ID, resolvePumpCreateMint } from './heliusDirectCreate.mjs';
+
+export { PUMP_FUN_PROGRAM_ID };
 
 export function createHeliusWsUrl(apiKey) {
   if (!apiKey) throw new Error('HELIUS_API_KEY is required for WebSocket streaming');
@@ -54,6 +58,7 @@ export class HeliusProgramStream {
     this.lastMessageAt = 0;
     this.requestToProgram = new Map();
     this.subscriptionToProgram = new Map();
+    this.directSeen = new Set();
   }
 
   start() {
@@ -75,6 +80,59 @@ export class HeliusProgramStream {
       this.ws.close(1000, 'shutdown');
     }
     this.ws = null;
+  }
+
+  #rememberSignature(signature) {
+    if (!signature || this.directSeen.has(signature)) return false;
+    this.directSeen.add(signature);
+    if (this.directSeen.size > 2000) {
+      const oldest = this.directSeen.values().next().value;
+      if (oldest) this.directSeen.delete(oldest);
+    }
+    return true;
+  }
+
+  async #hydrateDirectCreate(eventPayload) {
+    if (eventPayload.kind !== 'create' || eventPayload.err || !eventPayload.signature) return eventPayload;
+    if (!this.#rememberSignature(eventPayload.signature)) return eventPayload;
+
+    try {
+      const mint = await resolvePumpCreateMint(this.apiKey, eventPayload.signature, {
+        programId: eventPayload.programId ?? PUMP_FUN_PROGRAM_ID
+      });
+      if (!mint) {
+        this.logger.warn(`[direct-create] mint not resolved sig=${eventPayload.signature.slice(0, 10)}…`);
+        return eventPayload;
+      }
+
+      const base = {
+        address: mint,
+        symbol: 'NEW',
+        name: 'New Pump.fun coin',
+        source: 'pump_fun_direct',
+        observedAt: eventPayload.observedAt,
+        listedAt: eventPayload.observedAt,
+        priceUsd: 0,
+        liquidityUsd: 0,
+        directCreate: true,
+        createSignature: eventPayload.signature
+      };
+      enqueueDirectCreate(base);
+      eventPayload.mint = mint;
+      eventPayload.directCreate = true;
+      this.logger.log(`[direct-create] detected mint=${mint.slice(0, 8)}… slot=${eventPayload.slot}`);
+
+      void fetchHeliusAssetMetadata(this.apiKey, mint)
+        .then((metadata) => {
+          if (metadata && Object.keys(metadata).length) {
+            enqueueDirectCreate({ ...base, ...metadata, observedAt: Date.now() });
+          }
+        })
+        .catch((error) => this.logger.warn(`[direct-create:metadata] ${error?.message ?? error}`));
+    } catch (error) {
+      this.logger.warn(`[direct-create] resolve failed: ${error?.message ?? error}`);
+    }
+    return eventPayload;
   }
 
   #connect() {
@@ -106,7 +164,7 @@ export class HeliusProgramStream {
       }, Math.max(10_000, Math.floor(this.staleAfterMs / 3)));
     });
 
-    ws.addEventListener('message', (event) => {
+    ws.addEventListener('message', async (event) => {
       this.lastMessageAt = Date.now();
       let message;
       try {
@@ -141,6 +199,7 @@ export class HeliusProgramStream {
         observedAt: Date.now()
       };
 
+      await this.#hydrateDirectCreate(eventPayload);
       Promise.resolve(this.onEvent(eventPayload)).catch((error) => {
         this.logger.error('[helius-ws] onEvent failed', error?.message ?? error);
       });
