@@ -1,14 +1,14 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
-  "description": "Solana meme-token early momentum scanner with paper trading, persistence, Telegram controls, read-only wallet monitoring, and threaded signal performance updates.",
+  "description": "Solana meme-token early momentum scanner with Pump.fun direct-create discovery, paper trading, persistence, Telegram controls, read-only wallet monitoring, and threaded signal performance updates.",
   "scripts": {
     "start": "node src/index.mjs",
     "dev": "node src/index.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/index.mjs && node --check src/bot/telegramController.mjs && node --check src/feeds/heliusWs.mjs && node --check src/feeds/heliusAsset.mjs && node --check src/signals/signalTracker.mjs && node --check src/storage/supabaseStore.mjs && node --check src/storage/appSettings.mjs && node --check src/notifiers/telegram.mjs && node --check scripts/birdeye-smoke.mjs && node --check scripts/helius-smoke.mjs && node --check scripts/helius-ws-smoke.mjs && node --check scripts/supabase-smoke.mjs && node --check scripts/telegram-smoke.mjs && node --test tests/*.test.mjs",
+    "check": "node --check src/index.mjs && node --check src/bot/telegramController.mjs && node --check src/feeds/heliusWs.mjs && node --check src/feeds/heliusAsset.mjs && node --check src/feeds/heliusDirectCreate.mjs && node --check src/feeds/directCreateQueue.mjs && node --check src/feeds/birdeye.mjs && node --check src/signals/signalTracker.mjs && node --check src/storage/supabaseStore.mjs && node --check src/storage/appSettings.mjs && node --check src/notifiers/telegram.mjs && node --check scripts/birdeye-smoke.mjs && node --check scripts/helius-smoke.mjs && node --check scripts/helius-ws-smoke.mjs && node --check scripts/supabase-smoke.mjs && node --check scripts/telegram-smoke.mjs && node --test tests/*.test.mjs",
     "smoke:birdeye": "node scripts/birdeye-smoke.mjs",
     "smoke:helius": "node scripts/helius-smoke.mjs",
     "smoke:helius-ws": "node scripts/helius-ws-smoke.mjs",
