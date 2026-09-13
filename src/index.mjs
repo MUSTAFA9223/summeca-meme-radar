@@ -12,6 +12,7 @@ import { PaperTrader } from './trading/paperTrader.mjs';
 
 const store = new SupabaseStore(env.supabaseUrl, env.supabaseSecretKey);
 const appSettings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function resolveTelegramChatId() {
   if (env.telegramChatId) return env.telegramChatId;
@@ -89,9 +90,83 @@ const telegramController = new TelegramController({
 
 const candidates = new Map();
 const securityChecked = new Set();
+const earlyCreateRoots = new Map();
+const earlyCreateQueued = new Set();
+const earlyCreateQueue = [];
+const EARLY_ROOT_TTL_MS = 15 * 60 * 1000;
+const EARLY_QUEUE_MAX_AGE_MS = 20_000;
+let earlyCreateWorkerRunning = false;
 let ticking = false;
 let lastHeliusTriggerAt = 0;
 let heliusStream = null;
+
+function pruneEarlyCreateRoots() {
+  const now = Date.now();
+  for (const [address, root] of earlyCreateRoots) {
+    if (now - root.createdAt > EARLY_ROOT_TTL_MS) earlyCreateRoots.delete(address);
+  }
+}
+
+async function runEarlyCreateWorker() {
+  if (earlyCreateWorkerRunning) return;
+  earlyCreateWorkerRunning = true;
+  try {
+    while (earlyCreateQueue.length) {
+      const item = earlyCreateQueue.shift();
+      if (!item?.candidate?.address) continue;
+      const address = item.candidate.address;
+      earlyCreateQueued.delete(address);
+
+      if (Date.now() - item.enqueuedAt > EARLY_QUEUE_MAX_AGE_MS) {
+        console.warn(`[telegram:early-create] skipped stale mint=${address.slice(0, 8)}…`);
+        continue;
+      }
+      if (!runtime.alertsEnabled || !telegram.enabled || earlyCreateRoots.has(address)) continue;
+
+      try {
+        const message = await telegram.earlyCreate(item.candidate, item.event);
+        if (message?.message_id) {
+          earlyCreateRoots.set(address, {
+            messageId: message.message_id,
+            createdAt: Date.now()
+          });
+          console.log(`[telegram:early-create] sent mint=${address.slice(0, 8)}… msg=${message.message_id}`);
+        }
+      } catch (error) {
+        console.error('[telegram:early-create]', address, error.message);
+      }
+      await sleep(1100);
+    }
+  } finally {
+    earlyCreateWorkerRunning = false;
+  }
+}
+
+function queueEarlyCreateAlert(event) {
+  const address = String(event?.mint ?? '').trim();
+  if (!address || !runtime.alertsEnabled || !telegram.enabled) return;
+  pruneEarlyCreateRoots();
+  if (earlyCreateRoots.has(address) || earlyCreateQueued.has(address)) return;
+
+  earlyCreateQueued.add(address);
+  earlyCreateQueue.push({
+    enqueuedAt: Date.now(),
+    candidate: {
+      address,
+      symbol: 'NEW',
+      name: 'New Pump.fun coin',
+      source: 'pump_fun_direct',
+      observedAt: event.observedAt ?? Date.now(),
+      listedAt: event.observedAt ?? Date.now(),
+      priceUsd: 0,
+      liquidityUsd: 0,
+      directCreate: true,
+      createSignature: event.signature ?? ''
+    },
+    event
+  });
+  void runEarlyCreateWorker();
+}
 
 if (store.enabled && telegramChatId) {
   try {
@@ -218,22 +293,32 @@ async function persistTrackingEvent(snapshot, scores, refs, event) {
 
 async function startSignalThread(snapshot, scores, refs, paperPosition) {
   if (!runtime.alertsEnabled || signalTracker.has(snapshot.address)) return null;
-  const message = await telegram.signal(snapshot, scores, paperPosition ?? undefined);
+  pruneEarlyCreateRoots();
+  const earlyRoot = earlyCreateRoots.get(snapshot.address) ?? null;
+  const message = await telegram.signal(
+    snapshot,
+    scores,
+    paperPosition ?? undefined,
+    earlyRoot ? { replyToMessageId: earlyRoot.messageId } : {}
+  );
   if (!message?.message_id) return null;
 
+  const rootMessageId = earlyRoot?.messageId ?? message.message_id;
   const thread = signalTracker.start({
     tokenId: refs?.tokenId ?? null,
     chatId: telegramChatId,
-    rootMessageId: message.message_id,
+    rootMessageId,
     snapshot
   });
+
+  earlyCreateRoots.delete(snapshot.address);
 
   if (thread && store.enabled && refs?.tokenId) {
     try {
       await store.saveSignalThread({
         tokenId: refs.tokenId,
         chatId: telegramChatId,
-        rootMessageId: message.message_id,
+        rootMessageId,
         snapshot
       });
     } catch (error) {
@@ -374,6 +459,10 @@ function startHeliusWakeups() {
       if (event.err || runtime.scannerPaused) return;
       if (!['create', 'migrate'].includes(event.kind)) return;
 
+      if (event.kind === 'create' && event.mint) {
+        queueEarlyCreateAlert(event);
+      }
+
       const now = Date.now();
       if (now - lastHeliusTriggerAt < env.heliusTriggerMinMs) return;
       lastHeliusTriggerAt = now;
@@ -383,7 +472,9 @@ function startHeliusWakeups() {
         kind: event.kind,
         signature: event.signature,
         slot: event.slot,
-        observedAt: event.observedAt
+        observedAt: event.observedAt,
+        mint: event.mint ?? null,
+        directCreate: Boolean(event.directCreate)
       }));
       void tick(`helius:${event.kind}`).catch((error) => console.error('[helius-trigger]', error));
     }
@@ -403,7 +494,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.7 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + threaded signal tracking`);
+console.log(`SUMMECA Meme Radar v0.9 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + instant create alerts + threaded signal tracking`);
 await telegramController.start();
 startHeliusWakeups();
 await tick('startup');
