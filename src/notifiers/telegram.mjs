@@ -33,10 +33,27 @@ export async function discoverPrivateStartChat(token) {
   return ids[0];
 }
 
+const normalizeLanguage = (language) => {
+  const value = String(language ?? 'ar').trim().toLowerCase();
+  return ['ar', 'en', 'bilingual'].includes(value) ? value : 'ar';
+};
+
+const money = (value) => Number(value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 });
+
+const translateExitReason = (reason) => {
+  const text = String(reason ?? 'غير محدد');
+  if (text === 'paper stop-loss') return 'وقف خسارة تجريبي';
+  if (text === 'momentum reversal after peak') return 'انعكاس الزخم بعد القمة';
+  if (text.startsWith('adaptive trailing exit')) return text.replace('adaptive trailing exit', 'خروج متحرك تكيفي');
+  if (text.startsWith('emergency-risk:')) return text.replace('emergency-risk:', 'مخاطرة طارئة:');
+  return text;
+};
+
 export class TelegramNotifier {
-  constructor(token, chatId) {
+  constructor(token, chatId, language = 'ar') {
     this.token = token;
     this.chatId = chatId;
+    this.language = normalizeLanguage(language);
   }
 
   get enabled() {
@@ -49,24 +66,49 @@ export class TelegramNotifier {
     return true;
   }
 
+  #pick(ar, en) {
+    if (this.language === 'en') return en;
+    if (this.language === 'bilingual') return `${ar}\n\n────────────\n\n${en}`;
+    return ar;
+  }
+
   async test() {
-    return this.#send('✅ SUMMECA Meme Radar connected\n\nLive alerts are ready. Trading remains PAPER ONLY.');
+    return this.#send(this.#pick(
+      '✅ تم ربط SUMMECA Meme Radar بنجاح\n\nالتنبيهات الحية جاهزة. التداول الحقيقي ما زال مغلقًا، والوضع الحالي تداول تجريبي فقط.',
+      '✅ SUMMECA Meme Radar connected\n\nLive alerts are ready. Trading remains PAPER ONLY.'
+    ));
   }
 
   async signal(s, sc, p) {
-    await this.#send([
+    const ar = [
+      '🔥 رادار SUMMECA للعملات الميم',
+      '',
+      `${s.symbol} — ${s.name}`,
+      `درجة الدخول: ${sc.entry}/100 | فرصة الصعود: ${sc.moon}/100 | المخاطرة: ${sc.risk}/100`,
+      `السيولة: $${money(s.liquidityUsd)}`,
+      p ? `🧪 شراء تجريبي: $${p.usdSize.toFixed(2)} بسعر ${p.entryPriceUsd}` : '👀 مراقبة فقط',
+      '',
+      `عنوان العملة: ${s.address}`
+    ].join('\n');
+
+    const en = [
       '🔥 SUMMECA MEME RADAR',
       '',
       `${s.symbol} — ${s.name}`,
       `Entry: ${sc.entry}/100 | Moon: ${sc.moon}/100 | Risk: ${sc.risk}/100`,
-      `Liquidity: $${Math.round(s.liquidityUsd).toLocaleString()}`,
+      `Liquidity: $${money(s.liquidityUsd)}`,
       p ? `🧪 PAPER BUY: $${p.usdSize.toFixed(2)} @ ${p.entryPriceUsd}` : 'Watch only',
       '',
       `CA: ${s.address}`
-    ].join('\n'));
+    ].join('\n');
+
+    await this.#send(this.#pick(ar, en));
   }
 
   async exit(p) {
-    await this.#send(`🧪 PAPER EXIT ${p.symbol}\nPnL: ${(p.pnlPct ?? 0).toFixed(1)}%\nReason: ${p.exitReason ?? 'n/a'}`);
+    const pnl = (p.pnlPct ?? 0).toFixed(1);
+    const ar = `🧪 خروج تجريبي — ${p.symbol}\nالربح/الخسارة: ${pnl}%\nالسبب: ${translateExitReason(p.exitReason)}`;
+    const en = `🧪 PAPER EXIT ${p.symbol}\nPnL: ${pnl}%\nReason: ${p.exitReason ?? 'n/a'}`;
+    await this.#send(this.#pick(ar, en));
   }
 }
