@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       BIRDEYE_API_KEY: ${{ secrets.BIRDEYE_API_KEY }}
+      HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}
       BIRDEYE_MAX_RPM: '50'
     steps:
       - uses: actions/checkout@v4
@@ -35,12 +36,18 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci
-      - name: Verify Birdeye secret is configured
+      - name: Verify live provider secrets are configured
         shell: bash
         run: |
           if [ -z "$BIRDEYE_API_KEY" ]; then
             echo "::error::BIRDEYE_API_KEY repository secret is missing"
             exit 1
           fi
+          if [ -z "$HELIUS_API_KEY" ]; then
+            echo "::error::HELIUS_API_KEY repository secret is missing"
+            exit 1
+          fi
       - name: Birdeye live discovery smoke test
         run: npm run smoke:birdeye
+      - name: Helius mainnet RPC smoke test
+        run: npm run smoke:helius
