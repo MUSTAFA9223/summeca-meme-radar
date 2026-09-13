@@ -64,10 +64,17 @@ const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
   return {
     inline_keyboard: [
       [
-        { text: ar ? '🟢 شراء — Paper' : '🟢 Buy — Paper', callback_data: `paper:menu:${mint}` },
-        { text: ar ? '🔴 بيع — Paper' : '🔴 Sell — Paper', callback_data: `paper:sellmenu:${mint}` }
+        { text: ar ? '🟢 شراء' : '🟢 Buy', callback_data: `paper:menu:${mint}` },
+        { text: ar ? '🔴 بيع' : '🔴 Sell', callback_data: `paper:sellmenu:${mint}` },
+        { text: ar ? '📋 العقد' : '📋 CA', copy_text: { text: mint } }
       ],
-      [{ text: ar ? '📋 نسخ عنوان العملة CA' : '📋 Copy token CA', copy_text: { text: mint } }],
+      [
+        { text: '10%', callback_data: `paper:buy:p10:${mint}` },
+        { text: '20%', callback_data: `paper:buy:p20:${mint}` },
+        { text: '50%', callback_data: `paper:buy:p50:${mint}` },
+        { text: '100%', callback_data: `paper:buy:p100:${mint}` }
+      ],
+      [{ text: ar ? '💵 شراء بمبلغ دولار' : '💵 Buy by USD amount', callback_data: `paper:custom:${mint}` }],
       [{ text: ar ? '📄 إرسال CA فقط' : '📄 Send CA only', callback_data: `token:ca:${mint}` }],
       ...(early ? [[{ text: ar ? '⚡ فتح Pump.fun يدويًا' : '⚡ Open Pump.fun manually', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
       [
