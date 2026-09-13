@@ -1,5 +1,22 @@
 const BASE_URL = 'https://public-api.birdeye.so';
 
+const rawMaxRpm = Number(process.env.BIRDEYE_MAX_RPM ?? 50);
+const MAX_RPM = Number.isFinite(rawMaxRpm) ? Math.max(1, Math.min(55, Math.floor(rawMaxRpm))) : 50;
+const requestTimestamps = [];
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForRateSlot() {
+  while (true) {
+    const now = Date.now();
+    while (requestTimestamps.length && requestTimestamps[0] <= now - 60_000) requestTimestamps.shift();
+    if (requestTimestamps.length < MAX_RPM) {
+      requestTimestamps.push(now);
+      return;
+    }
+    await sleep(Math.max(50, requestTimestamps[0] + 60_050 - now));
+  }
+}
+
 const asNumber = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -22,13 +39,14 @@ const asOptionalBool = (value) => {
   return undefined;
 };
 
-async function birdeyeGet(apiKey, path, params = {}, { timeoutMs = 6000 } = {}) {
+async function birdeyeGet(apiKey, path, params = {}, { timeoutMs = 8000 } = {}) {
   if (!apiKey) throw new Error('BIRDEYE_API_KEY is required for live data');
   const url = new URL(path, BASE_URL);
   for (const [key, value] of Object.entries(params)) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
   }
 
+  await waitForRateSlot();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
