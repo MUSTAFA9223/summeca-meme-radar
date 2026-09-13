@@ -204,6 +204,14 @@ export class TelegramController {
     if (data === 'menu:help') return this.#showHelp();
     if (data === 'settings:language') return this.#showLanguage();
 
+    if (data.startsWith('token:ca:')) {
+      const address = data.slice('token:ca:'.length);
+      if (!SOLANA_ADDRESS.test(address)) {
+        return this.#send(this.#pick('❌ تعذر قراءة عنوان العملة.', '❌ Could not read the token address.'));
+      }
+      return this.#send(`${this.#pick('📄 عنوان العملة — اضغط مطولًا للنسخ', '📄 Token CA — press and hold to copy')}\n\n${address}`);
+    }
+
     if (data.startsWith('lang:')) {
       const language = normalizeTelegramLanguage(data.slice(5));
       this.runtime.language = language;
