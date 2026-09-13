@@ -39,6 +39,13 @@ export const normalizeTelegramLanguage = (language) => {
 };
 
 const money = (value) => Number(value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 });
+const price = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  if (n >= 0.01) return n.toLocaleString('en-US', { maximumFractionDigits: 8 });
+  return n.toExponential(6);
+};
+const pct = (value) => `${Number(value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 1 })}%`;
 
 const translateExitReason = (reason) => {
   const text = String(reason ?? 'غير محدد');
@@ -64,10 +71,9 @@ export class TelegramNotifier {
     this.language = normalizeTelegramLanguage(language);
   }
 
-  async #send(text) {
-    if (!this.enabled) return false;
-    await telegramApi(this.token, 'sendMessage', { chat_id: this.chatId, text });
-    return true;
+  async #send(text, extra = {}) {
+    if (!this.enabled) return null;
+    return telegramApi(this.token, 'sendMessage', { chat_id: this.chatId, text, ...extra });
   }
 
   #pick(ar, en) {
@@ -84,35 +90,120 @@ export class TelegramNotifier {
   }
 
   async signal(s, sc, p) {
+    const currentPrice = price(s.priceUsd);
+    const buyers = Number(s.buys30s ?? 0);
+    const sellers = Number(s.sells30s ?? 0);
+    const uniqueBuyers = Number(s.uniqueBuyers30s ?? 0);
     const ar = [
-      '🔥 رادار SUMMECA للعملات الميم',
+      '🔥 إشارة قوية — SUMMECA Meme Radar',
       '',
       `${s.symbol} — ${s.name}`,
-      `درجة الدخول: ${sc.entry}/100 | فرصة الصعود: ${sc.moon}/100 | المخاطرة: ${sc.risk}/100`,
+      `السعر: ${currentPrice ? `$${currentPrice}` : 'غير متاح بعد'}`,
       `السيولة: $${money(s.liquidityUsd)}`,
-      p ? `🧪 شراء تجريبي: $${p.usdSize.toFixed(2)} بسعر ${p.entryPriceUsd}` : '👀 مراقبة فقط',
+      `🟢 المشترون 30ث: ${buyers} | 🔴 البائعون 30ث: ${sellers}`,
+      `👥 مشترون مختلفون: ${uniqueBuyers}`,
+      `حجم الشراء 30ث: $${money(s.buyVolume30sUsd)} | البيع: $${money(s.sellVolume30sUsd)}`,
+      '',
+      `درجة الدخول: ${sc.entry}/100 | فرصة الصعود: ${sc.moon}/100 | المخاطرة: ${sc.risk}/100`,
+      p ? `🧪 شراء تجريبي: $${p.usdSize.toFixed(2)} بسعر ${p.entryPriceUsd}` : '👀 مراقبة قوية — لم يتم تنفيذ شراء تجريبي',
+      !currentPrice ? 'ℹ️ ستبدأ نسبة الصعود من أول سعر صالح يظهر بعد الإشارة.' : '📈 بدأت متابعة الأداء من سعر هذه الإشارة.',
       '',
       `عنوان العملة: ${s.address}`
     ].join('\n');
 
     const en = [
-      '🔥 SUMMECA MEME RADAR',
+      '🔥 STRONG SIGNAL — SUMMECA Meme Radar',
       '',
       `${s.symbol} — ${s.name}`,
-      `Entry: ${sc.entry}/100 | Moon: ${sc.moon}/100 | Risk: ${sc.risk}/100`,
+      `Price: ${currentPrice ? `$${currentPrice}` : 'not available yet'}`,
       `Liquidity: $${money(s.liquidityUsd)}`,
-      p ? `🧪 PAPER BUY: $${p.usdSize.toFixed(2)} @ ${p.entryPriceUsd}` : 'Watch only',
+      `🟢 Buys 30s: ${buyers} | 🔴 Sells 30s: ${sellers}`,
+      `👥 Unique buyers: ${uniqueBuyers}`,
+      `Buy volume 30s: $${money(s.buyVolume30sUsd)} | Sell: $${money(s.sellVolume30sUsd)}`,
+      '',
+      `Entry: ${sc.entry}/100 | Moon: ${sc.moon}/100 | Risk: ${sc.risk}/100`,
+      p ? `🧪 PAPER BUY: $${p.usdSize.toFixed(2)} @ ${p.entryPriceUsd}` : '👀 Strong watch — no paper buy executed',
+      !currentPrice ? 'ℹ️ Performance tracking starts from the first valid price after the signal.' : '📈 Performance tracking started from this signal price.',
       '',
       `CA: ${s.address}`
     ].join('\n');
 
-    await this.#send(this.#pick(ar, en));
+    const text = this.#pick(ar, en);
+    if (s.imageUrl) {
+      try {
+        return await telegramApi(this.token, 'sendPhoto', {
+          chat_id: this.chatId,
+          photo: s.imageUrl,
+          caption: text
+        });
+      } catch (error) {
+        console.warn('[telegram:photo]', error.message);
+      }
+    }
+    return this.#send(text);
+  }
+
+  async signalUpdate(s, sc, event) {
+    if (!this.enabled || !event?.thread?.rootMessageId) return null;
+    const buyers = Number(s.buys30s ?? 0);
+    const sellers = Number(s.sells30s ?? 0);
+    const currentPrice = price(event.priceUsd ?? s.priceUsd);
+    const reply = {
+      reply_parameters: {
+        message_id: event.thread.rootMessageId,
+        allow_sending_without_reply: true
+      }
+    };
+
+    if (event.type === 'reference') {
+      const ar = [
+        `📍 بدأ مرجع المتابعة — ${s.symbol}`,
+        `السعر المرجعي: $${currentPrice}`,
+        `🟢 المشترون 30ث: ${buyers} | 🔴 البائعون 30ث: ${sellers}`,
+        `السيولة: $${money(s.liquidityUsd)}`,
+        'سأرسل التحديثات القادمة كردود على الإشارة الأصلية.'
+      ].join('\n');
+      const en = [
+        `📍 Tracking reference set — ${s.symbol}`,
+        `Reference price: $${currentPrice}`,
+        `🟢 Buys 30s: ${buyers} | 🔴 Sells 30s: ${sellers}`,
+        `Liquidity: $${money(s.liquidityUsd)}`,
+        'Future performance updates will reply to the original signal.'
+      ].join('\n');
+      return this.#send(this.#pick(ar, en), reply);
+    }
+
+    const ar = [
+      `🚀 تحديث ${s.symbol} — تجاوز +${event.milestonePct}%`,
+      '',
+      `الصعود من الإشارة: +${pct(event.returnPct)}`,
+      `أعلى صعود مسجل: +${pct(event.peakReturnPct)}`,
+      `السعر الحالي: ${currentPrice ? `$${currentPrice}` : '—'}`,
+      `السيولة: $${money(s.liquidityUsd)}`,
+      `🟢 المشترون 30ث: ${buyers} | 🔴 البائعون 30ث: ${sellers}`,
+      `👥 مشترون مختلفون: ${Number(s.uniqueBuyers30s ?? 0)}`,
+      `حجم الشراء: $${money(s.buyVolume30sUsd)} | البيع: $${money(s.sellVolume30sUsd)}`,
+      `Entry ${sc.entry}/100 | Moon ${sc.moon}/100 | Risk ${sc.risk}/100`
+    ].join('\n');
+    const en = [
+      `🚀 ${s.symbol} update — crossed +${event.milestonePct}%`,
+      '',
+      `Return from signal: +${pct(event.returnPct)}`,
+      `Peak recorded: +${pct(event.peakReturnPct)}`,
+      `Current price: ${currentPrice ? `$${currentPrice}` : '—'}`,
+      `Liquidity: $${money(s.liquidityUsd)}`,
+      `🟢 Buys 30s: ${buyers} | 🔴 Sells 30s: ${sellers}`,
+      `👥 Unique buyers: ${Number(s.uniqueBuyers30s ?? 0)}`,
+      `Buy volume: $${money(s.buyVolume30sUsd)} | Sell: $${money(s.sellVolume30sUsd)}`,
+      `Entry ${sc.entry}/100 | Moon ${sc.moon}/100 | Risk ${sc.risk}/100`
+    ].join('\n');
+    return this.#send(this.#pick(ar, en), reply);
   }
 
   async exit(p) {
     const pnl = (p.pnlPct ?? 0).toFixed(1);
     const ar = `🧪 خروج تجريبي — ${p.symbol}\nالربح/الخسارة: ${pnl}%\nالسبب: ${translateExitReason(p.exitReason)}`;
     const en = `🧪 PAPER EXIT ${p.symbol}\nPnL: ${pnl}%\nReason: ${p.exitReason ?? 'n/a'}`;
-    await this.#send(this.#pick(ar, en));
+    return this.#send(this.#pick(ar, en));
   }
 }
