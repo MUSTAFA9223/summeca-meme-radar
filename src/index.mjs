@@ -41,7 +41,7 @@ async function resolveTelegramChatId() {
   }
 }
 
-const telegram = new TelegramNotifier(env.telegramBotToken, await resolveTelegramChatId());
+const telegram = new TelegramNotifier(env.telegramBotToken, await resolveTelegramChatId(), env.telegramLanguage);
 const trader = new PaperTrader({
   startingUsd: env.paperStartingUsd,
   tradeSizeUsd: env.paperTradeSizeUsd,
@@ -230,7 +230,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.5 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ' + Telegram alerts' : ''}`);
+console.log(`SUMMECA Meme Radar v0.5 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram alerts (${env.telegramLanguage})` : ''}`);
 startHeliusWakeups();
 await tick('startup');
 setInterval(() => tick('fallback-poll').catch((err) => console.error('[tick]', err)), env.birdeyePollMs);
