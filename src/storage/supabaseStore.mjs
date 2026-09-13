@@ -5,6 +5,10 @@ const iso = (value) => {
 };
 
 const finite = (value) => Number.isFinite(Number(value)) ? Number(value) : null;
+const positive = (value) => {
+  const n = finite(value);
+  return n != null && n > 0 ? n : null;
+};
 
 export class SupabaseStore {
   #tradeIds = new Map();
@@ -55,7 +59,7 @@ export class SupabaseStore {
         listed_at: iso(snapshot.listedAt),
         first_seen_at: iso(snapshot.observedAt) ?? new Date().toISOString(),
         last_seen_at: iso(snapshot.observedAt) ?? new Date().toISOString(),
-        initial_price_usd: finite(snapshot.priceUsd),
+        initial_price_usd: positive(snapshot.priceUsd),
         initial_liquidity_usd: finite(snapshot.liquidityUsd)
       }
     });
@@ -107,6 +111,7 @@ export class SupabaseStore {
         risk_score: finite(scores?.risk),
         raw: {
           source: snapshot.source ?? null,
+          imageUrl: snapshot.imageUrl ?? null,
           blockers: scores?.blockers ?? []
         }
       }
@@ -182,6 +187,58 @@ export class SupabaseStore {
     });
     this.#tradeIds.delete(snapshot.address);
     return id;
+  }
+
+  async saveSignalThread({ tokenId, chatId, rootMessageId, snapshot }) {
+    if (!this.enabled || !tokenId || !chatId || !rootMessageId) return null;
+    const reference = positive(snapshot?.priceUsd);
+    const rows = await this.#request('telegram_signal_threads?on_conflict=token_id,chat_id', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=representation',
+      body: {
+        token_id: tokenId,
+        chat_id: String(chatId),
+        root_message_id: Number(rootMessageId),
+        started_at: new Date().toISOString(),
+        reference_price_usd: reference,
+        peak_price_usd: reference,
+        peak_return_pct: 0,
+        last_milestone_pct: 0,
+        last_update_at: null,
+        active: true,
+        image_url: snapshot?.imageUrl ?? null,
+        metadata: {
+          symbol: snapshot?.symbol ?? null,
+          name: snapshot?.name ?? null,
+          source: snapshot?.source ?? null
+        }
+      }
+    });
+    return Array.isArray(rows) ? rows[0] ?? null : null;
+  }
+
+  async updateSignalThread(thread, patch = {}) {
+    if (!this.enabled || !thread?.tokenId || !thread?.chatId) return null;
+    const body = {};
+    if ('referencePriceUsd' in patch) body.reference_price_usd = positive(patch.referencePriceUsd);
+    if ('peakPriceUsd' in patch) body.peak_price_usd = positive(patch.peakPriceUsd);
+    if ('peakReturnPct' in patch) body.peak_return_pct = finite(patch.peakReturnPct) ?? 0;
+    if ('lastMilestonePct' in patch) body.last_milestone_pct = finite(patch.lastMilestonePct) ?? 0;
+    if ('active' in patch) body.active = Boolean(patch.active);
+    if ('lastUpdateAt' in patch) body.last_update_at = iso(patch.lastUpdateAt) ?? new Date().toISOString();
+    if (!Object.keys(body).length) return null;
+    return this.#request(`telegram_signal_threads?token_id=eq.${encodeURIComponent(thread.tokenId)}&chat_id=eq.${encodeURIComponent(thread.chatId)}`, {
+      method: 'PATCH',
+      prefer: 'return=minimal',
+      body
+    });
+  }
+
+  async listActiveSignalThreads(chatId, limit = 50) {
+    if (!this.enabled || !chatId) return [];
+    const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
+    const rows = await this.#request(`telegram_signal_threads?select=token_id,chat_id,root_message_id,started_at,reference_price_usd,peak_price_usd,peak_return_pct,last_milestone_pct,image_url,tokens(address,symbol,name)&chat_id=eq.${encodeURIComponent(String(chatId))}&active=eq.true&order=started_at.desc&limit=${safeLimit}`);
+    return Array.isArray(rows) ? rows : [];
   }
 
   async listRecentSignals(limit = 5) {
