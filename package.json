@@ -7,8 +7,9 @@
   "scripts": {
     "dev": "node src/index.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/index.mjs && node --check scripts/birdeye-smoke.mjs && node --test tests/*.test.mjs",
-    "smoke:birdeye": "node scripts/birdeye-smoke.mjs"
+    "check": "node --check src/index.mjs && node --check scripts/birdeye-smoke.mjs && node --check scripts/helius-smoke.mjs && node --test tests/*.test.mjs",
+    "smoke:birdeye": "node scripts/birdeye-smoke.mjs",
+    "smoke:helius": "node scripts/helius-smoke.mjs"
   },
   "engines": { "node": ">=22" }
 }
