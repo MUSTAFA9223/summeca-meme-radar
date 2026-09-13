@@ -30,6 +30,7 @@ jobs:
       HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       BIRDEYE_MAX_RPM: '50'
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +42,7 @@ jobs:
       - name: Verify live provider secrets are configured
         shell: bash
         run: |
-          for name in BIRDEYE_API_KEY HELIUS_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY; do
+          for name in BIRDEYE_API_KEY HELIUS_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY TELEGRAM_BOT_TOKEN; do
             if [ -z "${!name}" ]; then
               echo "::error::$name repository secret is missing"
               exit 1
@@ -55,3 +56,5 @@ jobs:
         run: npm run smoke:helius-ws
       - name: Supabase write-read-delete smoke test
         run: npm run smoke:supabase
+      - name: Telegram auto-link and send smoke test
+        run: npm run smoke:telegram
