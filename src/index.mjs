@@ -4,7 +4,7 @@ import { scoreToken } from './core/scoring.mjs';
 import { enrichTokenSnapshot, fetchNewListings } from './feeds/birdeye.mjs';
 import { demoSnapshots } from './feeds/demo.mjs';
 import { HeliusProgramStream } from './feeds/heliusWs.mjs';
-import { discoverPrivateStartChat, TelegramNotifier } from './notifiers/telegram.mjs';
+import { discoverPrivateStartChat, TelegramNotifier, telegramApi } from './notifiers/telegram.mjs';
 import { SignalTracker } from './signals/signalTracker.mjs';
 import { AppSettings } from './storage/appSettings.mjs';
 import { SupabaseStore } from './storage/supabaseStore.mjs';
@@ -13,6 +13,7 @@ import { PaperTrader } from './trading/paperTrader.mjs';
 const store = new SupabaseStore(env.supabaseUrl, env.supabaseSecretKey);
 const appSettings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 async function resolveTelegramChatId() {
   if (env.telegramChatId) return env.telegramChatId;
@@ -78,6 +79,111 @@ const trader = new PaperTrader({
   stopLossPct: env.paperStopLossPct,
   peakHunterStartPct: env.peakHunterStartPct
 });
+
+const candidates = new Map();
+const securityChecked = new Set();
+const earlyCreateRoots = new Map();
+const earlyCreateQueued = new Set();
+const earlyCreateQueue = [];
+const pendingPaperBuys = new Map();
+const EARLY_ROOT_TTL_MS = 15 * 60 * 1000;
+const EARLY_QUEUE_MAX_AGE_MS = 20_000;
+const PAPER_BUY_TTL_MS = 3 * 60 * 1000;
+let earlyCreateWorkerRunning = false;
+let ticking = false;
+let lastHeliusTriggerAt = 0;
+let heliusStream = null;
+
+function paperSizeLabel(mode, value) {
+  return mode === 'percent' ? `${Number(value)}%` : `$${Number(value).toFixed(2)}`;
+}
+
+function minimalCandidate(address) {
+  const now = Date.now();
+  return {
+    address,
+    symbol: 'NEW',
+    name: 'New Pump.fun coin',
+    source: 'pump_fun_direct',
+    observedAt: now,
+    listedAt: now,
+    priceUsd: 0,
+    liquidityUsd: 0,
+    directCreate: true
+  };
+}
+
+async function notifyQueuedPaperFill(position, intent, warnings = []) {
+  if (!env.telegramBotToken || !telegramChatId) return;
+  const warningText = warnings.length ? `\n⚠️ ${warnings.join('، ')}` : '';
+  const ar = [
+    '✅ تم تنفيذ طلب الدخول التجريبي المعلق',
+    '',
+    `${position.symbol ?? 'TOKEN'}`,
+    `الحجم المختار: ${paperSizeLabel(intent.mode, intent.value)}`,
+    `المبلغ المنفذ: $${Number(position.usdSize).toFixed(2)}`,
+    `السعر: ${position.entryPriceUsd}`,
+    'الستوب: -10%',
+    'حماية الربح: تستهدف +20% بعد بلوغ +30%',
+    warningText
+  ].filter(Boolean).join('\n');
+  const en = [
+    '✅ Queued PAPER entry filled',
+    '',
+    `${position.symbol ?? 'TOKEN'}`,
+    `Selected size: ${paperSizeLabel(intent.mode, intent.value)}`,
+    `Filled amount: $${Number(position.usdSize).toFixed(2)}`,
+    `Price: ${position.entryPriceUsd}`,
+    'Stop: -10%',
+    'Profit lock: targets +20% after reaching +30%',
+    warningText
+  ].filter(Boolean).join('\n');
+  const text = runtime.language === 'en' ? en : runtime.language === 'bilingual' ? `${ar}\n\n────────────\n\n${en}` : ar;
+  await telegramApi(env.telegramBotToken, 'sendMessage', { chat_id: telegramChatId, text }).catch((error) => {
+    console.error('[telegram:paper-fill]', error.message);
+  });
+}
+
+async function requestPaperBuy({ address, mode, value }) {
+  const mint = String(address ?? '').trim();
+  const sizeMode = mode === 'percent' ? 'percent' : 'usd';
+  const sizeValue = Number(value);
+  if (!SOLANA_ADDRESS.test(mint)) return { status: 'rejected', reason: 'invalid-token-address' };
+  if (!Number.isFinite(sizeValue) || sizeValue <= 0) return { status: 'rejected', reason: 'invalid-size' };
+  if (sizeMode === 'percent' && sizeValue > 100) return { status: 'rejected', reason: 'percentage-over-100' };
+  if (trader.openPositions.some((p) => p.address === mint)) return { status: 'rejected', reason: 'position-already-open' };
+
+  const current = candidates.get(mint) ?? minimalCandidate(mint);
+  candidates.set(mint, current);
+
+  if (Number(current.priceUsd) > 0) {
+    const scores = scoreToken(current);
+    const result = trader.enterManual(current, scores, { mode: sizeMode, value: sizeValue });
+    if (!result.ok) return { status: 'rejected', reason: result.reason };
+    const refs = await persistSnapshot(current, scores);
+    await persistEntry(current, scores, result.position, refs);
+    return {
+      status: 'filled',
+      position: result.position,
+      warnings: scores.blockers ?? [],
+      availableUsd: trader.availableUsd
+    };
+  }
+
+  pendingPaperBuys.set(mint, {
+    mode: sizeMode,
+    value: sizeValue,
+    createdAt: Date.now()
+  });
+  void tick('telegram-paper-buy').catch((error) => console.error('[paper-buy-trigger]', error.message));
+  return {
+    status: 'queued',
+    address: mint,
+    size: paperSizeLabel(sizeMode, sizeValue),
+    availableUsd: trader.availableUsd
+  };
+}
+
 const telegramController = new TelegramController({
   token: env.telegramBotToken,
   chatId: telegramChatId,
@@ -85,25 +191,24 @@ const telegramController = new TelegramController({
   settings: appSettings,
   store,
   runtime,
-  heliusApiKey: env.heliusApiKey
+  heliusApiKey: env.heliusApiKey,
+  onPaperBuy: requestPaperBuy
 });
-
-const candidates = new Map();
-const securityChecked = new Set();
-const earlyCreateRoots = new Map();
-const earlyCreateQueued = new Set();
-const earlyCreateQueue = [];
-const EARLY_ROOT_TTL_MS = 15 * 60 * 1000;
-const EARLY_QUEUE_MAX_AGE_MS = 20_000;
-let earlyCreateWorkerRunning = false;
-let ticking = false;
-let lastHeliusTriggerAt = 0;
-let heliusStream = null;
 
 function pruneEarlyCreateRoots() {
   const now = Date.now();
   for (const [address, root] of earlyCreateRoots) {
     if (now - root.createdAt > EARLY_ROOT_TTL_MS) earlyCreateRoots.delete(address);
+  }
+}
+
+function prunePaperBuys() {
+  const now = Date.now();
+  for (const [address, intent] of pendingPaperBuys) {
+    if (now - Number(intent.createdAt ?? 0) > PAPER_BUY_TTL_MS) {
+      pendingPaperBuys.delete(address);
+      console.warn(`[paper-buy] expired pending intent mint=${address.slice(0, 8)}…`);
+    }
   }
 }
 
@@ -148,21 +253,23 @@ function queueEarlyCreateAlert(event) {
   pruneEarlyCreateRoots();
   if (earlyCreateRoots.has(address) || earlyCreateQueued.has(address)) return;
 
+  const candidate = {
+    address,
+    symbol: 'NEW',
+    name: 'New Pump.fun coin',
+    source: 'pump_fun_direct',
+    observedAt: event.observedAt ?? Date.now(),
+    listedAt: event.observedAt ?? Date.now(),
+    priceUsd: 0,
+    liquidityUsd: 0,
+    directCreate: true,
+    createSignature: event.signature ?? ''
+  };
+  candidates.set(address, { ...candidates.get(address), ...candidate });
   earlyCreateQueued.add(address);
   earlyCreateQueue.push({
     enqueuedAt: Date.now(),
-    candidate: {
-      address,
-      symbol: 'NEW',
-      name: 'New Pump.fun coin',
-      source: 'pump_fun_direct',
-      observedAt: event.observedAt ?? Date.now(),
-      listedAt: event.observedAt ?? Date.now(),
-      priceUsd: 0,
-      liquidityUsd: 0,
-      directCreate: true,
-      createSignature: event.signature ?? ''
-    },
+    candidate,
     event
   });
   void runEarlyCreateWorker();
@@ -214,7 +321,11 @@ async function persistEntry(snapshot, scores, position, refs) {
       snapshotId: refs.snapshotId,
       type: 'entry',
       scores,
-      reason: { trigger: 'paper-entry', blockers: scores.blockers ?? [] }
+      reason: {
+        trigger: position.manual ? 'telegram-manual-paper-entry' : 'paper-entry',
+        blockers: scores.blockers ?? [],
+        sizing: position.sizing ?? null
+      }
     });
     await store.openPaperTrade(snapshot, scores, position, refs.tokenId);
   } catch (error) {
@@ -329,38 +440,50 @@ async function startSignalThread(snapshot, scores, refs, paperPosition) {
 }
 
 async function liveSnapshots() {
+  prunePaperBuys();
   const listings = await fetchNewListings(env.birdeyeApiKey, { limit: env.discoveryBatchSize });
   for (const listing of listings) {
-    if (ageSeconds(listing) <= env.maxTokenAgeSeconds) {
+    if (ageSeconds(listing) <= env.maxTokenAgeSeconds || pendingPaperBuys.has(listing.address)) {
       candidates.set(listing.address, { ...candidates.get(listing.address), ...listing });
     }
   }
 
   const openAddresses = new Set(trader.openPositions.map((p) => p.address));
+  const pendingAddresses = new Set(pendingPaperBuys.keys());
   const trackedAddresses = new Set(signalTracker.values().map((thread) => thread.address));
   for (const [address, snapshot] of candidates) {
-    if (!openAddresses.has(address) && !trackedAddresses.has(address) && ageSeconds(snapshot) > env.maxTokenAgeSeconds) {
+    if (!openAddresses.has(address) && !pendingAddresses.has(address) && !trackedAddresses.has(address) && ageSeconds(snapshot) > env.maxTokenAgeSeconds) {
       candidates.delete(address);
       securityChecked.delete(address);
     }
   }
 
   const openSnapshots = [...openAddresses].map((address) => candidates.get(address)).filter(Boolean);
+  const pendingSnapshots = [...pendingAddresses]
+    .filter((address) => !openAddresses.has(address))
+    .map((address) => candidates.get(address) ?? minimalCandidate(address));
+  for (const snapshot of pendingSnapshots) candidates.set(snapshot.address, snapshot);
+
+  const reserved = new Set([...openAddresses, ...pendingAddresses]);
   const freshCandidates = [...candidates.values()]
-    .filter((snapshot) => !openAddresses.has(snapshot.address) && !trackedAddresses.has(snapshot.address))
+    .filter((snapshot) => !reserved.has(snapshot.address) && !trackedAddresses.has(snapshot.address))
     .sort((a, b) => (b.listedAt - a.listedAt) || (b.liquidityUsd - a.liquidityUsd));
 
-  const capacity = Math.max(env.maxTrackedTokens, openSnapshots.length);
-  let remaining = Math.max(0, capacity - openSnapshots.length);
-  const activeTrackedNotOpen = [...trackedAddresses].filter((address) => !openAddresses.has(address)).length;
+  const baseSelected = [...openSnapshots, ...pendingSnapshots];
+  const capacity = Math.max(env.maxTrackedTokens, baseSelected.length);
+  let remaining = Math.max(0, capacity - baseSelected.length);
+  const activeTrackedNotOpen = [...trackedAddresses].filter((address) => !reserved.has(address)).length;
   const trackedSlots = Math.min(activeTrackedNotOpen, freshCandidates.length && remaining > 0 ? Math.max(0, remaining - 1) : remaining);
-  const rotatingTrackedAddresses = signalTracker.nextAddresses(trackedSlots, openAddresses);
+  const rotatingTrackedAddresses = signalTracker.nextAddresses(trackedSlots, reserved);
   const trackedSnapshots = rotatingTrackedAddresses.map((address) => candidates.get(address)).filter(Boolean);
   remaining = Math.max(0, remaining - trackedSnapshots.length);
-  const selected = [...openSnapshots, ...trackedSnapshots, ...freshCandidates.slice(0, remaining)];
+  const selected = [...baseSelected, ...trackedSnapshots, ...freshCandidates.slice(0, remaining)];
 
   const enriched = [];
+  const seen = new Set();
   for (const base of selected) {
+    if (!base?.address || seen.has(base.address)) continue;
+    seen.add(base.address);
     const address = base.address;
     try {
       const snapshot = await enrichTokenSnapshot(env.birdeyeApiKey, base, {
@@ -382,14 +505,16 @@ async function tick(trigger = 'poll') {
   if (ticking) return false;
   ticking = true;
   try {
+    prunePaperBuys();
     const live = Boolean(env.birdeyeApiKey);
     const snapshots = live ? await liveSnapshots() : demoSnapshots();
 
     for (const s of snapshots) {
       const isOpen = trader.openPositions.some((p) => p.address === s.address);
       const isTracked = signalTracker.has(s.address);
-      if (!isTracked && s.liquidityUsd < env.minLiquidityUsd) continue;
-      if (!isOpen && !isTracked && ageSeconds(s) > env.maxTokenAgeSeconds) continue;
+      const hasPendingPaperBuy = pendingPaperBuys.has(s.address);
+      if (!isTracked && !hasPendingPaperBuy && s.liquidityUsd < env.minLiquidityUsd) continue;
+      if (!isOpen && !isTracked && !hasPendingPaperBuy && ageSeconds(s) > env.maxTokenAgeSeconds) continue;
 
       const scores = scoreToken(s);
       const refs = await persistSnapshot(s, scores);
@@ -416,8 +541,26 @@ async function tick(trigger = 'poll') {
         continue;
       }
 
-      const p = trader.maybeEnter(s, scores, env.entryScoreThreshold);
-      if (p) await persistEntry(s, scores, p, refs);
+      let p = null;
+      const pendingIntent = pendingPaperBuys.get(s.address);
+      if (pendingIntent && Number(s.priceUsd) > 0) {
+        const result = trader.enterManual(s, scores, pendingIntent);
+        if (result.ok) {
+          p = result.position;
+          pendingPaperBuys.delete(s.address);
+          await persistEntry(s, scores, p, refs);
+          await notifyQueuedPaperFill(p, pendingIntent, scores.blockers ?? []);
+          console.log(`[paper-buy] filled queued ${paperSizeLabel(pendingIntent.mode, pendingIntent.value)} mint=${s.address.slice(0, 8)}… usd=${p.usdSize.toFixed(2)}`);
+        } else if (['position-already-open', 'max-open-positions', 'no-paper-cash'].includes(result.reason)) {
+          pendingPaperBuys.delete(s.address);
+          console.warn(`[paper-buy] rejected queued mint=${s.address.slice(0, 8)}… reason=${result.reason}`);
+        }
+      }
+
+      if (!p) {
+        p = trader.maybeEnter(s, scores, env.entryScoreThreshold);
+        if (p) await persistEntry(s, scores, p, refs);
+      }
 
       console.log(JSON.stringify({
         mode: live ? 'live-data/paper-trading' : 'demo/paper-trading',
@@ -434,6 +577,8 @@ async function tick(trigger = 'poll') {
           uniqueBuyers30s: s.uniqueBuyers30s ?? 0
         },
         paperEntry: Boolean(p),
+        manualPaperEntry: Boolean(p?.manual),
+        pendingPaperBuy: pendingPaperBuys.has(s.address),
         signalTracked: signalTracker.has(s.address)
       }));
 
@@ -494,7 +639,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.9 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + instant create alerts + threaded signal tracking`);
+console.log(`SUMMECA Meme Radar v0.10 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + instant create alerts + in-bot paper sizing + threaded signal tracking`);
 await telegramController.start();
 startHeliusWakeups();
 await tick('startup');
