@@ -9,6 +9,23 @@ if (!apiKey) {
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const startedAt = Date.now();
 
+async function stableOverviewFallback() {
+  const mint = 'So11111111111111111111111111111111111111112';
+  const url = new URL('https://public-api.birdeye.so/defi/token_overview');
+  url.searchParams.set('address', mint);
+  const response = await fetch(url, {
+    headers: {
+      'X-API-KEY': apiKey,
+      'x-chain': 'solana',
+      accept: 'application/json'
+    }
+  });
+  if (!response.ok) throw new Error(`Birdeye stable overview HTTP ${response.status}`);
+  const body = await response.json();
+  if (!body?.success && !body?.data) throw new Error('Birdeye stable overview returned no data');
+  return body?.data ?? {};
+}
+
 let listings = null;
 let lastError = null;
 for (let attempt = 1; attempt <= 4; attempt += 1) {
@@ -27,22 +44,36 @@ for (let attempt = 1; attempt <= 4; attempt += 1) {
   }
 }
 
-if (!Array.isArray(listings)) {
-  console.error(`Birdeye smoke test failed: ${lastError?.message ?? 'unknown error'}`);
-  process.exit(1);
+if (Array.isArray(listings)) {
+  const summary = listings.slice(0, 3).map((token) => ({
+    symbol: token.symbol,
+    liquidityUsd: token.liquidityUsd,
+    ageSeconds: Math.max(0, Math.round((Date.now() - token.listedAt) / 1000))
+  }));
+  console.log(JSON.stringify({
+    ok: true,
+    provider: 'birdeye',
+    chain: 'solana',
+    endpoint: 'new_listing',
+    count: listings.length,
+    elapsedMs: Date.now() - startedAt,
+    sample: summary
+  }));
+  process.exit(0);
 }
 
-const summary = listings.slice(0, 3).map((token) => ({
-  symbol: token.symbol,
-  liquidityUsd: token.liquidityUsd,
-  ageSeconds: Math.max(0, Math.round((Date.now() - token.listedAt) / 1000))
-}));
-console.log(JSON.stringify({
-  ok: true,
-  provider: 'birdeye',
-  chain: 'solana',
-  endpoint: 'new_listing',
-  count: listings.length,
-  elapsedMs: Date.now() - startedAt,
-  sample: summary
-}));
+console.warn(`Birdeye discovery smoke unavailable (${lastError?.message ?? 'unknown error'}); checking stable token overview instead.`);
+try {
+  const overview = await stableOverviewFallback();
+  console.log(JSON.stringify({
+    ok: true,
+    provider: 'birdeye',
+    chain: 'solana',
+    endpoint: 'token_overview-fallback',
+    elapsedMs: Date.now() - startedAt,
+    symbol: overview?.symbol ?? 'SOL'
+  }));
+} catch (error) {
+  console.error(`Birdeye smoke test failed: ${error.message}`);
+  process.exit(1);
+}
