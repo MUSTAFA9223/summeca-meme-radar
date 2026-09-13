@@ -19,6 +19,11 @@ export class PaperTrader {
     };
   }
 
+  getPosition(address) {
+    const p = this.#positions.get(String(address ?? ''));
+    return p?.status === 'open' ? p : null;
+  }
+
   #openPosition(s, scores, usdSize, { manual = false, sizing = null } = {}) {
     const requested = Number(usdSize);
     if (!Number.isFinite(requested) || requested <= 0 || Number(s.priceUsd) <= 0) {
@@ -33,6 +38,7 @@ export class PaperTrader {
     if (available <= 0) return { ok: false, reason: 'no-paper-cash' };
     const size = Math.min(requested, available);
     if (size <= 0) return { ok: false, reason: 'no-paper-cash' };
+    const quantity = size / s.priceUsd;
 
     const p = {
       address: s.address,
@@ -40,7 +46,11 @@ export class PaperTrader {
       entryPriceUsd: s.priceUsd,
       entryAt: s.observedAt,
       usdSize: size,
-      quantity: size / s.priceUsd,
+      originalUsdSize: size,
+      quantity,
+      originalQuantity: quantity,
+      realizedPnlUsd: 0,
+      soldPct: 0,
       highWaterPriceUsd: s.priceUsd,
       highWaterPnlPct: 0,
       moonScoreAtEntry: scores.moon,
@@ -78,6 +88,89 @@ export class PaperTrader {
     });
   }
 
+  manualSell(s, percent = 100) {
+    const p = this.getPosition(s?.address);
+    if (!p) return { ok: false, reason: 'no-open-position' };
+    const price = Number(s?.priceUsd);
+    if (!Number.isFinite(price) || price <= 0) return { ok: false, reason: 'price-unavailable' };
+
+    const requestedPct = Number(percent);
+    if (!Number.isFinite(requestedPct) || requestedPct <= 0) return { ok: false, reason: 'invalid-sell-percent' };
+    const sellPct = Math.max(0, Math.min(100, requestedPct));
+    const fraction = sellPct / 100;
+    const costBasisUsd = Number(p.usdSize) * fraction;
+    const quantitySold = Number(p.quantity) * fraction;
+    const proceedsUsd = quantitySold * price;
+    const legPnlUsd = proceedsUsd - costBasisUsd;
+    const legPnlPct = ((price / Number(p.entryPriceUsd)) - 1) * 100;
+
+    p.realizedPnlUsd = Number(p.realizedPnlUsd ?? 0) + legPnlUsd;
+    this.#realizedPnlUsd += legPnlUsd;
+    p.soldPct = Math.min(100, Number(p.soldPct ?? 0) + (100 - Number(p.soldPct ?? 0)) * fraction);
+
+    const fullExit = sellPct >= 99.999 || Number(p.quantity) - quantitySold <= 1e-15;
+    if (fullExit) {
+      p.status = 'closed';
+      p.exitPriceUsd = price;
+      p.exitAt = s.observedAt ?? Date.now();
+      p.exitReason = 'manual paper sell';
+      p.quantity = 0;
+      p.usdSize = 0;
+      p.soldPct = 100;
+      p.pnlPct = Number(p.originalUsdSize) > 0
+        ? (Number(p.realizedPnlUsd) / Number(p.originalUsdSize)) * 100
+        : legPnlPct;
+      this.#log({
+        type: 'MANUAL_EXIT',
+        position: p,
+        sellPct,
+        proceedsUsd,
+        legPnlUsd,
+        legPnlPct
+      });
+      return {
+        ok: true,
+        closed: true,
+        position: p,
+        sellPct,
+        proceedsUsd,
+        legPnlUsd,
+        legPnlPct,
+        realizedPnlUsd: p.realizedPnlUsd,
+        remainingUsdSize: 0,
+        remainingQuantity: 0
+      };
+    }
+
+    p.usdSize = Math.max(0, Number(p.usdSize) - costBasisUsd);
+    p.quantity = Math.max(0, Number(p.quantity) - quantitySold);
+    this.#log({
+      type: 'MANUAL_PARTIAL_EXIT',
+      address: p.address,
+      symbol: p.symbol,
+      sellPct,
+      priceUsd: price,
+      proceedsUsd,
+      costBasisUsd,
+      legPnlUsd,
+      legPnlPct,
+      remainingUsdSize: p.usdSize,
+      remainingQuantity: p.quantity
+    });
+    return {
+      ok: true,
+      closed: false,
+      position: p,
+      sellPct,
+      proceedsUsd,
+      legPnlUsd,
+      legPnlPct,
+      realizedPnlUsd: p.realizedPnlUsd,
+      remainingUsdSize: p.usdSize,
+      remainingQuantity: p.quantity
+    };
+  }
+
   update(s, scores) {
     const p = this.#positions.get(s.address);
     if (!p || p.status !== 'open' || s.priceUsd <= 0) return {};
@@ -93,14 +186,19 @@ export class PaperTrader {
       peakHunterStartPct: this.cfg.peakHunterStartPct
     });
     if (!d.exit) return { pnlPct };
+
+    const remainingPnlUsd = Number(p.usdSize) * (pnlPct / 100);
+    p.realizedPnlUsd = Number(p.realizedPnlUsd ?? 0) + remainingPnlUsd;
+    this.#realizedPnlUsd += remainingPnlUsd;
     p.status = 'closed';
     p.exitPriceUsd = s.priceUsd;
     p.exitAt = s.observedAt;
-    p.pnlPct = pnlPct;
+    p.pnlPct = Number(p.originalUsdSize) > 0
+      ? (Number(p.realizedPnlUsd) / Number(p.originalUsdSize)) * 100
+      : pnlPct;
     p.exitReason = d.reason;
-    this.#realizedPnlUsd += p.usdSize * (pnlPct / 100);
-    this.#log({ type: 'EXIT', position: p, scores, decision: d });
-    return { closed: p, pnlPct };
+    this.#log({ type: 'EXIT', position: p, scores, decision: d, remainingPnlUsd });
+    return { closed: p, pnlPct: p.pnlPct };
   }
 
   #log(event) {
