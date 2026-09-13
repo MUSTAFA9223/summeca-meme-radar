@@ -13,6 +13,7 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   const trades = Number(snapshot.buys30s ?? 0) + Number(snapshot.sells30s ?? 0);
   const volume5m = Number(snapshot.volume5mUsd ?? 0);
   const liquidity = Number(snapshot.liquidityUsd ?? 0);
+  let marketEmergency = false;
 
   if (!(Number.isFinite(price) && price > 0)) reasons.push('price unavailable');
   if (snapshot.marketDataVerified !== true) reasons.push('market data not verified');
@@ -28,12 +29,13 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
     const reason = `DEX liquidity critically low ($${liquidity.toFixed(2)})`;
     reasons.push(reason);
     emergencyReasons.push(reason);
+    marketEmergency = true;
   }
 
   return {
     ok: reasons.length === 0,
     reasons: [...new Set(reasons)],
-    emergency: snapshot.securityVerified === true && emergencyReasons.length > 0,
+    emergency: emergencyReasons.length > 0 && (snapshot.securityVerified === true || marketEmergency),
     emergencyReasons: [...new Set(emergencyReasons)]
   };
 }
