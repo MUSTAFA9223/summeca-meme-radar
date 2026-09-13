@@ -1,14 +1,14 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "private": true,
   "type": "module",
-  "description": "Solana meme-token momentum radar with fail-closed safety checks, emergency risk stops, Helius direct-create discovery, on-demand new-coin browsing, Birdeye plus DexScreener market enrichment, rising-only Telegram alerts, in-bot paper sizing, persistence, and threaded performance updates.",
+  "description": "Solana meme-token momentum radar with fail-closed safety checks, emergency risk stops, Helius direct-create discovery, on-demand new-coin browsing, Birdeye plus DexScreener market enrichment, rising-only Telegram alerts, direct in-bot paper buy/sell controls, persistence, and threaded performance updates.",
   "scripts": {
     "start": "node src/index.mjs",
     "dev": "node src/index.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/index.mjs && node --check src/core/safetyGate.mjs && node --check src/core/scoring.mjs && node --check src/bot/telegramController.mjs && node --check src/feeds/heliusWs.mjs && node --check src/feeds/heliusAsset.mjs && node --check src/feeds/heliusDirectCreate.mjs && node --check src/feeds/directCreateQueue.mjs && node --check src/feeds/birdeye.mjs && node --check src/feeds/dexscreener.mjs && node --check src/signals/signalTracker.mjs && node --check src/storage/supabaseStore.mjs && node --check src/storage/appSettings.mjs && node --check src/notifiers/telegram.mjs && node --check scripts/birdeye-smoke.mjs && node --check scripts/helius-smoke.mjs && node --check scripts/helius-ws-smoke.mjs && node --check scripts/supabase-smoke.mjs && node --check scripts/telegram-smoke.mjs && node --test tests/*.test.mjs",
+    "check": "node --check src/index.mjs && node --check src/core/safetyGate.mjs && node --check src/core/scoring.mjs && node --check src/bot/telegramController.mjs && node --check src/feeds/heliusWs.mjs && node --check src/feeds/heliusAsset.mjs && node --check src/feeds/heliusDirectCreate.mjs && node --check src/feeds/directCreateQueue.mjs && node --check src/feeds/birdeye.mjs && node --check src/feeds/dexscreener.mjs && node --check src/signals/signalTracker.mjs && node --check src/storage/supabaseStore.mjs && node --check src/storage/appSettings.mjs && node --check src/notifiers/telegram.mjs && node --check src/trading/paperTrader.mjs && node --check scripts/birdeye-smoke.mjs && node --check scripts/helius-smoke.mjs && node --check scripts/helius-ws-smoke.mjs && node --check scripts/supabase-smoke.mjs && node --check scripts/telegram-smoke.mjs && node --test tests/*.test.mjs",
     "smoke:birdeye": "node scripts/birdeye-smoke.mjs",
     "smoke:helius": "node scripts/helius-smoke.mjs",
     "smoke:helius-ws": "node scripts/helius-ws-smoke.mjs",
