@@ -1,0 +1,13 @@
+{
+  "name": "summeca-meme-radar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Solana meme-token early momentum scanner with paper trading and Telegram alerts.",
+  "scripts": {
+    "dev": "node src/index.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check src/index.mjs && node --test tests/*.test.mjs"
+  },
+  "engines": { "node": ">=22" }
+}
