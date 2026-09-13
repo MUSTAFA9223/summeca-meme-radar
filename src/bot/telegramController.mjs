@@ -7,7 +7,7 @@ const yesNo = (value, ar = true) => ar ? (value ? 'نعم' : 'لا') : (value ? 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export class TelegramController {
-  constructor({ token, chatId, notifier, settings, store, runtime, heliusApiKey, onPaperBuy, getRecentCreates }) {
+  constructor({ token, chatId, notifier, settings, store, runtime, heliusApiKey, onPaperBuy, onPaperSell, getRecentCreates }) {
     this.token = token;
     this.chatId = String(chatId ?? '');
     this.notifier = notifier;
@@ -16,6 +16,7 @@ export class TelegramController {
     this.runtime = runtime;
     this.heliusApiKey = heliusApiKey ?? '';
     this.onPaperBuy = typeof onPaperBuy === 'function' ? onPaperBuy : null;
+    this.onPaperSell = typeof onPaperSell === 'function' ? onPaperSell : null;
     this.getRecentCreates = typeof getRecentCreates === 'function' ? getRecentCreates : (() => []);
     this.offset = 0;
     this.stopped = true;
@@ -119,7 +120,7 @@ export class TelegramController {
       linked ? `العنوان: ${this.runtime.walletAddress}` : '',
       balance != null ? `الرصيد: ${balance.toFixed(5)} SOL` : '',
       '',
-      '🧪 أزرار الدخول داخل البوت تعمل حاليًا على Paper Trading فقط.',
+      '🧪 أزرار الشراء والبيع داخل البوت تعمل حاليًا على Paper Trading فقط.',
       '🔒 لا ترسل Seed Phrase أو Private Key للبوت مطلقًا.',
       'ربط العنوان الحالي للعرض والمراقبة فقط؛ التداول الحقيقي ما زال مقفولًا.'
     ].filter(Boolean).join('\n');
@@ -129,7 +130,7 @@ export class TelegramController {
       linked ? `Address: ${this.runtime.walletAddress}` : '',
       balance != null ? `Balance: ${balance.toFixed(5)} SOL` : '',
       '',
-      '🧪 In-bot entry buttons currently execute PAPER trades only.',
+      '🧪 In-bot buy/sell buttons currently execute PAPER trades only.',
       '🔒 Never send a seed phrase or private key to the bot.',
       'This wallet link is read-only; live trading remains locked.'
     ].filter(Boolean).join('\n');
@@ -239,15 +240,15 @@ export class TelegramController {
 
   async #showSafety() {
     return this.#send(this.#pick(
-      '🛡️ الحماية\n\n• التداول الحقيقي مقفول.\n• لا يتم تخزين Seed Phrase أو Private Key.\n• المحفظة الحالية للقراءة فقط.\n• أزرار الدخول بالنسبة أو بالدولار تنفذ Paper Trading فقط.\n• وقف الخسارة الحالي -10% وحماية الربح تستهدف +20% بعد بلوغ +30%.',
-      '🛡️ Safety\n\n• Live trading is locked.\n• Seed phrases/private keys are never stored.\n• Linked wallet is read-only.\n• Percentage/USD entry buttons execute PAPER trades only.\n• Current paper stop is -10%; profit lock targets +20% after reaching +30%.'
+      '🛡️ الحماية\n\n• التداول الحقيقي مقفول.\n• لا يتم تخزين Seed Phrase أو Private Key.\n• المحفظة الحالية للقراءة فقط.\n• أزرار الشراء والبيع تنفذ Paper Trading فقط.\n• وقف الخسارة الحالي -10% وحماية الربح تستهدف +20% بعد بلوغ +30%.',
+      '🛡️ Safety\n\n• Live trading is locked.\n• Seed phrases/private keys are never stored.\n• Linked wallet is read-only.\n• Buy/sell buttons execute PAPER trades only.\n• Current paper stop is -10%; profit lock targets +20% after reaching +30%.'
     ), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showHelp() {
     return this.#send(this.#pick(
-      '❓ المساعدة\n\n/start أو /menu لفتح لوحة التحكم.\n«🆕 العملات الجديدة» يعرض العقود الخام عند الطلب ولا يرسلها كتنبيهات.\nالتنبيه الرئيسي مخصص للعملات ذات الزخم/الدخول القوي، ومنه يمكنك اختيار دخول Paper بالنسبة أو بالدولار.\nلا ترسل أي مفتاح خاص أو كلمات الاسترداد.',
-      '❓ Help\n\nUse /start or /menu to open the control panel.\n“🆕 New coins” shows raw creates on demand and does not push them as alerts.\nMain alerts are reserved for strong momentum/entry signals, where PAPER sizing by percent or USD is available.\nNever send a private key or recovery phrase.'
+      '❓ المساعدة\n\n/start أو /menu لفتح لوحة التحكم.\n«🆕 العملات الجديدة» يعرض العقود الخام عند الطلب ولا يرسلها كتنبيهات.\nالتنبيه الرئيسي مخصص للعملات ذات الزخم/الدخول القوي، ومنه تستطيع الشراء أو البيع Paper مباشرة.\nلا ترسل أي مفتاح خاص أو كلمات الاسترداد.',
+      '❓ Help\n\nUse /start or /menu to open the control panel.\n“🆕 New coins” shows raw creates on demand and does not push them as alerts.\nMain alerts are reserved for strong momentum/entry signals, with direct PAPER buy/sell controls.\nNever send a private key or recovery phrase.'
     ), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
@@ -260,8 +261,8 @@ export class TelegramController {
       return this.#send(this.#pick('❌ عنوان العملة غير صالح.', '❌ Invalid token address.'));
     }
     return this.#send(this.#pick(
-      `🧪 دخول تجريبي من البوت\n\nاختر الحجم لـ ${short(address)}.\nالنسبة تُحسب من الرصيد التجريبي المتاح وقت التنفيذ.\nإذا لم يظهر السعر بعد، سيبقى الطلب معلقًا حتى أول سعر صالح.`,
-      `🧪 In-bot PAPER entry\n\nChoose size for ${short(address)}.\nPercentages use currently available paper cash.\nIf price is not available yet, the order waits for the first valid price.`
+      `🟢 شراء تجريبي من البوت\n\nاختر الحجم لـ ${short(address)}.\nالنسبة تُحسب من الرصيد التجريبي المتاح وقت التنفيذ.\nإذا لم يظهر السعر بعد، سيبقى الطلب معلقًا حتى أول سعر صالح.`,
+      `🟢 In-bot PAPER buy\n\nChoose size for ${short(address)}.\nPercentages use currently available paper cash.\nIf price is not available yet, the order waits for the first valid price.`
     ), [
       [
         { text: '10%', callback_data: `paper:buy:p10:${address}` },
@@ -279,9 +280,23 @@ export class TelegramController {
     ]);
   }
 
+  async #showPaperSell(address) {
+    if (!SOLANA_ADDRESS.test(address)) {
+      return this.#send(this.#pick('❌ عنوان العملة غير صالح.', '❌ Invalid token address.'));
+    }
+    return this.#send(this.#pick(
+      `🔴 بيع تجريبي من البوت\n\nاختر نسبة البيع من الصفقة المفتوحة لـ ${short(address)}.\n25% و50% بيع جزئي، و100% يغلق الصفقة بالكامل.`,
+      `🔴 In-bot PAPER sell\n\nChoose how much of the open position to sell for ${short(address)}.\n25% and 50% are partial exits; 100% closes the position.`
+    ), [[
+      { text: '25%', callback_data: `paper:sell:p25:${address}` },
+      { text: '50%', callback_data: `paper:sell:p50:${address}` },
+      { text: '100%', callback_data: `paper:sell:p100:${address}` }
+    ]]);
+  }
+
   async #executePaperBuy(address, mode, value) {
     if (!this.onPaperBuy) {
-      return this.#send(this.#pick('❌ خدمة الدخول التجريبي غير متاحة حاليًا.', '❌ Paper entry service is currently unavailable.'));
+      return this.#send(this.#pick('❌ خدمة الشراء التجريبي غير متاحة حاليًا.', '❌ Paper buy service is currently unavailable.'));
     }
     try {
       const result = await this.onPaperBuy({ address, mode, value });
@@ -291,25 +306,65 @@ export class TelegramController {
           ? `\n⚠️ ${result.warnings.join('، ')}`
           : '';
         return this.#send(this.#pick(
-          `✅ تم الدخول التجريبي\n\n${p.symbol ?? 'TOKEN'}\nالحجم: $${Number(p.usdSize).toFixed(2)}\nالسعر: ${p.entryPriceUsd}\nالستوب: -10%\nحماية الربح: تستهدف +20% بعد بلوغ +30%${warning}`,
-          `✅ PAPER entry filled\n\n${p.symbol ?? 'TOKEN'}\nSize: $${Number(p.usdSize).toFixed(2)}\nPrice: ${p.entryPriceUsd}\nStop: -10%\nProfit lock: targets +20% after reaching +30%${warning}`
-        ));
+          `✅ تم الشراء التجريبي\n\n${p.symbol ?? 'TOKEN'}\nالحجم: $${Number(p.usdSize).toFixed(2)}\nالسعر: ${p.entryPriceUsd}\nالستوب: -10%\nحماية الربح: تستهدف +20% بعد بلوغ +30%${warning}`,
+          `✅ PAPER buy filled\n\n${p.symbol ?? 'TOKEN'}\nSize: $${Number(p.usdSize).toFixed(2)}\nPrice: ${p.entryPriceUsd}\nStop: -10%\nProfit lock: targets +20% after reaching +30%${warning}`
+        ), [[{ text: this.runtime.language === 'en' ? '🔴 Sell this position' : '🔴 بيع هذه الصفقة', callback_data: `paper:sellmenu:${address}` }]]);
       }
       if (result?.status === 'queued') {
         return this.#send(this.#pick(
-          `⏳ تم حجز طلب الدخول التجريبي لـ ${short(address)}.\nسيتم تنفيذه تلقائيًا عند أول سعر صالح.`,
-          `⏳ PAPER entry queued for ${short(address)}.\nIt will execute automatically at the first valid price.`
+          `⏳ تم حجز طلب الشراء التجريبي لـ ${short(address)}.\nسيتم تنفيذه تلقائيًا عند أول سعر صالح.`,
+          `⏳ PAPER buy queued for ${short(address)}.\nIt will execute automatically at the first valid price.`
         ));
       }
       const reason = result?.reason ?? 'unknown';
       return this.#send(this.#pick(
-        `❌ لم يتم تنفيذ الدخول التجريبي: ${reason}`,
-        `❌ PAPER entry was not executed: ${reason}`
+        `❌ لم يتم تنفيذ الشراء التجريبي: ${reason}`,
+        `❌ PAPER buy was not executed: ${reason}`
       ));
     } catch (error) {
       return this.#send(this.#pick(
-        `❌ تعذر تنفيذ الدخول التجريبي: ${error.message}`,
-        `❌ Could not execute PAPER entry: ${error.message}`
+        `❌ تعذر تنفيذ الشراء التجريبي: ${error.message}`,
+        `❌ Could not execute PAPER buy: ${error.message}`
+      ));
+    }
+  }
+
+  async #executePaperSell(address, percent) {
+    if (!this.onPaperSell) {
+      return this.#send(this.#pick('❌ خدمة البيع التجريبي غير متاحة حاليًا.', '❌ Paper sell service is currently unavailable.'));
+    }
+    try {
+      const result = await this.onPaperSell({ address, percent });
+      if (result?.status === 'sold') {
+        const pnlSign = Number(result.legPnlUsd ?? 0) >= 0 ? '+' : '';
+        const remaining = Number(result.remainingUsdSize ?? 0);
+        const ar = [
+          result.closed ? '✅ تم إغلاق الصفقة التجريبية بالكامل' : `✅ تم بيع ${Number(result.sellPct).toFixed(0)}% من الصفقة التجريبية`,
+          '',
+          `${result.symbol ?? 'TOKEN'}`,
+          `السعر: ${result.priceUsd}`,
+          `نتيجة الجزء المباع: ${pnlSign}$${Number(result.legPnlUsd ?? 0).toFixed(2)} (${Number(result.legPnlPct ?? 0).toFixed(1)}%)`,
+          result.closed ? `النتيجة الإجمالية: ${Number(result.totalPnlPct ?? 0).toFixed(1)}%` : `المتبقي من رأس المال داخل الصفقة: $${remaining.toFixed(2)}`
+        ].join('\n');
+        const en = [
+          result.closed ? '✅ PAPER position fully closed' : `✅ Sold ${Number(result.sellPct).toFixed(0)}% of PAPER position`,
+          '',
+          `${result.symbol ?? 'TOKEN'}`,
+          `Price: ${result.priceUsd}`,
+          `Sold-leg result: ${pnlSign}$${Number(result.legPnlUsd ?? 0).toFixed(2)} (${Number(result.legPnlPct ?? 0).toFixed(1)}%)`,
+          result.closed ? `Total result: ${Number(result.totalPnlPct ?? 0).toFixed(1)}%` : `Remaining paper cost basis: $${remaining.toFixed(2)}`
+        ].join('\n');
+        return this.#send(this.#pick(ar, en), result.closed ? undefined : [[{ text: this.runtime.language === 'en' ? '🔴 Sell more' : '🔴 بيع المزيد', callback_data: `paper:sellmenu:${address}` }]]);
+      }
+      const reason = result?.reason ?? 'unknown';
+      return this.#send(this.#pick(
+        `❌ لم يتم تنفيذ البيع التجريبي: ${reason}`,
+        `❌ PAPER sell was not executed: ${reason}`
+      ));
+    } catch (error) {
+      return this.#send(this.#pick(
+        `❌ تعذر تنفيذ البيع التجريبي: ${error.message}`,
+        `❌ Could not execute PAPER sell: ${error.message}`
       ));
     }
   }
@@ -335,11 +390,23 @@ export class TelegramController {
       return this.#showPaperSizing(address);
     }
 
+    if (data.startsWith('paper:sellmenu:')) {
+      const address = data.slice('paper:sellmenu:'.length);
+      return this.#showPaperSell(address);
+    }
+
     if (data.startsWith('paper:buy:')) {
       const match = data.match(/^paper:buy:([pd])(\d+(?:\.\d+)?):([1-9A-HJ-NP-Za-km-z]{32,44})$/);
-      if (!match) return this.#send(this.#pick('❌ خيار الدخول غير صالح.', '❌ Invalid entry option.'));
+      if (!match) return this.#send(this.#pick('❌ خيار الشراء غير صالح.', '❌ Invalid buy option.'));
       const [, kind, rawValue, address] = match;
       return this.#executePaperBuy(address, kind === 'p' ? 'percent' : 'usd', Number(rawValue));
+    }
+
+    if (data.startsWith('paper:sell:')) {
+      const match = data.match(/^paper:sell:p(25|50|100):([1-9A-HJ-NP-Za-km-z]{32,44})$/);
+      if (!match) return this.#send(this.#pick('❌ خيار البيع غير صالح.', '❌ Invalid sell option.'));
+      const [, rawValue, address] = match;
+      return this.#executePaperSell(address, Number(rawValue));
     }
 
     if (data.startsWith('paper:custom:')) {
@@ -347,8 +414,8 @@ export class TelegramController {
       if (!SOLANA_ADDRESS.test(address)) return this.#send(this.#pick('❌ عنوان العملة غير صالح.', '❌ Invalid token address.'));
       this.awaitingPaperAmountFor = address;
       return this.#send(this.#pick(
-        '💵 أرسل مبلغ الدخول التجريبي بالدولار فقط، مثال: 35 أو 125.50',
-        '💵 Send only the PAPER entry amount in USD, for example: 35 or 125.50'
+        '💵 أرسل مبلغ الشراء التجريبي بالدولار فقط، مثال: 35 أو 125.50',
+        '💵 Send only the PAPER buy amount in USD, for example: 35 or 125.50'
       ));
     }
 
@@ -397,8 +464,8 @@ export class TelegramController {
     }
     if (data === 'wallet:live') {
       return this.#send(this.#pick(
-        '🔒 التداول الحقيقي ما زال مقفولًا. أزرار 10% / 20% / 50% / 100% والدولار تعمل الآن على Paper فقط. للتداول الحقيقي نحتاج لاحقًا محفظة تداول منفصلة وموقّع آمن، وليس Seed Phrase داخل Telegram.',
-        '🔒 Live trading is still locked. The 10% / 20% / 50% / 100% and USD buttons currently work in PAPER mode only. Live execution later requires a separate trading wallet and secure signer, never a seed phrase in Telegram.'
+        '🔒 التداول الحقيقي ما زال مقفولًا. أزرار الشراء والبيع تعمل الآن على Paper فقط. للتداول الحقيقي نحتاج لاحقًا محفظة تداول منفصلة وموقّع آمن، وليس Seed Phrase داخل Telegram.',
+        '🔒 Live trading is still locked. Buy/sell buttons currently work in PAPER mode only. Live execution later requires a separate trading wallet and secure signer, never a seed phrase in Telegram.'
       ), [[{ text: '⬅️ المحفظة', callback_data: 'menu:wallet' }]]);
     }
   }
@@ -414,8 +481,8 @@ export class TelegramController {
       const value = Number(text.replace(/[$,\s]/g, ''));
       if (!Number.isFinite(value) || value <= 0) {
         return this.#send(this.#pick(
-          '❌ المبلغ غير صالح. افتح خيار الدخول من تنبيه العملة وحاول مرة أخرى.',
-          '❌ Invalid amount. Open the entry option from the token alert and try again.'
+          '❌ المبلغ غير صالح. افتح خيار الشراء من تنبيه العملة وحاول مرة أخرى.',
+          '❌ Invalid amount. Open the buy option from the token alert and try again.'
         ));
       }
       return this.#executePaperBuy(address, 'usd', value);
