@@ -63,7 +63,10 @@ const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
   const ar = language !== 'en';
   return {
     inline_keyboard: [
-      [{ text: ar ? '🧪 دخول من البوت — Paper' : '🧪 In-bot entry — Paper', callback_data: `paper:menu:${mint}` }],
+      [
+        { text: ar ? '🟢 شراء — Paper' : '🟢 Buy — Paper', callback_data: `paper:menu:${mint}` },
+        { text: ar ? '🔴 بيع — Paper' : '🔴 Sell — Paper', callback_data: `paper:sellmenu:${mint}` }
+      ],
       [{ text: ar ? '📋 نسخ عنوان العملة CA' : '📋 Copy token CA', copy_text: { text: mint } }],
       [{ text: ar ? '📄 إرسال CA فقط' : '📄 Send CA only', callback_data: `token:ca:${mint}` }],
       ...(early ? [[{ text: ar ? '⚡ فتح Pump.fun يدويًا' : '⚡ Open Pump.fun manually', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
@@ -78,6 +81,7 @@ const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
 const translateExitReason = (reason) => {
   const text = String(reason ?? 'غير محدد');
   if (text === 'paper stop-loss') return 'وقف خسارة تجريبي';
+  if (text === 'manual paper sell') return 'بيع يدوي من البوت';
   if (text.startsWith('profit lock target')) return text.replace('profit lock target', 'حماية ربح مستهدفة');
   if (text === 'momentum reversal after peak') return 'انعكاس الزخم بعد القمة';
   if (text.startsWith('adaptive trailing exit')) return text.replace('adaptive trailing exit', 'خروج متحرك تكيفي');
@@ -219,11 +223,13 @@ export class TelegramNotifier {
     const sellers = Number(s.sells30s ?? 0);
     const currentPrice = price(event.priceUsd ?? s.priceUsd);
     const venue = sourceLabel(s.source);
+    const controls = tokenKeyboard(s.address, this.language);
     const reply = {
       reply_parameters: {
         message_id: event.thread.rootMessageId,
         allow_sending_without_reply: true
-      }
+      },
+      ...(controls ? { reply_markup: controls } : {})
     };
 
     if (event.type === 'reference') {
