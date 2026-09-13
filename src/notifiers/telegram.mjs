@@ -47,6 +47,31 @@ const price = (value) => {
 };
 const pct = (value) => `${Number(value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 1 })}%`;
 
+const sourceLabel = (source) => {
+  const value = String(source ?? '').toLowerCase();
+  if (value.includes('pump_amm') || value.includes('pumpswap')) return 'PumpSwap (Pump.fun)';
+  if (value.includes('pump')) return 'Pump.fun';
+  if (value.includes('raydium')) return 'Raydium';
+  if (value.includes('meteora')) return 'Meteora';
+  if (value.includes('orca')) return 'Orca';
+  return source ? String(source) : 'Solana';
+};
+
+const tokenKeyboard = (address, language = 'ar') => {
+  const mint = String(address ?? '').trim();
+  if (!mint) return undefined;
+  const ar = language !== 'en';
+  return {
+    inline_keyboard: [
+      [{ text: ar ? '📋 نسخ عنوان العملة CA' : '📋 Copy token CA', copy_text: { text: mint } }],
+      [
+        { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` },
+        { text: '🔥 Fomo', url: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` }
+      ]
+    ]
+  };
+};
+
 const translateExitReason = (reason) => {
   const text = String(reason ?? 'غير محدد');
   if (text === 'paper stop-loss') return 'وقف خسارة تجريبي';
@@ -94,10 +119,13 @@ export class TelegramNotifier {
     const buyers = Number(s.buys30s ?? 0);
     const sellers = Number(s.sells30s ?? 0);
     const uniqueBuyers = Number(s.uniqueBuyers30s ?? 0);
+    const venue = sourceLabel(s.source);
     const ar = [
       '🔥 إشارة قوية — SUMMECA Meme Radar',
       '',
       `${s.symbol} — ${s.name}`,
+      `المصدر/منصة الإطلاق: ${venue}`,
+      'فتح/تحقق: Phantom أو Fomo من الأزرار أسفل التنبيه',
       `السعر: ${currentPrice ? `$${currentPrice}` : 'غير متاح بعد'}`,
       `السيولة: $${money(s.liquidityUsd)}`,
       `🟢 المشترون 30ث: ${buyers} | 🔴 البائعون 30ث: ${sellers}`,
@@ -108,13 +136,15 @@ export class TelegramNotifier {
       p ? `🧪 شراء تجريبي: $${p.usdSize.toFixed(2)} بسعر ${p.entryPriceUsd}` : '👀 مراقبة قوية — لم يتم تنفيذ شراء تجريبي',
       !currentPrice ? 'ℹ️ ستبدأ نسبة الصعود من أول سعر صالح يظهر بعد الإشارة.' : '📈 بدأت متابعة الأداء من سعر هذه الإشارة.',
       '',
-      `عنوان العملة: ${s.address}`
+      `CA: ${s.address}`
     ].join('\n');
 
     const en = [
       '🔥 STRONG SIGNAL — SUMMECA Meme Radar',
       '',
       `${s.symbol} — ${s.name}`,
+      `Launch/source venue: ${venue}`,
+      'Open/verify: Phantom or Fomo using the buttons below',
       `Price: ${currentPrice ? `$${currentPrice}` : 'not available yet'}`,
       `Liquidity: $${money(s.liquidityUsd)}`,
       `🟢 Buys 30s: ${buyers} | 🔴 Sells 30s: ${sellers}`,
@@ -129,18 +159,20 @@ export class TelegramNotifier {
     ].join('\n');
 
     const text = this.#pick(ar, en);
+    const replyMarkup = tokenKeyboard(s.address, this.language);
     if (s.imageUrl) {
       try {
         return await telegramApi(this.token, 'sendPhoto', {
           chat_id: this.chatId,
           photo: s.imageUrl,
-          caption: text
+          caption: text,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {})
         });
       } catch (error) {
         console.warn('[telegram:photo]', error.message);
       }
     }
-    return this.#send(text);
+    return this.#send(text, replyMarkup ? { reply_markup: replyMarkup } : {});
   }
 
   async signalUpdate(s, sc, event) {
@@ -148,6 +180,7 @@ export class TelegramNotifier {
     const buyers = Number(s.buys30s ?? 0);
     const sellers = Number(s.sells30s ?? 0);
     const currentPrice = price(event.priceUsd ?? s.priceUsd);
+    const venue = sourceLabel(s.source);
     const reply = {
       reply_parameters: {
         message_id: event.thread.rootMessageId,
@@ -158,6 +191,7 @@ export class TelegramNotifier {
     if (event.type === 'reference') {
       const ar = [
         `📍 بدأ مرجع المتابعة — ${s.symbol}`,
+        `المصدر: ${venue}`,
         `السعر المرجعي: $${currentPrice}`,
         `🟢 المشترون 30ث: ${buyers} | 🔴 البائعون 30ث: ${sellers}`,
         `السيولة: $${money(s.liquidityUsd)}`,
@@ -165,6 +199,7 @@ export class TelegramNotifier {
       ].join('\n');
       const en = [
         `📍 Tracking reference set — ${s.symbol}`,
+        `Source: ${venue}`,
         `Reference price: $${currentPrice}`,
         `🟢 Buys 30s: ${buyers} | 🔴 Sells 30s: ${sellers}`,
         `Liquidity: $${money(s.liquidityUsd)}`,
