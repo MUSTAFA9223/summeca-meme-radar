@@ -3,10 +3,45 @@ import { scoreToken } from './core/scoring.mjs';
 import { enrichTokenSnapshot, fetchNewListings } from './feeds/birdeye.mjs';
 import { demoSnapshots } from './feeds/demo.mjs';
 import { HeliusProgramStream } from './feeds/heliusWs.mjs';
-import { TelegramNotifier } from './notifiers/telegram.mjs';
+import { discoverPrivateStartChat, TelegramNotifier } from './notifiers/telegram.mjs';
+import { AppSettings } from './storage/appSettings.mjs';
 import { SupabaseStore } from './storage/supabaseStore.mjs';
 import { PaperTrader } from './trading/paperTrader.mjs';
 
+const store = new SupabaseStore(env.supabaseUrl, env.supabaseSecretKey);
+const appSettings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
+
+async function resolveTelegramChatId() {
+  if (env.telegramChatId) return env.telegramChatId;
+  if (!env.telegramBotToken) return '';
+
+  if (appSettings.enabled) {
+    try {
+      const saved = await appSettings.get('telegram_chat_id');
+      if (saved) return saved;
+    } catch (error) {
+      console.error('[telegram:settings-read]', error.message);
+    }
+  }
+
+  try {
+    const discovered = await discoverPrivateStartChat(env.telegramBotToken);
+    if (appSettings.enabled) {
+      try {
+        await appSettings.set('telegram_chat_id', discovered);
+      } catch (error) {
+        console.error('[telegram:settings-write]', error.message);
+      }
+    }
+    console.log('[telegram] private chat linked');
+    return discovered;
+  } catch (error) {
+    console.warn('[telegram] alerts not linked yet:', error.message);
+    return '';
+  }
+}
+
+const telegram = new TelegramNotifier(env.telegramBotToken, await resolveTelegramChatId());
 const trader = new PaperTrader({
   startingUsd: env.paperStartingUsd,
   tradeSizeUsd: env.paperTradeSizeUsd,
@@ -14,8 +49,6 @@ const trader = new PaperTrader({
   stopLossPct: env.paperStopLossPct,
   peakHunterStartPct: env.peakHunterStartPct
 });
-const telegram = new TelegramNotifier(env.telegramBotToken, env.telegramChatId);
-const store = new SupabaseStore(env.supabaseUrl, env.supabaseSecretKey);
 const candidates = new Map();
 const securityChecked = new Set();
 let ticking = false;
@@ -139,6 +172,7 @@ async function tick(trigger = 'poll') {
         mode: live ? 'live-data/paper-trading' : 'demo/paper-trading',
         trigger,
         database: store.enabled ? 'supabase' : 'disabled',
+        telegram: telegram.enabled ? 'linked' : 'disabled',
         token: s.symbol,
         address: s.address,
         scores,
@@ -196,7 +230,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.4 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}`);
+console.log(`SUMMECA Meme Radar v0.5 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ' + Telegram alerts' : ''}`);
 startHeliusWakeups();
 await tick('startup');
 setInterval(() => tick('fallback-poll').catch((err) => console.error('[tick]', err)), env.birdeyePollMs);
