@@ -6,6 +6,7 @@ const rawMaxRpm = Number(process.env.BIRDEYE_MAX_RPM ?? 50);
 const MAX_RPM = Number.isFinite(rawMaxRpm) ? Math.max(1, Math.min(55, Math.floor(rawMaxRpm))) : 50;
 const requestTimestamps = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let lastDiscoveryWarningAt = 0;
 
 async function waitForRateSlot() {
   while (true) {
@@ -111,8 +112,12 @@ export async function fetchNewListings(apiKey, { limit = 20 } = {}) {
       meme_platform_enabled: true
     });
   } catch (error) {
-    if (direct.length) return direct;
-    throw error;
+    const now = Date.now();
+    if (now - lastDiscoveryWarningAt >= 60_000) {
+      lastDiscoveryWarningAt = now;
+      console.warn(`[birdeye:discovery] ${error?.message ?? error}; continuing with Helius Direct Create`);
+    }
+    return direct;
   }
 
   const items = body?.data?.items ?? body?.data?.tokens ?? body?.data ?? [];
