@@ -22,20 +22,33 @@ const ageSeconds = (s) => Math.max(0, (Date.now() - s.listedAt) / 1000);
 async function liveSnapshots() {
   const listings = await fetchNewListings(env.birdeyeApiKey, { limit: env.discoveryBatchSize });
   for (const listing of listings) {
-    if (ageSeconds(listing) <= env.maxTokenAgeSeconds) candidates.set(listing.address, { ...candidates.get(listing.address), ...listing });
+    if (ageSeconds(listing) <= env.maxTokenAgeSeconds) {
+      candidates.set(listing.address, { ...candidates.get(listing.address), ...listing });
+    }
   }
 
+  const openAddresses = new Set(trader.openPositions.map((p) => p.address));
   for (const [address, snapshot] of candidates) {
-    const isOpen = trader.openPositions.some((p) => p.address === address);
-    if (!isOpen && ageSeconds(snapshot) > env.maxTokenAgeSeconds) candidates.delete(address);
+    if (!openAddresses.has(address) && ageSeconds(snapshot) > env.maxTokenAgeSeconds) {
+      candidates.delete(address);
+      securityChecked.delete(address);
+    }
   }
 
-  const addresses = [...candidates.keys()].slice(0, env.maxTrackedTokens);
+  const openSnapshots = [...openAddresses].map((address) => candidates.get(address)).filter(Boolean);
+  const freshCandidates = [...candidates.values()]
+    .filter((snapshot) => !openAddresses.has(snapshot.address))
+    .sort((a, b) => (b.listedAt - a.listedAt) || (b.liquidityUsd - a.liquidityUsd));
+  const selected = [...openSnapshots, ...freshCandidates]
+    .slice(0, Math.max(env.maxTrackedTokens, openSnapshots.length));
+
   const enriched = [];
-  for (const address of addresses) {
-    const base = candidates.get(address);
+  for (const base of selected) {
+    const address = base.address;
     try {
-      const snapshot = await enrichTokenSnapshot(env.birdeyeApiKey, base, { includeSecurity: !securityChecked.has(address) });
+      const snapshot = await enrichTokenSnapshot(env.birdeyeApiKey, base, {
+        includeSecurity: !securityChecked.has(address)
+      });
       candidates.set(address, snapshot);
       securityChecked.add(address);
       enriched.push(snapshot);
