@@ -5,6 +5,7 @@ import { enrichTokenSnapshot, fetchNewListings } from './feeds/birdeye.mjs';
 import { demoSnapshots } from './feeds/demo.mjs';
 import { HeliusProgramStream } from './feeds/heliusWs.mjs';
 import { discoverPrivateStartChat, TelegramNotifier } from './notifiers/telegram.mjs';
+import { SignalTracker } from './signals/signalTracker.mjs';
 import { AppSettings } from './storage/appSettings.mjs';
 import { SupabaseStore } from './storage/supabaseStore.mjs';
 import { PaperTrader } from './trading/paperTrader.mjs';
@@ -68,6 +69,7 @@ if (appSettings.enabled) {
 
 const telegramChatId = await resolveTelegramChatId();
 const telegram = new TelegramNotifier(env.telegramBotToken, telegramChatId, runtime.language);
+const signalTracker = new SignalTracker({ ttlMs: 6 * 60 * 60 * 1000 });
 const trader = new PaperTrader({
   startingUsd: env.paperStartingUsd,
   tradeSizeUsd: env.paperTradeSizeUsd,
@@ -91,7 +93,33 @@ let ticking = false;
 let lastHeliusTriggerAt = 0;
 let heliusStream = null;
 
-const ageSeconds = (s) => Math.max(0, (Date.now() - s.listedAt) / 1000);
+if (store.enabled && telegramChatId) {
+  try {
+    const restored = signalTracker.restore(await store.listActiveSignalThreads(telegramChatId));
+    for (const thread of restored) {
+      candidates.set(thread.address, {
+        address: thread.address,
+        symbol: thread.symbol,
+        name: thread.name,
+        imageUrl: thread.imageUrl,
+        source: 'tracked_signal',
+        listedAt: thread.startedAt,
+        observedAt: Date.now(),
+        priceUsd: thread.referencePriceUsd ?? 0,
+        liquidityUsd: 0
+      });
+    }
+    if (restored.length) console.log(`[signal-tracker] restored ${restored.length} active thread(s)`);
+  } catch (error) {
+    console.error('[signal-tracker:restore]', error.message);
+  }
+}
+
+const ageSeconds = (s) => {
+  const listedAt = Number(s?.listedAt);
+  if (!Number.isFinite(listedAt) || listedAt <= 0) return 0;
+  return Math.max(0, (Date.now() - listedAt) / 1000);
+};
 
 async function persistSnapshot(snapshot, scores) {
   if (!store.enabled) return null;
@@ -119,6 +147,26 @@ async function persistEntry(snapshot, scores, position, refs) {
   }
 }
 
+async function persistWatchSignal(snapshot, scores, refs) {
+  if (!store.enabled || !refs?.tokenId) return;
+  try {
+    await store.saveSignal({
+      tokenId: refs.tokenId,
+      snapshotId: refs.snapshotId,
+      type: 'watch',
+      scores,
+      reason: {
+        trigger: 'telegram-strong-signal',
+        priceAvailable: Number(snapshot.priceUsd) > 0,
+        buyers30s: snapshot.buys30s ?? 0,
+        sells30s: snapshot.sells30s ?? 0
+      }
+    });
+  } catch (error) {
+    console.error('[supabase:watch-signal]', snapshot.address, error.message);
+  }
+}
+
 async function persistExit(snapshot, scores, position, refs) {
   if (!store.enabled || !position) return;
   try {
@@ -137,6 +185,64 @@ async function persistExit(snapshot, scores, position, refs) {
   }
 }
 
+async function persistTrackingEvent(snapshot, scores, refs, event) {
+  if (!event?.thread) return;
+  if (store.enabled) {
+    try {
+      await store.updateSignalThread(event.thread, {
+        referencePriceUsd: event.thread.referencePriceUsd,
+        peakPriceUsd: event.thread.peakPriceUsd,
+        peakReturnPct: event.thread.peakReturnPct,
+        lastMilestonePct: event.thread.lastMilestonePct,
+        lastUpdateAt: snapshot.observedAt,
+        active: event.type !== 'expired'
+      });
+      if (event.type === 'milestone' && refs?.tokenId) {
+        await store.saveSignal({
+          tokenId: refs.tokenId,
+          snapshotId: refs.snapshotId,
+          type: 'moon',
+          scores,
+          reason: {
+            milestonePct: event.milestonePct,
+            returnPct: event.returnPct,
+            peakReturnPct: event.peakReturnPct
+          }
+        });
+      }
+    } catch (error) {
+      console.error('[supabase:signal-thread]', snapshot.address, error.message);
+    }
+  }
+}
+
+async function startSignalThread(snapshot, scores, refs, paperPosition) {
+  if (!runtime.alertsEnabled || signalTracker.has(snapshot.address)) return null;
+  const message = await telegram.signal(snapshot, scores, paperPosition ?? undefined);
+  if (!message?.message_id) return null;
+
+  const thread = signalTracker.start({
+    tokenId: refs?.tokenId ?? null,
+    chatId: telegramChatId,
+    rootMessageId: message.message_id,
+    snapshot
+  });
+
+  if (thread && store.enabled && refs?.tokenId) {
+    try {
+      await store.saveSignalThread({
+        tokenId: refs.tokenId,
+        chatId: telegramChatId,
+        rootMessageId: message.message_id,
+        snapshot
+      });
+    } catch (error) {
+      console.error('[supabase:signal-thread-start]', snapshot.address, error.message);
+    }
+  }
+  return thread;
+}
+
 async function liveSnapshots() {
   const listings = await fetchNewListings(env.birdeyeApiKey, { limit: env.discoveryBatchSize });
   for (const listing of listings) {
@@ -146,8 +252,9 @@ async function liveSnapshots() {
   }
 
   const openAddresses = new Set(trader.openPositions.map((p) => p.address));
+  const trackedAddresses = new Set(signalTracker.values().map((thread) => thread.address));
   for (const [address, snapshot] of candidates) {
-    if (!openAddresses.has(address) && ageSeconds(snapshot) > env.maxTokenAgeSeconds) {
+    if (!openAddresses.has(address) && !trackedAddresses.has(address) && ageSeconds(snapshot) > env.maxTokenAgeSeconds) {
       candidates.delete(address);
       securityChecked.delete(address);
     }
@@ -155,10 +262,17 @@ async function liveSnapshots() {
 
   const openSnapshots = [...openAddresses].map((address) => candidates.get(address)).filter(Boolean);
   const freshCandidates = [...candidates.values()]
-    .filter((snapshot) => !openAddresses.has(snapshot.address))
+    .filter((snapshot) => !openAddresses.has(snapshot.address) && !trackedAddresses.has(snapshot.address))
     .sort((a, b) => (b.listedAt - a.listedAt) || (b.liquidityUsd - a.liquidityUsd));
-  const selected = [...openSnapshots, ...freshCandidates]
-    .slice(0, Math.max(env.maxTrackedTokens, openSnapshots.length));
+
+  const capacity = Math.max(env.maxTrackedTokens, openSnapshots.length);
+  let remaining = Math.max(0, capacity - openSnapshots.length);
+  const activeTrackedNotOpen = [...trackedAddresses].filter((address) => !openAddresses.has(address)).length;
+  const trackedSlots = Math.min(activeTrackedNotOpen, freshCandidates.length && remaining > 0 ? Math.max(0, remaining - 1) : remaining);
+  const rotatingTrackedAddresses = signalTracker.nextAddresses(trackedSlots, openAddresses);
+  const trackedSnapshots = rotatingTrackedAddresses.map((address) => candidates.get(address)).filter(Boolean);
+  remaining = Math.max(0, remaining - trackedSnapshots.length);
+  const selected = [...openSnapshots, ...trackedSnapshots, ...freshCandidates.slice(0, remaining)];
 
   const enriched = [];
   for (const base of selected) {
@@ -187,11 +301,26 @@ async function tick(trigger = 'poll') {
     const snapshots = live ? await liveSnapshots() : demoSnapshots();
 
     for (const s of snapshots) {
-      if (s.liquidityUsd < env.minLiquidityUsd) continue;
-      if (!trader.openPositions.some((p) => p.address === s.address) && ageSeconds(s) > env.maxTokenAgeSeconds) continue;
+      const isOpen = trader.openPositions.some((p) => p.address === s.address);
+      const isTracked = signalTracker.has(s.address);
+      if (!isTracked && s.liquidityUsd < env.minLiquidityUsd) continue;
+      if (!isOpen && !isTracked && ageSeconds(s) > env.maxTokenAgeSeconds) continue;
 
       const scores = scoreToken(s);
       const refs = await persistSnapshot(s, scores);
+
+      if (isTracked) {
+        const trackingEvent = signalTracker.observe(s);
+        if (trackingEvent) {
+          await persistTrackingEvent(s, scores, refs, trackingEvent);
+          if (trackingEvent.type === 'expired') {
+            signalTracker.remove(s.address);
+          } else if (runtime.alertsEnabled) {
+            await telegram.signalUpdate(s, scores, trackingEvent);
+          }
+        }
+      }
+
       const existing = trader.openPositions.find((p) => p.address === s.address);
       if (existing) {
         const result = trader.update(s, scores);
@@ -219,10 +348,13 @@ async function tick(trigger = 'poll') {
           sells30s: s.sells30s ?? 0,
           uniqueBuyers30s: s.uniqueBuyers30s ?? 0
         },
-        paperEntry: Boolean(p)
+        paperEntry: Boolean(p),
+        signalTracked: signalTracker.has(s.address)
       }));
-      if (runtime.alertsEnabled && scores.entry >= env.entryScoreThreshold) {
-        await telegram.signal(s, scores, p ?? undefined);
+
+      if (scores.entry >= env.entryScoreThreshold && !signalTracker.has(s.address)) {
+        if (!p) await persistWatchSignal(s, scores, refs);
+        await startSignalThread(s, scores, refs, p);
       }
     }
     return true;
@@ -271,7 +403,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.6 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''}`);
+console.log(`SUMMECA Meme Radar v0.7 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + threaded signal tracking`);
 await telegramController.start();
 startHeliusWakeups();
 await tick('startup');
