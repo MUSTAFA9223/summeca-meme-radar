@@ -4,6 +4,7 @@ import { enrichTokenSnapshot, fetchNewListings } from './feeds/birdeye.mjs';
 import { demoSnapshots } from './feeds/demo.mjs';
 import { HeliusProgramStream } from './feeds/heliusWs.mjs';
 import { TelegramNotifier } from './notifiers/telegram.mjs';
+import { SupabaseStore } from './storage/supabaseStore.mjs';
 import { PaperTrader } from './trading/paperTrader.mjs';
 
 const trader = new PaperTrader({
@@ -14,6 +15,7 @@ const trader = new PaperTrader({
   peakHunterStartPct: env.peakHunterStartPct
 });
 const telegram = new TelegramNotifier(env.telegramBotToken, env.telegramChatId);
+const store = new SupabaseStore(env.supabaseUrl, env.supabaseSecretKey);
 const candidates = new Map();
 const securityChecked = new Set();
 let ticking = false;
@@ -21,6 +23,50 @@ let lastHeliusTriggerAt = 0;
 let heliusStream = null;
 
 const ageSeconds = (s) => Math.max(0, (Date.now() - s.listedAt) / 1000);
+
+async function persistSnapshot(snapshot, scores) {
+  if (!store.enabled) return null;
+  try {
+    return await store.saveSnapshot(snapshot, scores);
+  } catch (error) {
+    console.error('[supabase:snapshot]', snapshot.address, error.message);
+    return null;
+  }
+}
+
+async function persistEntry(snapshot, scores, position, refs) {
+  if (!store.enabled || !position || !refs?.tokenId) return;
+  try {
+    await store.saveSignal({
+      tokenId: refs.tokenId,
+      snapshotId: refs.snapshotId,
+      type: 'entry',
+      scores,
+      reason: { trigger: 'paper-entry', blockers: scores.blockers ?? [] }
+    });
+    await store.openPaperTrade(snapshot, scores, position, refs.tokenId);
+  } catch (error) {
+    console.error('[supabase:entry]', snapshot.address, error.message);
+  }
+}
+
+async function persistExit(snapshot, scores, position, refs) {
+  if (!store.enabled || !position) return;
+  try {
+    if (refs?.tokenId) {
+      await store.saveSignal({
+        tokenId: refs.tokenId,
+        snapshotId: refs.snapshotId,
+        type: 'exit',
+        scores,
+        reason: { exitReason: position.exitReason ?? null, pnlPct: position.pnlPct ?? null }
+      });
+    }
+    await store.closePaperTrade(snapshot, scores, position);
+  } catch (error) {
+    console.error('[supabase:exit]', snapshot.address, error.message);
+  }
+}
 
 async function liveSnapshots() {
   const listings = await fetchNewListings(env.birdeyeApiKey, { limit: env.discoveryBatchSize });
@@ -75,17 +121,24 @@ async function tick(trigger = 'poll') {
       if (!trader.openPositions.some((p) => p.address === s.address) && ageSeconds(s) > env.maxTokenAgeSeconds) continue;
 
       const scores = scoreToken(s);
+      const refs = await persistSnapshot(s, scores);
       const existing = trader.openPositions.find((p) => p.address === s.address);
       if (existing) {
         const result = trader.update(s, scores);
-        if (result.closed) await telegram.exit(result.closed);
+        if (result.closed) {
+          await persistExit(s, scores, result.closed, refs);
+          await telegram.exit(result.closed);
+        }
         continue;
       }
 
       const p = trader.maybeEnter(s, scores, env.entryScoreThreshold);
+      if (p) await persistEntry(s, scores, p, refs);
+
       console.log(JSON.stringify({
         mode: live ? 'live-data/paper-trading' : 'demo/paper-trading',
         trigger,
+        database: store.enabled ? 'supabase' : 'disabled',
         token: s.symbol,
         address: s.address,
         scores,
@@ -143,7 +196,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.3 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}`);
+console.log(`SUMMECA Meme Radar v0.4 — PAPER ONLY — ${liveMode ? 'Birdeye live data' : 'demo feed'}${heliusMode ? ' + Helius WebSocket wakeups' : ''}${store.enabled ? ' + Supabase persistence' : ''}`);
 startHeliusWakeups();
 await tick('startup');
 setInterval(() => tick('fallback-poll').catch((err) => console.error('[tick]', err)), env.birdeyePollMs);
