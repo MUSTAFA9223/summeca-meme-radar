@@ -48,7 +48,26 @@ export const env = {
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
   telegramLanguage: language('TELEGRAM_LANGUAGE', 'ar'),
+
   liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? 'false') === 'true',
+  privyAppId: process.env.PRIVY_APP_ID ?? '',
+  privyAppSecret: process.env.PRIVY_APP_SECRET ?? '',
+  privyWalletId: process.env.PRIVY_WALLET_ID ?? '',
+  privyWalletAddress: process.env.PRIVY_WALLET_ADDRESS ?? '',
+  privyAuthorizationPrivateKey: process.env.PRIVY_AUTHORIZATION_PRIVATE_KEY ?? '',
+  jupiterApiKey: process.env.JUPITER_API_KEY ?? '',
+  livePollMs: Math.max(4000, num('LIVE_POLL_MS', 7000)),
+  liveEntryPercent: Math.max(1, Math.min(25, num('LIVE_ENTRY_PERCENT', 10))),
+  liveMaxEntrySol: Math.max(0.001, Math.min(1, num('LIVE_MAX_ENTRY_SOL', 0.05))),
+  liveMinEntrySol: Math.max(0.001, Math.min(0.1, num('LIVE_MIN_ENTRY_SOL', 0.005))),
+  liveMinSolReserve: Math.max(0.005, Math.min(1, num('LIVE_MIN_SOL_RESERVE', 0.03))),
+  liveMaxOpenPositions: Math.max(1, Math.min(2, Math.floor(num('LIVE_MAX_OPEN_POSITIONS', 1)))),
+  liveStopLossPct: Math.max(2, Math.min(25, num('LIVE_STOP_LOSS_PCT', 10))),
+  liveProfitLockTriggerPct: Math.max(10, Math.min(200, num('LIVE_PROFIT_LOCK_TRIGGER_PCT', 30))),
+  liveProfitLockFloorPct: Math.max(5, Math.min(150, num('LIVE_PROFIT_LOCK_FLOOR_PCT', 20))),
+  pumpPortalSlippagePct: Math.max(1, Math.min(15, num('PUMPPORTAL_SLIPPAGE_PCT', 10))),
+  pumpPortalPriorityFeeSol: Math.max(0, Math.min(0.005, num('PUMPPORTAL_PRIORITY_FEE_SOL', 0.00005))),
+
   minLiquidityUsd: num('MIN_LIQUIDITY_USD', 8000),
   entryScoreThreshold: num('ENTRY_SCORE_THRESHOLD', 82),
   moonScoreThreshold: num('MOON_SCORE_THRESHOLD', 88),
@@ -61,5 +80,22 @@ export const env = {
 };
 
 if (env.liveTradingEnabled) {
-  throw new Error('Safety lock: live trading is intentionally disabled. Use paper trading and validate results first.');
+  const required = {
+    HELIUS_API_KEY: env.heliusApiKey,
+    SUPABASE_URL: env.supabaseUrl,
+    SUPABASE_SECRET_KEY: env.supabaseSecretKey,
+    PRIVY_APP_ID: env.privyAppId,
+    PRIVY_APP_SECRET: env.privyAppSecret,
+    PRIVY_WALLET_ID: env.privyWalletId,
+    PRIVY_WALLET_ADDRESS: env.privyWalletAddress,
+    PRIVY_AUTHORIZATION_PRIVATE_KEY: env.privyAuthorizationPrivateKey,
+    JUPITER_API_KEY: env.jupiterApiKey
+  };
+  const missing = Object.entries(required).filter(([, value]) => !String(value ?? '').trim()).map(([name]) => name);
+  if (missing.length) {
+    throw new Error(`LIVE_TRADING_ENABLED=true but required secure configuration is missing: ${missing.join(', ')}`);
+  }
+  if (env.liveProfitLockFloorPct >= env.liveProfitLockTriggerPct) {
+    throw new Error('LIVE_PROFIT_LOCK_FLOOR_PCT must be lower than LIVE_PROFIT_LOCK_TRIGGER_PCT');
+  }
 }
