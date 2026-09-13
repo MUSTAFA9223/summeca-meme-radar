@@ -51,3 +51,5 @@ jobs:
         run: npm run smoke:birdeye
       - name: Helius mainnet RPC smoke test
         run: npm run smoke:helius
+      - name: Helius Pump.fun WebSocket subscription smoke test
+        run: npm run smoke:helius-ws
