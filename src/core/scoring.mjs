@@ -11,6 +11,8 @@ export function scoreToken(s) {
   const buyVol = nz(s.buyVolume30sUsd);
   const sellVol = nz(s.sellVolume30sUsd);
   const volumeRatio = buyVol / Math.max(1, sellVol);
+  const priceChange5m = nz(s.priceChange5mPct);
+  const volume5m = nz(s.volume5mUsd);
 
   let risk = 20;
   if (s.honeypot) { risk += 80; blockers.push('honeypot flag'); }
@@ -35,6 +37,11 @@ export function scoreToken(s) {
   if (nz(s.volumeAcceleration) >= 1.5) { entry += 10; reasons.push('volume accelerating'); }
   if (nz(s.liquidityChangePct) > 5) { entry += 6; reasons.push('liquidity rising'); }
   if (nz(s.uniqueBuyers30s) >= 25) entry += 7;
+  if (priceChange5m >= 5) { entry += 8; reasons.push(`price rising ${priceChange5m.toFixed(1)}%/5m`); }
+  if (priceChange5m >= 15) entry += 8;
+  if (volume5m >= 5_000) { entry += 6; reasons.push('strong fresh trading volume'); }
+  if (volume5m >= 20_000) entry += 6;
+  if (priceChange5m <= -10) entry -= 12;
   entry -= Math.round(risk * 0.38);
   entry = clamp(entry);
 
@@ -43,6 +50,9 @@ export function scoreToken(s) {
   if (nz(s.volumeAcceleration) >= 2) moon += 12;
   if (buySell >= 4) moon += 10;
   if (volumeRatio >= 4) moon += 8;
+  if (priceChange5m >= 10) moon += 10;
+  if (priceChange5m >= 25) moon += 8;
+  if (volume5m >= 20_000) moon += 6;
   if (nz(s.top10HolderPct) > 0 && nz(s.top10HolderPct) <= 25) moon += 8;
   if (nz(s.insiderPct) <= 5) moon += 5;
   if (nz(s.devPct) <= 3 && !s.devSelling) moon += 5;
