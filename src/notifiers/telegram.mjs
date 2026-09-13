@@ -63,9 +63,10 @@ const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
   const ar = language !== 'en';
   return {
     inline_keyboard: [
+      [{ text: ar ? '🧪 دخول من البوت — Paper' : '🧪 In-bot entry — Paper', callback_data: `paper:menu:${mint}` }],
       [{ text: ar ? '📋 نسخ عنوان العملة CA' : '📋 Copy token CA', copy_text: { text: mint } }],
       [{ text: ar ? '📄 إرسال CA فقط' : '📄 Send CA only', callback_data: `token:ca:${mint}` }],
-      ...(early ? [[{ text: ar ? '⚡ شراء يدوي — Pump.fun' : '⚡ Manual buy — Pump.fun', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
+      ...(early ? [[{ text: ar ? '⚡ فتح Pump.fun يدويًا' : '⚡ Open Pump.fun manually', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
       [
         { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` },
         { text: '🔥 Fomo', url: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` }
@@ -77,6 +78,7 @@ const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
 const translateExitReason = (reason) => {
   const text = String(reason ?? 'غير محدد');
   if (text === 'paper stop-loss') return 'وقف خسارة تجريبي';
+  if (text.startsWith('profit lock target')) return text.replace('profit lock target', 'حماية ربح مستهدفة');
   if (text === 'momentum reversal after peak') return 'انعكاس الزخم بعد القمة';
   if (text.startsWith('adaptive trailing exit')) return text.replace('adaptive trailing exit', 'خروج متحرك تكيفي');
   if (text.startsWith('emergency-risk:')) return text.replace('emergency-risk:', 'مخاطرة طارئة:');
@@ -127,7 +129,7 @@ export class TelegramNotifier {
       `Slot: ${event.slot ?? '—'}`,
       '',
       '⚠️ لم تجتز العملة بعد فحوص السيولة والأمان والزخم.',
-      'الشراء هنا اختياري ويدوي فقط، ومخاطر هذه المرحلة مرتفعة جدًا.',
+      'يمكنك اختيار دخول تجريبي من داخل البوت بالنسبة أو بالدولار. إذا لم يظهر السعر بعد، يحجز البوت الطلب وينفذه Paper عند أول سعر صالح.',
       '',
       `CA: ${mint}`
     ].join('\n');
@@ -139,7 +141,7 @@ export class TelegramNotifier {
       `Slot: ${event.slot ?? '—'}`,
       '',
       '⚠️ Liquidity, safety, and momentum checks have NOT passed yet.',
-      'Any buy at this stage is optional and manual only; risk is extremely high.',
+      'You can choose an in-bot PAPER entry by percentage or USD. If price is not available yet, the paper order waits for the first valid price.',
       '',
       `CA: ${mint}`
     ].join('\n');
