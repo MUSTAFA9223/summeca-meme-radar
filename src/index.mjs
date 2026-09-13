@@ -1,5 +1,6 @@
 import { TelegramController } from './bot/telegramController.mjs';
 import { env } from './config/env.mjs';
+import { evaluateSignalSafety } from './core/safetyGate.mjs';
 import { scoreToken } from './core/scoring.mjs';
 import { enrichTokenSnapshot, fetchNewListings } from './feeds/birdeye.mjs';
 import { fetchDexScreenerSnapshot } from './feeds/dexscreener.mjs';
@@ -83,6 +84,7 @@ const trader = new PaperTrader({
 
 const candidates = new Map();
 const securityChecked = new Set();
+const emergencyNotified = new Set();
 const pendingPaperBuys = new Map();
 const PAPER_BUY_TTL_MS = 3 * 60 * 1000;
 let ticking = false;
@@ -134,6 +136,78 @@ function isRisingMomentum(snapshot) {
   if (buySell >= 1.8 && buys >= 4 && volume5 >= 2_000) return true;
   if (buyerAcceleration >= 1.5 && volumeAcceleration >= 1.5 && buySell >= 1.25) return true;
   return false;
+}
+
+function hasSecurityEvidence(snapshot) {
+  return typeof snapshot?.honeypot === 'boolean'
+    || typeof snapshot?.mintAuthorityDisabled === 'boolean'
+    || typeof snapshot?.freezeAuthorityDisabled === 'boolean'
+    || Number(snapshot?.top10HolderPct ?? 0) > 0
+    || Number(snapshot?.creatorPct ?? 0) > 0;
+}
+
+function hasVerifiedMarketActivity(snapshot) {
+  const price = Number(snapshot?.priceUsd ?? 0);
+  const trades = Number(snapshot?.buys30s ?? 0) + Number(snapshot?.sells30s ?? 0);
+  const volume5m = Number(snapshot?.volume5mUsd ?? 0);
+  return Number.isFinite(price) && price > 0 && (trades > 0 || volume5m > 0);
+}
+
+async function notifyEmergencyRisk(snapshot, scores, safety, thread) {
+  const address = String(snapshot?.address ?? '');
+  if (!address || emergencyNotified.has(address)) return;
+  emergencyNotified.add(address);
+
+  const reasons = safety.emergencyReasons.length ? safety.emergencyReasons : safety.reasons;
+  const ar = [
+    `🚨 طوارئ مخاطرة — ${snapshot.symbol ?? 'TOKEN'}`,
+    '',
+    'تم إيقاف هذه العملة كإشارة دخول/صعود.',
+    `الأسباب: ${reasons.join(' | ')}`,
+    `Risk: ${scores.risk}/100`,
+    Number(snapshot.priceUsd) > 0 ? `السعر الحالي: $${snapshot.priceUsd}` : '',
+    Number(snapshot.liquidityUsd) >= 0 ? `السيولة الحالية: $${Number(snapshot.liquidityUsd).toFixed(2)}` : '',
+    '',
+    '⚠️ لا يعتمد البوت أي دخول جديد عليها. التداول الحقيقي ما زال مقفولًا.'
+  ].filter(Boolean).join('\n');
+  const en = [
+    `🚨 RISK EMERGENCY — ${snapshot.symbol ?? 'TOKEN'}`,
+    '',
+    'This token has been stopped as an entry/rising signal.',
+    `Reasons: ${reasons.join(' | ')}`,
+    `Risk: ${scores.risk}/100`,
+    Number(snapshot.priceUsd) > 0 ? `Current price: $${snapshot.priceUsd}` : '',
+    Number(snapshot.liquidityUsd) >= 0 ? `Current liquidity: $${Number(snapshot.liquidityUsd).toFixed(2)}` : '',
+    '',
+    '⚠️ No new bot entry is allowed. Live trading remains locked.'
+  ].filter(Boolean).join('\n');
+  const body = {
+    chat_id: telegramChatId,
+    text: runtime.language === 'en' ? en : runtime.language === 'bilingual' ? `${ar}\n\n────────────\n\n${en}` : ar,
+    ...(thread?.rootMessageId ? {
+      reply_parameters: { message_id: Number(thread.rootMessageId), allow_sending_without_reply: true }
+    } : {})
+  };
+  if (runtime.alertsEnabled && env.telegramBotToken && telegramChatId) {
+    await telegramApi(env.telegramBotToken, 'sendMessage', body).catch((error) => console.error('[telegram:emergency-risk]', error.message));
+  }
+
+  if (thread && store.enabled) {
+    try {
+      await store.updateSignalThread(thread, {
+        referencePriceUsd: thread.referencePriceUsd,
+        peakPriceUsd: thread.peakPriceUsd,
+        peakReturnPct: thread.peakReturnPct,
+        lastMilestonePct: thread.lastMilestonePct,
+        lastUpdateAt: snapshot.observedAt,
+        active: false
+      });
+    } catch (error) {
+      console.error('[supabase:emergency-thread-stop]', address, error.message);
+    }
+  }
+  signalTracker.remove(address);
+  console.warn(`[safety:emergency] stopped mint=${address.slice(0, 8)}… reasons=${reasons.join('; ')}`);
 }
 
 async function notifyQueuedPaperFill(position, intent, warnings = []) {
@@ -294,7 +368,9 @@ async function persistWatchSignal(snapshot, scores, refs) {
         priceAvailable: Number(snapshot.priceUsd) > 0,
         priceChange5mPct: snapshot.priceChange5mPct ?? null,
         buyers30s: snapshot.buys30s ?? 0,
-        sells30s: snapshot.sells30s ?? 0
+        sells30s: snapshot.sells30s ?? 0,
+        securityVerified: snapshot.securityVerified === true,
+        marketDataVerified: snapshot.marketDataVerified === true
       }
     });
   } catch (error) {
@@ -388,6 +464,13 @@ async function enrichWithFallback(base) {
     console.error('[birdeye:enrich]', base.address, error.message);
   }
 
+  snapshot = {
+    ...snapshot,
+    securityVerified: snapshot.securityVerified === true || hasSecurityEvidence(snapshot),
+    marketDataVerified: snapshot.marketDataVerified === true || hasVerifiedMarketActivity(snapshot)
+  };
+  if (snapshot.securityVerified === true) securityChecked.add(base.address);
+
   const trades = Number(snapshot.buys30s ?? 0) + Number(snapshot.sells30s ?? 0);
   const needsMarketFallback = Number(snapshot.priceUsd ?? 0) <= 0
     || Number(snapshot.liquidityUsd ?? 0) <= 0
@@ -398,6 +481,7 @@ async function enrichWithFallback(base) {
       const fallback = await fetchDexScreenerSnapshot(snapshot);
       if (Object.keys(fallback).length) {
         snapshot = { ...snapshot, ...fallback };
+        snapshot.marketDataVerified = hasVerifiedMarketActivity(snapshot);
         console.log(`[market:fallback] DexScreener mint=${base.address.slice(0, 8)}… price=${snapshot.priceUsd || 0} liq=${Math.round(snapshot.liquidityUsd || 0)}`);
       }
     } catch (error) {
@@ -406,7 +490,6 @@ async function enrichWithFallback(base) {
   }
 
   candidates.set(base.address, snapshot);
-  securityChecked.add(base.address);
   return snapshot;
 }
 
@@ -478,16 +561,22 @@ async function tick(trigger = 'poll') {
 
       const scores = scoreToken(s);
       const rising = isRisingMomentum(s);
+      const safety = evaluateSignalSafety(s, scores);
       const refs = await persistSnapshot(s, scores);
 
       if (isTracked) {
-        const trackingEvent = signalTracker.observe(s);
-        if (trackingEvent) {
-          await persistTrackingEvent(s, scores, refs, trackingEvent);
-          if (trackingEvent.type === 'expired') {
-            signalTracker.remove(s.address);
-          } else if (runtime.alertsEnabled) {
-            await telegram.signalUpdate(s, scores, trackingEvent);
+        const thread = signalTracker.get(s.address);
+        if (safety.emergency) {
+          await notifyEmergencyRisk(s, scores, safety, thread);
+        } else if (safety.ok) {
+          const trackingEvent = signalTracker.observe(s);
+          if (trackingEvent) {
+            await persistTrackingEvent(s, scores, refs, trackingEvent);
+            if (trackingEvent.type === 'expired') {
+              signalTracker.remove(s.address);
+            } else if (runtime.alertsEnabled) {
+              await telegram.signalUpdate(s, scores, trackingEvent);
+            }
           }
         }
       }
@@ -510,7 +599,7 @@ async function tick(trigger = 'poll') {
           p = result.position;
           pendingPaperBuys.delete(s.address);
           await persistEntry(s, scores, p, refs);
-          await notifyQueuedPaperFill(p, pendingIntent, scores.blockers ?? []);
+          await notifyQueuedPaperFill(p, pendingIntent, [...(scores.blockers ?? []), ...(!safety.ok ? safety.reasons : [])]);
           console.log(`[paper-buy] filled queued ${paperSizeLabel(pendingIntent.mode, pendingIntent.value)} mint=${s.address.slice(0, 8)}… usd=${p.usdSize.toFixed(2)}`);
         } else if (['position-already-open', 'max-open-positions', 'no-paper-cash'].includes(result.reason)) {
           pendingPaperBuys.delete(s.address);
@@ -518,7 +607,7 @@ async function tick(trigger = 'poll') {
         }
       }
 
-      if (!p && rising) {
+      if (!p && rising && safety.ok) {
         p = trader.maybeEnter(s, scores, env.entryScoreThreshold);
         if (p) await persistEntry(s, scores, p, refs);
       }
@@ -532,6 +621,7 @@ async function tick(trigger = 'poll') {
         token: s.symbol,
         address: s.address,
         scores,
+        safety,
         risingMomentum: rising,
         priceChange5mPct: s.priceChange5mPct ?? null,
         volume5mUsd: s.volume5mUsd ?? null,
@@ -546,7 +636,7 @@ async function tick(trigger = 'poll') {
         signalTracked: signalTracker.has(s.address)
       }));
 
-      if (rising && scores.entry >= env.entryScoreThreshold && !signalTracker.has(s.address)) {
+      if (rising && safety.ok && scores.entry >= env.entryScoreThreshold && !signalTracker.has(s.address)) {
         if (!p) await persistWatchSignal(s, scores, refs);
         await startSignalThread(s, scores, refs, p);
       }
@@ -601,7 +691,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.11 — PAPER ONLY — ${liveMode ? 'Birdeye + DexScreener fallback' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + raw creates hidden in menu + rising-momentum alerts + in-bot paper sizing + threaded tracking`);
+console.log(`SUMMECA Meme Radar v0.12 — PAPER ONLY — ${liveMode ? 'Birdeye + DexScreener fallback' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + fail-closed safety + emergency risk stops + raw creates hidden + rising-momentum alerts + in-bot paper sizing`);
 await telegramController.start();
 startHeliusWakeups();
 await tick('startup');
