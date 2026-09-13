@@ -13,6 +13,10 @@ export function scoreToken(s) {
   const volumeRatio = buyVol / Math.max(1, sellVol);
   const priceChange5m = nz(s.priceChange5mPct);
   const volume5m = nz(s.volume5mUsd);
+  const earlyBondingCurve = Boolean(s.directCreate)
+    && ageSec <= 300
+    && nz(s.priceUsd) > 0
+    && volume5m > 0;
 
   let risk = 20;
   if (s.honeypot) { risk += 80; blockers.push('honeypot flag'); }
@@ -22,12 +26,15 @@ export function scoreToken(s) {
   if (nz(s.insiderPct) > 12) { risk += 25; blockers.push('insider concentration >12%'); }
   if (nz(s.bundlerPct) > 15) { risk += 20; blockers.push('bundler concentration >15%'); }
   if (s.devSelling) { risk += 35; blockers.push('developer is selling'); }
-  if (s.liquidityUsd < 5000) { risk += 25; blockers.push('very low liquidity'); }
+  // Pump.fun coins trade on a bonding curve before graduation; conventional LP
+  // liquidity may be zero there, so do not reject a live early curve solely for that.
+  if (s.liquidityUsd < 5000 && !earlyBondingCurve) { risk += 25; blockers.push('very low liquidity'); }
   risk = clamp(risk);
 
   let entry = 0;
   if (ageSec <= 60) { entry += 15; reasons.push('very fresh listing'); }
   else if (ageSec <= 300) entry += 8;
+  if (earlyBondingCurve) { entry += 10; reasons.push('active Pump.fun bonding curve'); }
   if (s.liquidityUsd >= 10_000) { entry += 12; reasons.push('usable early liquidity'); }
   if (s.liquidityUsd >= 30_000) entry += 6;
   if (buySell >= 2) { entry += 15; reasons.push(`buy/sell count ${buySell.toFixed(1)}x`); }
@@ -46,6 +53,7 @@ export function scoreToken(s) {
   entry = clamp(entry);
 
   let moon = entry * 0.45;
+  if (earlyBondingCurve && priceChange5m >= 5) moon += 6;
   if (nz(s.buyerAcceleration) >= 2) moon += 15;
   if (nz(s.volumeAcceleration) >= 2) moon += 12;
   if (buySell >= 4) moon += 10;
