@@ -29,6 +29,14 @@ const first = (obj, keys) => {
   return undefined;
 };
 
+const imageUrl = (value) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return undefined;
+  if (raw.startsWith('ipfs://')) return `https://ipfs.io/ipfs/${raw.slice(7)}`;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return undefined;
+};
+
 const asOptionalBool = (value) => {
   if (value === undefined || value === null || value === '') return undefined;
   if (typeof value === 'boolean') return value;
@@ -86,6 +94,7 @@ export async function fetchNewListings(apiKey, { limit = 20 } = {}) {
       symbol: String(first(x, ['symbol']) ?? 'UNKNOWN'),
       name: String(first(x, ['name', 'symbol']) ?? 'Unknown'),
       source: String(first(x, ['source', 'platform']) ?? ''),
+      imageUrl: imageUrl(first(x, ['logoURI', 'logoUri', 'logo_uri', 'logo', 'icon', 'image', 'imageUrl', 'image_url'])),
       observedAt: now,
       listedAt: listedSeconds > 1e12 ? listedSeconds : listedSeconds * 1000,
       priceUsd: asNumber(first(x, ['price', 'priceUsd'])),
@@ -102,7 +111,8 @@ export async function fetchTokenOverview(apiKey, address) {
     liquidityUsd: asNumber(first(d, ['liquidity', 'liquidityUsd'])),
     marketCapUsd: asNumber(first(d, ['marketCap', 'marketCapUsd', 'mc'])),
     holderCount: asNumber(first(d, ['holder', 'holders', 'holderCount'])),
-    uniqueWallets24h: asNumber(first(d, ['uniqueWallet24h', 'uniqueWallets24h', 'uniqueWallet24hChange']))
+    uniqueWallets24h: asNumber(first(d, ['uniqueWallet24h', 'uniqueWallets24h', 'uniqueWallet24hChange'])),
+    imageUrl: imageUrl(first(d, ['logoURI', 'logoUri', 'logo_uri', 'logo', 'icon', 'image', 'imageUrl', 'image_url']))
   };
 }
 
