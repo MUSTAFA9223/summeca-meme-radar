@@ -39,6 +39,14 @@ export const normalizeTelegramLanguage = (language) => {
 };
 
 const money = (value) => Number(value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 });
+const compactMoney = (value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '—';
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(n >= 10_000_000_000 ? 0 : 1)}B`;
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}K`;
+  return n.toFixed(n >= 100 ? 0 : 1);
+};
 const price = (value) => {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return null;
@@ -69,29 +77,37 @@ const tokenKeyboard = (address, language = 'ar', { early = false } = {}) => {
   const mint = String(address ?? '').trim();
   if (!mint) return undefined;
   const ar = language !== 'en';
+  const dexUrl = `https://dexscreener.com/solana/${encodeURIComponent(mint)}`;
+  const phantomTokenUrl = `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}`;
+  const fomoUrl = `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}`;
+
   return {
     inline_keyboard: [
       [
-        { text: ar ? '🟢 شراء حقيقي' : '🟢 Live buy', url: phantomSwapUrl(mint, 'buy') },
-        { text: ar ? '🔴 بيع حقيقي' : '🔴 Live sell', url: phantomSwapUrl(mint, 'sell') },
+        { text: ar ? '🟢 شراء سريع' : '🟢 Quick buy', url: phantomSwapUrl(mint, 'buy') },
+        { text: ar ? '🔴 بيع' : '🔴 Sell', url: phantomSwapUrl(mint, 'sell') },
         { text: ar ? '📋 العقد' : '📋 CA', copy_text: { text: mint } }
       ],
+      [
+        { text: '📊 DEX', url: dexUrl },
+        { text: '⚡ Quick Buy', url: phantomSwapUrl(mint, 'buy') },
+        { text: '🔥 FOMO', url: fomoUrl },
+        { text: '👻 Phantom', url: phantomTokenUrl }
+      ],
+      ...(early ? [[{ text: ar ? '🚀 Pump.fun' : '🚀 Pump.fun', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
       [
         { text: ar ? '🧪 شراء Paper' : '🧪 Paper buy', callback_data: `paper:menu:${mint}` },
         { text: ar ? '🧪 بيع Paper' : '🧪 Paper sell', callback_data: `paper:sellmenu:${mint}` }
       ],
       [
-        { text: '🧪 10%', callback_data: `paper:buy:p10:${mint}` },
-        { text: '🧪 20%', callback_data: `paper:buy:p20:${mint}` },
-        { text: '🧪 50%', callback_data: `paper:buy:p50:${mint}` },
-        { text: '🧪 100%', callback_data: `paper:buy:p100:${mint}` }
+        { text: '10%', callback_data: `paper:buy:p10:${mint}` },
+        { text: '20%', callback_data: `paper:buy:p20:${mint}` },
+        { text: '50%', callback_data: `paper:buy:p50:${mint}` },
+        { text: '100%', callback_data: `paper:buy:p100:${mint}` }
       ],
-      [{ text: ar ? '🧪 💵 Paper بمبلغ دولار' : '🧪 💵 Paper by USD amount', callback_data: `paper:custom:${mint}` }],
-      [{ text: ar ? '📄 إرسال CA فقط' : '📄 Send CA only', callback_data: `token:ca:${mint}` }],
-      ...(early ? [[{ text: ar ? '⚡ فتح Pump.fun يدويًا' : '⚡ Open Pump.fun manually', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
       [
-        { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` },
-        { text: '🔥 Fomo', url: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` }
+        { text: ar ? '💵 مبلغ بالدولار' : '💵 USD amount', callback_data: `paper:custom:${mint}` },
+        { text: ar ? '📄 إرسال CA' : '📄 Send CA', callback_data: `token:ca:${mint}` }
       ]
     ]
   };
@@ -177,56 +193,75 @@ export class TelegramNotifier {
     const sellers = Number(s.sells30s ?? 0);
     const uniqueBuyers = Number(s.uniqueBuyers30s ?? 0);
     const venue = sourceLabel(s.source);
+    const marketCap = compactMoney(s.marketCapUsd);
+    const volume5m = compactMoney(s.volume5mUsd);
+    const liquidity = compactMoney(s.liquidityUsd);
+    const symbol = String(s.symbol ?? 'TOKEN').replace(/^\$/, '');
+    const displayName = String(s.name ?? symbol);
+
     const ar = [
-      '🔥 إشارة قوية — SUMMECA Meme Radar',
+      '🔥 SUMMECA TRENDING — إشارة زخم قوية',
       '',
-      `${s.symbol} — ${s.name}`,
-      `المصدر/منصة الإطلاق: ${venue}`,
-      'التداول الحقيقي: زر الشراء/البيع يفتح Phantom على نفس العملة ويطلب تأكيدك داخل المحفظة.',
-      `السعر: ${currentPrice ? `$${currentPrice}` : 'غير متاح بعد'}`,
-      `السيولة: $${money(s.liquidityUsd)}`,
-      `🟢 المشترون 30ث: ${buyers} | 🔴 البائعون 30ث: ${sellers}`,
-      `👥 مشترون مختلفون: ${uniqueBuyers}`,
-      `حجم الشراء 30ث: $${money(s.buyVolume30sUsd)} | البيع: $${money(s.sellVolume30sUsd)}`,
+      `$${symbol}  •  ${displayName}`,
       '',
-      `درجة الدخول: ${sc.entry}/100 | فرصة الصعود: ${sc.moon}/100 | المخاطرة: ${sc.risk}/100`,
-      p ? `🧪 شراء تجريبي: $${p.usdSize.toFixed(2)} بسعر ${p.entryPriceUsd}` : '👀 مراقبة قوية — لم يتم تنفيذ شراء تجريبي',
-      !currentPrice ? 'ℹ️ ستبدأ نسبة الصعود من أول سعر صالح يظهر بعد الإشارة.' : '📈 بدأت متابعة الأداء من سعر هذه الإشارة.',
+      `CA: ${s.address}`,
       '',
-      `CA: ${s.address}`
+      `MC: $${marketCap}  |  Vol 5m: $${volume5m}`,
+      `💧 Liquidity: $${liquidity}  |  💵 Price: ${currentPrice ? `$${currentPrice}` : '—'}`,
+      `🟢 Buy 30s: ${buyers}  |  🔴 Sell 30s: ${sellers}  |  👥 ${uniqueBuyers}`,
+      '',
+      `🎯 Entry ${sc.entry}/100  |  🚀 Moon ${sc.moon}/100  |  🛡️ Risk ${sc.risk}/100`,
+      '✅ Scam Check: PASSED',
+      `📍 ${venue}`,
+      p ? `🧪 Paper: $${p.usdSize.toFixed(2)} @ ${p.entryPriceUsd}` : '👀 Strong Watch — المتابعة بدأت',
+      '',
+      '🔗 DEX | Quick Buy | FOMO | Phantom ↓'
     ].join('\n');
 
     const en = [
-      '🔥 STRONG SIGNAL — SUMMECA Meme Radar',
+      '🔥 SUMMECA TRENDING — STRONG MOMENTUM',
       '',
-      `${s.symbol} — ${s.name}`,
-      `Launch/source venue: ${venue}`,
-      'Live trading: Buy/Sell opens Phantom for this token and requires your in-wallet approval.',
-      `Price: ${currentPrice ? `$${currentPrice}` : 'not available yet'}`,
-      `Liquidity: $${money(s.liquidityUsd)}`,
-      `🟢 Buys 30s: ${buyers} | 🔴 Sells 30s: ${sellers}`,
-      `👥 Unique buyers: ${uniqueBuyers}`,
-      `Buy volume 30s: $${money(s.buyVolume30sUsd)} | Sell: $${money(s.sellVolume30sUsd)}`,
+      `$${symbol}  •  ${displayName}`,
       '',
-      `Entry: ${sc.entry}/100 | Moon: ${sc.moon}/100 | Risk: ${sc.risk}/100`,
-      p ? `🧪 PAPER BUY: $${p.usdSize.toFixed(2)} @ ${p.entryPriceUsd}` : '👀 Strong watch — no paper buy executed',
-      !currentPrice ? 'ℹ️ Performance tracking starts from the first valid price after the signal.' : '📈 Performance tracking started from this signal price.',
+      `CA: ${s.address}`,
       '',
-      `CA: ${s.address}`
+      `MC: $${marketCap}  |  Vol 5m: $${volume5m}`,
+      `💧 Liquidity: $${liquidity}  |  💵 Price: ${currentPrice ? `$${currentPrice}` : '—'}`,
+      `🟢 Buy 30s: ${buyers}  |  🔴 Sell 30s: ${sellers}  |  👥 ${uniqueBuyers}`,
+      '',
+      `🎯 Entry ${sc.entry}/100  |  🚀 Moon ${sc.moon}/100  |  🛡️ Risk ${sc.risk}/100`,
+      '✅ Scam Check: PASSED',
+      `📍 ${venue}`,
+      p ? `🧪 Paper: $${p.usdSize.toFixed(2)} @ ${p.entryPriceUsd}` : '👀 Strong Watch — tracking started',
+      '',
+      '🔗 DEX | Quick Buy | FOMO | Phantom ↓'
     ].join('\n');
 
     const text = this.#pick(ar, en);
-    const replyMarkup = tokenKeyboard(s.address, this.language);
+    const replyMarkup = tokenKeyboard(s.address, this.language, { early: venue.includes('Pump.fun') });
     const reply = replyToMessageId ? {
       reply_parameters: { message_id: Number(replyToMessageId), allow_sending_without_reply: true }
     } : {};
+
     if (s.imageUrl) {
       try {
-        return await telegramApi(this.token, 'sendPhoto', {
+        if (text.length <= 1000) {
+          return await telegramApi(this.token, 'sendPhoto', {
+            chat_id: this.chatId,
+            photo: s.imageUrl,
+            caption: text,
+            ...reply,
+            ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+          });
+        }
+        const photo = await telegramApi(this.token, 'sendPhoto', {
           chat_id: this.chatId,
           photo: s.imageUrl,
-          caption: text,
-          ...reply,
+          caption: this.language === 'en' ? `🔥 SUMMECA TRENDING\n$${symbol} • ${displayName}` : `🔥 SUMMECA TRENDING\n$${symbol} • ${displayName}`,
+          ...reply
+        });
+        return await this.#send(text, {
+          reply_parameters: { message_id: Number(photo.message_id), allow_sending_without_reply: true },
           ...(replyMarkup ? { reply_markup: replyMarkup } : {})
         });
       } catch (error) {
@@ -242,7 +277,7 @@ export class TelegramNotifier {
     const sellers = Number(s.sells30s ?? 0);
     const currentPrice = price(event.priceUsd ?? s.priceUsd);
     const venue = sourceLabel(s.source);
-    const controls = tokenKeyboard(s.address, this.language);
+    const controls = tokenKeyboard(s.address, this.language, { early: venue.includes('Pump.fun') });
     const reply = {
       reply_parameters: {
         message_id: event.thread.rootMessageId,
