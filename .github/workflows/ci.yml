@@ -48,7 +48,8 @@ jobs:
               exit 1
             fi
           done
-      - name: Birdeye live discovery smoke test
+      - name: Birdeye live discovery smoke test (non-blocking external check)
+        continue-on-error: true
         run: npm run smoke:birdeye
       - name: Helius mainnet RPC smoke test
         run: npm run smoke:helius
