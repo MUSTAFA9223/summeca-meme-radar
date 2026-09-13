@@ -52,11 +52,11 @@ export class PumpPortalSwapClient {
     return { signature, venue: 'pumpportal', inputSol: amount };
   }
 
-  async sell({ mint, tokenAmountAtomic }) {
-    const amount = String(tokenAmountAtomic ?? '');
-    if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) throw new Error('Invalid token sell amount');
-    const tx = await this.#build({ action: 'sell', mint, amount, denominatedInSol: false });
+  async sell({ mint }) {
+    // PumpPortal explicitly supports percentage sells. The trading wallet is
+    // dedicated to SUMMECA, so 100% avoids token-decimal/atomic-unit ambiguity.
+    const tx = await this.#build({ action: 'sell', mint, amount: '100%', denominatedInSol: false });
     const signature = await this.#signSend(tx);
-    return { signature, venue: 'pumpportal', outputTokenAmountAtomic: amount };
+    return { signature, venue: 'pumpportal' };
   }
 }
