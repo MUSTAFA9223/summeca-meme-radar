@@ -22,7 +22,9 @@ const num = (name, fallback) => {
 
 export const env = {
   birdeyeApiKey: process.env.BIRDEYE_API_KEY ?? '',
-  birdeyePollMs: Math.max(1000, num('BIRDEYE_POLL_MS', 3000)),
+  birdeyePollMs: Math.max(2000, num('BIRDEYE_POLL_MS', 5000)),
+  discoveryBatchSize: Math.max(1, Math.min(20, Math.floor(num('DISCOVERY_BATCH_SIZE', 20)))),
+  maxTrackedTokens: Math.max(1, Math.min(20, Math.floor(num('MAX_TRACKED_TOKENS', 8)))),
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
   liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? 'false') === 'true',
@@ -38,5 +40,5 @@ export const env = {
 };
 
 if (env.liveTradingEnabled) {
-  throw new Error('v0.1 safety lock: live trading is intentionally disabled. Use paper trading first.');
+  throw new Error('Safety lock: live trading is intentionally disabled. Use paper trading and validate results first.');
 }
