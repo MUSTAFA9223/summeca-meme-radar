@@ -3,7 +3,7 @@ import { env } from './config/env.mjs';
 import { evaluateSignalSafety } from './core/safetyGate.mjs';
 import { scoreToken } from './core/scoring.mjs';
 import { enrichTokenSnapshot, fetchNewListings } from './feeds/birdeye.mjs';
-import { fetchDexScreenerSnapshot } from './feeds/dexscreener.mjs';
+import { fetchDexScreenerSnapshot, fetchDexScreenerSnapshots } from './feeds/dexscreener.mjs';
 import { demoSnapshots } from './feeds/demo.mjs';
 import { HeliusProgramStream } from './feeds/heliusWs.mjs';
 import { discoverPrivateStartChat, TelegramNotifier, telegramApi } from './notifiers/telegram.mjs';
@@ -15,6 +15,7 @@ import { PaperTrader } from './trading/paperTrader.mjs';
 const store = new SupabaseStore(env.supabaseUrl, env.supabaseSecretKey);
 const appSettings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const WATCH_POOL_SIZE = 20;
 
 async function resolveTelegramChatId() {
   if (env.telegramChatId) return env.telegramChatId;
@@ -138,6 +139,22 @@ function isRisingMomentum(snapshot) {
   return false;
 }
 
+function momentumRank(snapshot) {
+  const buys = Math.max(0, Number(snapshot?.buys30s ?? 0));
+  const sells = Math.max(0, Number(snapshot?.sells30s ?? 0));
+  const ratio = buys / Math.max(1, sells);
+  const price5 = Number(snapshot?.priceChange5mPct ?? 0);
+  const volume5 = Math.max(0, Number(snapshot?.volume5mUsd ?? 0));
+  const liquidity = Math.max(0, Number(snapshot?.liquidityUsd ?? 0));
+  const acceleration = Math.max(0, Number(snapshot?.buyerAcceleration ?? 0)) + Math.max(0, Number(snapshot?.volumeAcceleration ?? 0));
+  return Math.max(-20, Math.min(60, price5)) * 3
+    + Math.min(60, buys * 3)
+    + Math.min(35, ratio * 7)
+    + Math.min(45, Math.log10(volume5 + 1) * 10)
+    + Math.min(25, Math.log10(liquidity + 1) * 4)
+    + Math.min(30, acceleration * 5);
+}
+
 function hasSecurityEvidence(snapshot) {
   return typeof snapshot?.honeypot === 'boolean'
     || typeof snapshot?.mintAuthorityDisabled === 'boolean'
@@ -151,6 +168,11 @@ function hasVerifiedMarketActivity(snapshot) {
   const trades = Number(snapshot?.buys30s ?? 0) + Number(snapshot?.sells30s ?? 0);
   const volume5m = Number(snapshot?.volume5mUsd ?? 0);
   return Number.isFinite(price) && price > 0 && (trades > 0 || volume5m > 0);
+}
+
+function isEarlyPumpMarket(snapshot) {
+  const source = String(snapshot?.source ?? '').toLowerCase();
+  return source.includes('pump') && hasVerifiedMarketActivity(snapshot);
 }
 
 async function notifyEmergencyRisk(snapshot, scores, safety, thread) {
@@ -577,15 +599,39 @@ async function liveSnapshots() {
     .filter((snapshot) => !reserved.has(snapshot.address) && !trackedAddresses.has(snapshot.address))
     .sort((a, b) => (b.listedAt - a.listedAt) || (b.liquidityUsd - a.liquidityUsd));
 
-  const baseSelected = [...openSnapshots, ...pendingSnapshots];
+  const watchCandidates = freshCandidates.slice(0, WATCH_POOL_SIZE);
+  let rankedFreshCandidates = freshCandidates;
+  if (watchCandidates.length) {
+    try {
+      const marketBatch = await fetchDexScreenerSnapshots(watchCandidates);
+      for (const base of watchCandidates) {
+        const market = marketBatch.get(base.address);
+        if (!market) continue;
+        const merged = { ...base, ...market };
+        candidates.set(base.address, merged);
+      }
+      rankedFreshCandidates = watchCandidates
+        .map((base) => candidates.get(base.address) ?? base)
+        .sort((a, b) => momentumRank(b) - momentumRank(a));
+      const active = rankedFreshCandidates.filter(hasVerifiedMarketActivity).length;
+      const rising = rankedFreshCandidates.filter(isRisingMomentum).length;
+      console.log(`[watch-pool] monitored=${watchCandidates.length} active=${active} rising=${rising}`);
+    } catch (error) {
+      console.warn('[watch-pool]', error.message);
+      rankedFreshCandidates = watchCandidates;
+    }
+  }
+
+  const openSelected = [...openAddresses].map((address) => candidates.get(address)).filter(Boolean);
+  const baseSelected = [...openSelected, ...pendingSnapshots];
   const capacity = Math.max(env.maxTrackedTokens, baseSelected.length);
   let remaining = Math.max(0, capacity - baseSelected.length);
   const activeTrackedNotOpen = [...trackedAddresses].filter((address) => !reserved.has(address)).length;
-  const trackedSlots = Math.min(activeTrackedNotOpen, freshCandidates.length && remaining > 0 ? Math.max(0, remaining - 1) : remaining);
+  const trackedSlots = Math.min(activeTrackedNotOpen, rankedFreshCandidates.length && remaining > 0 ? Math.max(0, remaining - 1) : remaining);
   const rotatingTrackedAddresses = signalTracker.nextAddresses(trackedSlots, reserved);
   const trackedSnapshots = rotatingTrackedAddresses.map((address) => candidates.get(address)).filter(Boolean);
   remaining = Math.max(0, remaining - trackedSnapshots.length);
-  const selected = [...baseSelected, ...trackedSnapshots, ...freshCandidates.slice(0, remaining)];
+  const selected = [...baseSelected, ...trackedSnapshots, ...rankedFreshCandidates.slice(0, remaining)];
 
   const enriched = [];
   const seen = new Set();
@@ -610,7 +656,8 @@ async function tick(trigger = 'poll') {
       const isOpen = trader.openPositions.some((p) => p.address === s.address);
       const isTracked = signalTracker.has(s.address);
       const hasPendingPaperBuy = pendingPaperBuys.has(s.address);
-      if (!isTracked && !hasPendingPaperBuy && s.liquidityUsd < env.minLiquidityUsd) continue;
+      const earlyPumpMarket = isEarlyPumpMarket(s);
+      if (!isTracked && !hasPendingPaperBuy && s.liquidityUsd < env.minLiquidityUsd && !earlyPumpMarket) continue;
       if (!isOpen && !isTracked && !hasPendingPaperBuy && ageSeconds(s) > env.maxTokenAgeSeconds) continue;
 
       const scores = scoreToken(s);
@@ -745,7 +792,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.13 — PAPER ONLY — ${liveMode ? 'Birdeye + DexScreener fallback' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + fail-closed safety + emergency risk stops + raw creates hidden + rising-momentum alerts + direct in-bot paper buy/sell`);
+console.log(`SUMMECA Meme Radar v0.14 — PAPER ONLY — ${liveMode ? 'Birdeye + DexScreener 20-token watch pool' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + fail-closed safety + emergency risk stops + raw creates hidden + rising-momentum alerts + direct in-bot paper buy/sell`);
 await telegramController.start();
 startHeliusWakeups();
 await tick('startup');
