@@ -20,11 +20,23 @@ const num = (name, fallback) => {
   return v;
 };
 
+const csv = (name, fallback = '') => String(process.env[name] ?? fallback)
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+
 export const env = {
   birdeyeApiKey: process.env.BIRDEYE_API_KEY ?? '',
   birdeyePollMs: Math.max(5000, num('BIRDEYE_POLL_MS', 10000)),
   discoveryBatchSize: Math.max(1, Math.min(20, Math.floor(num('DISCOVERY_BATCH_SIZE', 10)))),
   maxTrackedTokens: Math.max(1, Math.min(10, Math.floor(num('MAX_TRACKED_TOKENS', 3)))),
+
+  heliusApiKey: process.env.HELIUS_API_KEY ?? '',
+  heliusWsEnabled: (process.env.HELIUS_WS_ENABLED ?? 'true') !== 'false',
+  heliusProgramIds: csv('HELIUS_PROGRAM_IDS', '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'),
+  heliusTriggerMinMs: Math.max(1200, num('HELIUS_TRIGGER_MIN_MS', 1500)),
+  heliusStaleAfterMs: Math.max(30_000, num('HELIUS_STALE_AFTER_MS', 75_000)),
+
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
   liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? 'false') === 'true',
