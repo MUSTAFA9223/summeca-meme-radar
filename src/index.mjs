@@ -275,6 +275,59 @@ async function requestPaperBuy({ address, mode, value }) {
   };
 }
 
+async function requestPaperSell({ address, percent }) {
+  const mint = String(address ?? '').trim();
+  const sellPct = Number(percent);
+  if (!SOLANA_ADDRESS.test(mint)) return { status: 'rejected', reason: 'invalid-token-address' };
+  if (![25, 50, 100].includes(sellPct)) return { status: 'rejected', reason: 'invalid-sell-percent' };
+
+  const current = candidates.get(mint);
+  if (!current) return { status: 'rejected', reason: 'market-snapshot-unavailable' };
+  if (!(Number(current.priceUsd) > 0)) return { status: 'rejected', reason: 'price-unavailable' };
+
+  const scores = scoreToken(current);
+  const result = trader.manualSell(current, sellPct);
+  if (!result.ok) return { status: 'rejected', reason: result.reason };
+
+  const refs = await persistSnapshot(current, scores);
+  if (result.closed) {
+    await persistExit(current, scores, result.position, refs);
+  } else if (store.enabled && refs?.tokenId) {
+    try {
+      await store.saveSignal({
+        tokenId: refs.tokenId,
+        snapshotId: refs.snapshotId,
+        type: 'partial_exit',
+        scores,
+        reason: {
+          trigger: 'telegram-manual-paper-sell',
+          sellPct: result.sellPct,
+          priceUsd: current.priceUsd,
+          legPnlUsd: result.legPnlUsd,
+          legPnlPct: result.legPnlPct,
+          remainingUsdSize: result.remainingUsdSize
+        }
+      });
+      await store.updateOpenPaperTrade(current, result.position);
+    } catch (error) {
+      console.error('[supabase:partial-exit]', mint, error.message);
+    }
+  }
+
+  return {
+    status: 'sold',
+    closed: result.closed,
+    symbol: result.position?.symbol ?? current.symbol,
+    sellPct: result.sellPct,
+    priceUsd: Number(current.priceUsd),
+    legPnlUsd: result.legPnlUsd,
+    legPnlPct: result.legPnlPct,
+    totalPnlPct: result.position?.pnlPct ?? null,
+    remainingUsdSize: result.remainingUsdSize,
+    availableUsd: trader.availableUsd
+  };
+}
+
 const telegramController = new TelegramController({
   token: env.telegramBotToken,
   chatId: telegramChatId,
@@ -284,6 +337,7 @@ const telegramController = new TelegramController({
   runtime,
   heliusApiKey: env.heliusApiKey,
   onPaperBuy: requestPaperBuy,
+  onPaperSell: requestPaperSell,
   getRecentCreates: () => runtime.recentCreates
 });
 
@@ -691,7 +745,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.12 — PAPER ONLY — ${liveMode ? 'Birdeye + DexScreener fallback' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + fail-closed safety + emergency risk stops + raw creates hidden + rising-momentum alerts + in-bot paper sizing`);
+console.log(`SUMMECA Meme Radar v0.13 — PAPER ONLY — ${liveMode ? 'Birdeye + DexScreener fallback' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + fail-closed safety + emergency risk stops + raw creates hidden + rising-momentum alerts + direct in-bot paper buy/sell`);
 await telegramController.start();
 startHeliusWakeups();
 await tick('startup');
