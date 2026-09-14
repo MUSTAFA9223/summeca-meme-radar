@@ -53,7 +53,8 @@ jobs:
         run: npm run smoke:birdeye
       - name: Helius mainnet RPC smoke test
         run: npm run smoke:helius
-      - name: Helius Pump.fun WebSocket subscription smoke test
+      - name: Helius Pump.fun WebSocket subscription smoke test (non-blocking external check)
+        continue-on-error: true
         run: npm run smoke:helius-ws
       - name: Supabase write-read-delete smoke test
         run: npm run smoke:supabase
