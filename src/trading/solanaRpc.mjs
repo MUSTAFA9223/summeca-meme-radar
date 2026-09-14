@@ -1,6 +1,10 @@
 export const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 export const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
+const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
+const SAFE_MINT_CACHE_MS = 10 * 60 * 1000;
+const UNSAFE_MINT_CACHE_MS = 20 * 1000;
+
 const extensionKey = (value) => String(value ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase();
 
 const extensionName = (extension) => {
@@ -72,11 +76,12 @@ export class SolanaRpcClient {
     this.apiKey = String(heliusApiKey ?? '').trim();
     this.endpoint = this.apiKey
       ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(this.apiKey)}`
-      : 'https://api.mainnet-beta.solana.com';
+      : PUBLIC_SOLANA_RPC;
+    this.mintSecurityCache = new Map();
   }
 
-  async rpc(method, params = []) {
-    const response = await fetch(this.endpoint, {
+  async #rpcAt(endpoint, method, params = []) {
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params })
@@ -87,9 +92,30 @@ export class SolanaRpcClient {
     return payload?.result;
   }
 
+  async rpc(method, params = []) {
+    return this.#rpcAt(this.endpoint, method, params);
+  }
+
   async getMintSecurity(mint) {
-    const result = await this.rpc('getAccountInfo', [mint, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
-    return parseMintSecurityAccount(result);
+    const key = String(mint ?? '').trim();
+    const cached = this.mintSecurityCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const params = [key, { encoding: 'jsonParsed', commitment: 'confirmed' }];
+    let result;
+    try {
+      result = await this.rpc('getAccountInfo', params);
+    } catch (error) {
+      const isHeliusRateLimit = Boolean(this.apiKey) && /getAccountInfo HTTP 429/i.test(String(error?.message ?? error));
+      if (!isHeliusRateLimit) throw error;
+      console.warn(`[solana:rpc-fallback] Helius rate limited mint=${key.slice(0, 8)}…; using public Solana RPC for read-only mint security`);
+      result = await this.#rpcAt(PUBLIC_SOLANA_RPC, 'getAccountInfo', params);
+    }
+
+    const parsed = parseMintSecurityAccount(result);
+    const ttlMs = parsed.onchainSecurityVerified ? SAFE_MINT_CACHE_MS : UNSAFE_MINT_CACHE_MS;
+    this.mintSecurityCache.set(key, { value: parsed, expiresAt: Date.now() + ttlMs });
+    return parsed;
   }
 
   async getSolBalanceLamports(address) {
