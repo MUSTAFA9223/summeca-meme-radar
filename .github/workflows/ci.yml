@@ -51,7 +51,8 @@ jobs:
       - name: Birdeye live discovery smoke test (non-blocking external check)
         continue-on-error: true
         run: npm run smoke:birdeye
-      - name: Helius mainnet RPC smoke test
+      - name: Helius mainnet RPC smoke test (non-blocking external check)
+        continue-on-error: true
         run: npm run smoke:helius
       - name: Helius Pump.fun WebSocket subscription smoke test (non-blocking external check)
         continue-on-error: true
