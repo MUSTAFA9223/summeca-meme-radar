@@ -1,6 +1,6 @@
 const text = (value) => String(value ?? '').toLowerCase();
 
-const securityCritical = (blocker) => /honeypot|freeze authority active|mint authority active|developer is selling|top-10 concentration|insider concentration|bundler concentration/.test(text(blocker));
+const securityCritical = (blocker) => /honeypot|freeze authority active|mint authority active|developer is selling|top-10 concentration|insider concentration|bundler concentration|non-transferable|transfer fee|fake token/.test(text(blocker));
 
 const isDexVenue = (source) => {
   const value = text(source);
@@ -33,17 +33,20 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   if (snapshot.securityVerified !== true) reasons.push('security not verified');
   if (!(trades >= 5 || volume5m >= 1000)) reasons.push('insufficient verified trading activity');
 
-  // Do not auto-enter a token that has only buys. At least one observed sell is
-  // required so the radar has evidence that holders can exit the market.
+  // A real observed sell is mandatory. Besides proving market activity, it is an
+  // independent execution-level safeguard against tokens that cannot be sold.
   if (!(Number.isFinite(sells) && sells >= 1)) reasons.push('no verified sell observed');
 
-  // When the provider exposes these controls, they must explicitly be safe.
-  // Missing values remain fail-closed for automatic entry rather than being
-  // interpreted as safe by default.
+  // Solana's current security payload does not always expose a dedicated honeypot
+  // boolean. We therefore fail closed on mint/freeze authorities and Token-2022
+  // restrictions, while an explicit honeypot=true is always a blocker.
   if (snapshot.securityVerified === true) {
-    if (snapshot.honeypot !== false) reasons.push('honeypot status not explicitly safe');
+    if (snapshot.honeypot === true) reasons.push('honeypot flag');
     if (snapshot.mintAuthorityDisabled !== true) reasons.push('mint authority not verified disabled');
     if (snapshot.freezeAuthorityDisabled !== true) reasons.push('freeze authority not verified disabled');
+    if (snapshot.fakeToken === true) reasons.push('fake token flag');
+    if (snapshot.nonTransferable === true) reasons.push('non-transferable token');
+    if (snapshot.isToken2022 === true && snapshot.transferFeeEnable === true) reasons.push('Token-2022 transfer fee enabled');
   }
 
   if (Number.isFinite(risk) && risk > 35) reasons.push(`risk score ${risk}/100`);
@@ -67,10 +70,14 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
     marketEmergency = true;
   }
 
+  for (const reason of reasons) {
+    if (securityCritical(reason)) emergencyReasons.push(reason);
+  }
+
   return {
     ok: reasons.length === 0,
     reasons: [...new Set(reasons)],
-    emergency: emergencyReasons.length > 0 && (snapshot.securityVerified === true || marketEmergency),
+    emergency: [...new Set(emergencyReasons)].length > 0 && (snapshot.securityVerified === true || marketEmergency),
     emergencyReasons: [...new Set(emergencyReasons)]
   };
 }
