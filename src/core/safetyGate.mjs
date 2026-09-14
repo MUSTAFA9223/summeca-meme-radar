@@ -11,8 +11,8 @@ const isDexVenue = (source) => {
 
 export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   const blockers = Array.isArray(scores.blockers) ? scores.blockers.map(String) : [];
-  const reasons = [];
-  const emergencyReasons = blockers.filter(securityCritical);
+  const pendingReasons = [];
+  const dangerReasons = blockers.filter(securityCritical);
   const price = Number(snapshot.priceUsd ?? 0);
   const risk = Number(scores.risk ?? 100);
   const buys = Number(snapshot.buys30s ?? 0);
@@ -24,71 +24,75 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   const insider = Number(snapshot.insiderPct ?? 0);
   const bundler = Number(snapshot.bundlerPct ?? 0);
   const creator = Number(snapshot.creatorPct ?? snapshot.devPct ?? 0);
-  let marketEmergency = false;
 
-  // Fail closed: an automatic entry needs a real price, verified market data,
-  // verified security data, and enough actual trading to prove the token is live.
-  if (!(Number.isFinite(price) && price > 0)) reasons.push('price unavailable');
-  if (snapshot.marketDataVerified !== true) reasons.push('market data not verified');
-  if (snapshot.securityVerified !== true) reasons.push('security not verified');
-  if (!(trades >= 5 || volume5m >= 1000)) reasons.push('insufficient verified trading activity');
+  // Entry remains fail-closed, but incomplete evidence is now distinct from a
+  // confirmed danger. Pending safety must not silence momentum/performance tracking.
+  if (!(Number.isFinite(price) && price > 0)) pendingReasons.push('price unavailable');
+  if (snapshot.marketDataVerified !== true) pendingReasons.push('market data not verified');
+  if (snapshot.securityVerified !== true) pendingReasons.push('security not verified');
+  if (!(trades >= 5 || volume5m >= 1000)) pendingReasons.push('insufficient verified trading activity');
+  if (!(Number.isFinite(sells) && sells >= 1)) pendingReasons.push('no verified sell observed');
 
-  // A real observed sell is mandatory. Besides proving market activity, it is an
-  // independent execution-level safeguard against tokens that cannot be sold.
-  if (!(Number.isFinite(sells) && sells >= 1)) reasons.push('no verified sell observed');
+  // A failed/unfinished direct mint inspection blocks entry, but by itself does
+  // not prove the token is malicious. Keep observing it while the check retries.
+  if (snapshot.onchainSecurityVerified === false) pendingReasons.push('on-chain mint security not verified');
 
-  // Direct Solana mint inspection is authoritative when present. If it explicitly
-  // failed, never let provider-level metadata override that failure.
-  if (snapshot.onchainSecurityVerified === false) reasons.push('on-chain mint security not verified');
-
-  // Solana's current security payload does not always expose a dedicated honeypot
-  // boolean. We therefore fail closed on mint/freeze authorities and Token-2022
-  // restrictions, while an explicit honeypot=true is always a blocker.
   if (snapshot.securityVerified === true) {
-    if (snapshot.honeypot === true) reasons.push('honeypot flag');
-    if (snapshot.mintAuthorityDisabled !== true) reasons.push('mint authority not verified disabled');
-    if (snapshot.freezeAuthorityDisabled !== true) reasons.push('freeze authority not verified disabled');
-    if (snapshot.fakeToken === true) reasons.push('fake token flag');
-    if (snapshot.nonTransferable === true) reasons.push('non-transferable token');
-    if (snapshot.isToken2022 === true && snapshot.transferFeeEnable === true) reasons.push('Token-2022 transfer fee enabled');
+    if (snapshot.honeypot === true) dangerReasons.push('honeypot flag');
+
+    if (snapshot.mintAuthorityDisabled === false) dangerReasons.push('mint authority active');
+    else if (snapshot.mintAuthorityDisabled !== true) pendingReasons.push('mint authority not verified disabled');
+
+    if (snapshot.freezeAuthorityDisabled === false) dangerReasons.push('freeze authority active');
+    else if (snapshot.freezeAuthorityDisabled !== true) pendingReasons.push('freeze authority not verified disabled');
+
+    if (snapshot.fakeToken === true) dangerReasons.push('fake token flag');
+    if (snapshot.nonTransferable === true) dangerReasons.push('non-transferable token');
+    if (snapshot.isToken2022 === true && snapshot.transferFeeEnable === true) dangerReasons.push('Token-2022 transfer fee enabled');
   }
 
   if (snapshot.isToken2022 === true) {
-    if (snapshot.token2022ExtensionsVerified !== true) reasons.push('Token-2022 extensions not verified');
+    if (snapshot.token2022ExtensionsVerified !== true) pendingReasons.push('Token-2022 extensions not verified');
     for (const extension of Array.isArray(snapshot.token2022UnsafeExtensions) ? snapshot.token2022UnsafeExtensions : []) {
-      reasons.push(`Token-2022 risky extension: ${extension}`);
+      dangerReasons.push(`Token-2022 risky extension: ${extension}`);
     }
   }
 
-  if (Number.isFinite(risk) && risk > 35) reasons.push(`risk score ${risk}/100`);
-  for (const blocker of blockers.filter(securityCritical)) reasons.push(blocker);
+  if (Number.isFinite(risk) && risk > 35) pendingReasons.push(`risk score ${risk}/100`);
 
-  // Additional concentration safeguards. Zero means "not supplied" here, so it
-  // is not treated as proof of safe distribution; known dangerous values block.
-  if (top10 > 40) reasons.push(`top-10 concentration ${top10.toFixed(1)}%`);
-  if (insider > 10) reasons.push(`insider concentration ${insider.toFixed(1)}%`);
-  if (bundler > 12) reasons.push(`bundler concentration ${bundler.toFixed(1)}%`);
-  if (creator > 8) reasons.push(`creator concentration ${creator.toFixed(1)}%`);
-  if (snapshot.devSelling === true) reasons.push('developer is selling');
+  if (top10 > 40) dangerReasons.push(`top-10 concentration ${top10.toFixed(1)}%`);
+  if (insider > 10) dangerReasons.push(`insider concentration ${insider.toFixed(1)}%`);
+  if (bundler > 12) dangerReasons.push(`bundler concentration ${bundler.toFixed(1)}%`);
+  if (creator > 8) dangerReasons.push(`creator concentration ${creator.toFixed(1)}%`);
+  if (snapshot.devSelling === true) dangerReasons.push('developer is selling');
 
-  // Once a token is on a conventional DEX/PumpSwap, very low liquidity is an
-  // emergency signal. Pump.fun bonding-curve coins are excluded from the LP
-  // rule because they trade against the curve before graduation.
+  // Conventional DEX liquidity below this level is an explicit market danger.
+  // Pump.fun bonding-curve launches remain exempt before graduation.
   if (isDexVenue(snapshot.source) && Number.isFinite(liquidity) && liquidity < 5000) {
-    const reason = `DEX liquidity critically low ($${Math.max(0, liquidity).toFixed(2)})`;
-    reasons.push(reason);
-    emergencyReasons.push(reason);
-    marketEmergency = true;
+    dangerReasons.push(`DEX liquidity critically low ($${Math.max(0, liquidity).toFixed(2)})`);
   }
 
-  for (const reason of reasons) {
-    if (securityCritical(reason)) emergencyReasons.push(reason);
-  }
+  const uniqueDangerReasons = [...new Set(dangerReasons)];
+  const uniquePendingReasons = [...new Set(pendingReasons)].filter((reason) => !uniqueDangerReasons.includes(reason));
+  const status = uniqueDangerReasons.length > 0
+    ? 'dangerous'
+    : uniquePendingReasons.length > 0
+      ? 'unknown'
+      : 'safe';
+  const reasons = [...uniqueDangerReasons, ...uniquePendingReasons];
 
   return {
-    ok: reasons.length === 0,
-    reasons: [...new Set(reasons)],
-    emergency: [...new Set(emergencyReasons)].length > 0 && (snapshot.securityVerified === true || marketEmergency),
-    emergencyReasons: [...new Set(emergencyReasons)]
+    // `ok` intentionally remains the strict execution gate used by live trading.
+    ok: status === 'safe',
+    entryAllowed: status === 'safe',
+    // Unknown means “keep watching, do not execute”. Existing dangerous threads
+    // may still be observed by the tracker, but no new automatic entry is allowed.
+    trackingAllowed: status !== 'dangerous',
+    status,
+    reasons,
+    pendingReasons: uniquePendingReasons,
+    dangerReasons: uniqueDangerReasons,
+    emergency: status === 'dangerous',
+    emergencyReasons: uniqueDangerReasons
   };
 }
