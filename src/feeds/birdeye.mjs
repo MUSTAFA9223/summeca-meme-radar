@@ -33,6 +33,13 @@ const first = (obj, keys) => {
   return undefined;
 };
 
+const firstPresent = (obj, keys) => {
+  for (const key of keys) {
+    if (obj && Object.prototype.hasOwnProperty.call(obj, key)) return obj[key];
+  }
+  return undefined;
+};
+
 const imageUrl = (value) => {
   const raw = String(value ?? '').trim();
   if (!raw) return undefined;
@@ -49,6 +56,14 @@ const asOptionalBool = (value) => {
   if (['true', '1', 'yes', 'y'].includes(s)) return true;
   if (['false', '0', 'no', 'n'].includes(s)) return false;
   return undefined;
+};
+
+const authorityDisabled = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return true;
+  const address = String(value).trim();
+  if (!address || address === '11111111111111111111111111111111') return true;
+  return false;
 };
 
 async function birdeyeGet(apiKey, path, params = {}, { timeoutMs = 8000 } = {}) {
@@ -164,11 +179,31 @@ export function normalizeSecurity(raw) {
   const freezeable = asOptionalBool(first(d, ['freezeable', 'freezable', 'isFreezeable', 'freezeAuthorityEnabled']));
   const mintable = asOptionalBool(first(d, ['mintable', 'isMintable', 'mintAuthorityEnabled']));
   const honeypot = asOptionalBool(first(d, ['honeypot', 'isHoneypot', 'is_honeypot']));
+  const renounced = asOptionalBool(first(d, ['renounced', 'ownershipRenounced', 'ownership_renounced']));
+  const ownerAddress = firstPresent(d, ['ownerAddress', 'owner_address', 'mintAuthority', 'mint_authority']);
+  const freezeAuthority = firstPresent(d, ['freezeAuthority', 'freeze_authority']);
+  const nonTransferable = asOptionalBool(first(d, ['nonTransferable', 'non_transferable']));
+  const transferFeeEnable = asOptionalBool(first(d, ['transferFeeEnable', 'transfer_fee_enable']));
+  const isToken2022 = asOptionalBool(first(d, ['isToken2022', 'is_token_2022']));
+  const fakeToken = asOptionalBool(first(d, ['fakeToken', 'fake_token', 'isFakeToken', 'is_fake_token']));
+
+  const mintAuthorityDisabled = mintable !== undefined
+    ? !mintable
+    : renounced !== undefined
+      ? renounced
+      : authorityDisabled(ownerAddress);
+  const freezeAuthorityDisabled = freezeable !== undefined
+    ? !freezeable
+    : authorityDisabled(freezeAuthority);
 
   return {
     ...(honeypot !== undefined ? { honeypot } : {}),
-    ...(freezeable !== undefined ? { freezeAuthorityDisabled: !freezeable } : {}),
-    ...(mintable !== undefined ? { mintAuthorityDisabled: !mintable } : {}),
+    ...(mintAuthorityDisabled !== undefined ? { mintAuthorityDisabled } : {}),
+    ...(freezeAuthorityDisabled !== undefined ? { freezeAuthorityDisabled } : {}),
+    ...(nonTransferable !== undefined ? { nonTransferable } : {}),
+    ...(transferFeeEnable !== undefined ? { transferFeeEnable } : {}),
+    ...(isToken2022 !== undefined ? { isToken2022 } : {}),
+    ...(fakeToken !== undefined ? { fakeToken } : {}),
     top10HolderPct: asNumber(first(d, ['top10HolderPercent', 'top10HolderPct', 'top10HolderPercentage'])),
     creatorPct: asNumber(first(d, ['creatorPercentage', 'creatorPct', 'creatorPercent']))
   };
@@ -252,5 +287,8 @@ export async function enrichTokenSnapshot(apiKey, base, { includeSecurity = true
   const overview = results[0]?.status === 'fulfilled' ? results[0].value : {};
   const flow = results[1]?.status === 'fulfilled' ? results[1].value : {};
   const security = includeSecurity && results[2]?.status === 'fulfilled' ? results[2].value : {};
+  if (includeSecurity && results[2]?.status === 'rejected') {
+    console.warn(`[birdeye:security] ${base.address} ${results[2].reason?.message ?? results[2].reason ?? 'request failed'}`);
+  }
   return { ...base, ...overview, ...flow, ...security, observedAt: Date.now() };
 }
