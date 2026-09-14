@@ -227,3 +227,17 @@ globalThis.fetch = async (input, init = {}) => {
 
   return previousFetch(input, init);
 };
+
+async function pushOwnerPanelOnStartup() {
+  if (!env.telegramBotToken || !access.enabled) return;
+  const ownerId = await ownerChatId();
+  if (!ownerId) return;
+  const base = `https://api.telegram.org/bot${env.telegramBotToken}`;
+  await sendOwnerPanel(base, ownerId);
+  console.log('[telegram:owner-panel] startup panel sent');
+}
+
+const startupTimer = setTimeout(() => {
+  void pushOwnerPanelOnStartup().catch((error) => console.error('[telegram:owner-panel]', error.message));
+}, 2500);
+startupTimer.unref?.();
