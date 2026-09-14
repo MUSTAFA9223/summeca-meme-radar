@@ -1,6 +1,6 @@
 const text = (value) => String(value ?? '').toLowerCase();
 
-const securityCritical = (blocker) => /honeypot|freeze authority active|mint authority active|developer is selling|top-10 concentration|insider concentration|bundler concentration|non-transferable|transfer fee|fake token/.test(text(blocker));
+const securityCritical = (blocker) => /honeypot|freeze authority active|mint authority active|developer is selling|top-10 concentration|insider concentration|bundler concentration|non-transferable|transfer fee|fake token|token-2022 risky|permanent delegate|transfer hook|default account state|pausable|confidential/.test(text(blocker));
 
 const isDexVenue = (source) => {
   const value = text(source);
@@ -37,6 +37,10 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   // independent execution-level safeguard against tokens that cannot be sold.
   if (!(Number.isFinite(sells) && sells >= 1)) reasons.push('no verified sell observed');
 
+  // Direct Solana mint inspection is authoritative when present. If it explicitly
+  // failed, never let provider-level metadata override that failure.
+  if (snapshot.onchainSecurityVerified === false) reasons.push('on-chain mint security not verified');
+
   // Solana's current security payload does not always expose a dedicated honeypot
   // boolean. We therefore fail closed on mint/freeze authorities and Token-2022
   // restrictions, while an explicit honeypot=true is always a blocker.
@@ -47,6 +51,13 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
     if (snapshot.fakeToken === true) reasons.push('fake token flag');
     if (snapshot.nonTransferable === true) reasons.push('non-transferable token');
     if (snapshot.isToken2022 === true && snapshot.transferFeeEnable === true) reasons.push('Token-2022 transfer fee enabled');
+  }
+
+  if (snapshot.isToken2022 === true) {
+    if (snapshot.token2022ExtensionsVerified !== true) reasons.push('Token-2022 extensions not verified');
+    for (const extension of Array.isArray(snapshot.token2022UnsafeExtensions) ? snapshot.token2022UnsafeExtensions : []) {
+      reasons.push(`Token-2022 risky extension: ${extension}`);
+    }
   }
 
   if (Number.isFinite(risk) && risk > 35) reasons.push(`risk score ${risk}/100`);
