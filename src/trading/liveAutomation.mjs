@@ -34,10 +34,17 @@ const isRisingMomentum = (snapshot) => {
     || (buyerAcceleration >= 1.5 && volumeAcceleration >= 1.5 && ratio >= 1.25);
 };
 
-const isStrictSecurityVerified = (snapshot) =>
-  typeof snapshot?.honeypot === 'boolean'
-  && typeof snapshot?.mintAuthorityDisabled === 'boolean'
-  && typeof snapshot?.freezeAuthorityDisabled === 'boolean';
+const isStrictSecurityVerified = (snapshot) => {
+  if (snapshot?.mintAuthorityDisabled !== true) return false;
+  if (snapshot?.freezeAuthorityDisabled !== true) return false;
+  if (typeof snapshot?.isToken2022 !== 'boolean') return false;
+  if (snapshot?.honeypot === true || snapshot?.fakeToken === true || snapshot?.nonTransferable === true) return false;
+  if (snapshot.isToken2022 === true) {
+    if (snapshot.nonTransferable !== false) return false;
+    if (snapshot.transferFeeEnable !== false) return false;
+  }
+  return true;
+};
 
 const isMarketVerified = (snapshot) => {
   const price = finite(snapshot?.priceUsd);
