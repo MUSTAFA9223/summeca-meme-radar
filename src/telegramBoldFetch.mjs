@@ -1,8 +1,11 @@
 import { env } from './config/env.mjs';
+import { AppSettings } from './storage/appSettings.mjs';
 import { TelegramAccess } from './storage/telegramAccess.mjs';
 
 const nativeFetch = globalThis.fetch.bind(globalThis);
 const access = new TelegramAccess(env.supabaseUrl, env.supabaseSecretKey);
+const settings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
+const awaitingActivation = new Set();
 
 const escapeHtml = (value) => String(value ?? '')
   .replaceAll('&', '&amp;')
@@ -91,16 +94,20 @@ async function telegramNative(base, method, body) {
   return payload.result;
 }
 
-async function directMessage(base, chatId, text) {
-  return telegramNative(base, 'sendMessage', { chat_id: String(chatId), text });
+async function directMessage(base, chatId, text, replyMarkup) {
+  return telegramNative(base, 'sendMessage', {
+    chat_id: String(chatId),
+    text,
+    ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+  });
 }
 
-async function answerCallback(base, callbackId, text) {
+async function answerCallback(base, callbackId, text, showAlert = false) {
   if (!callbackId) return;
   await telegramNative(base, 'answerCallbackQuery', {
     callback_query_id: callbackId,
     text,
-    show_alert: true
+    show_alert: showAlert
   }).catch(() => {});
 }
 
@@ -110,6 +117,26 @@ function updateMessage(update) {
 
 function updateChatId(update) {
   return String(update?.message?.chat?.id ?? update?.callback_query?.message?.chat?.id ?? '');
+}
+
+function activationButtonMarkup() {
+  return {
+    inline_keyboard: [[{ text: '🔑 تفعيل الكود', callback_data: 'access:activate' }]]
+  };
+}
+
+function activationPromptMarkup() {
+  return {
+    inline_keyboard: [[{ text: '❌ إلغاء', callback_data: 'access:cancel' }]]
+  };
+}
+
+async function resolveOwnerChatId() {
+  let ownerChatId = await access.ownerChatId().catch(() => '');
+  if (!ownerChatId && settings.enabled) {
+    ownerChatId = await settings.get('telegram_chat_id').catch(() => '');
+  }
+  return String(ownerChatId ?? '');
 }
 
 async function processAccessUpdate(update, base, ownerChatId) {
@@ -124,8 +151,11 @@ async function processAccessUpdate(update, base, ownerChatId) {
       try {
         const created = await access.createCode(ownerChatId, codeMatch[1] || null);
         const duration = created.accessDays ? `${created.accessDays} يوم` : 'دائم';
-        await directMessage(base, ownerChatId,
-          `🔐 كود تفعيل جديد\n\n${created.code}\n\nالمدة بعد التفعيل: ${duration}\nالاستخدام: مرة واحدة فقط\n\nأرسل الكود للمستخدم، ثم يفتح البوت ويرسل:\n/activate ${created.code}`
+        await directMessage(
+          base,
+          ownerChatId,
+          `🔐 كود تفعيل جديد\n\n${created.code}\n\nالمدة بعد التفعيل: ${duration}\nالاستخدام: مرة واحدة فقط`,
+          { inline_keyboard: [[{ text: '📋 نسخ الكود', copy_text: { text: created.code } }]] }
         );
       } catch (error) {
         await directMessage(base, ownerChatId, `تعذر إنشاء كود التفعيل: ${error.message}`);
@@ -158,9 +188,39 @@ async function processAccessUpdate(update, base, ownerChatId) {
   const callback = update?.callback_query;
   if (callback) {
     const subscriber = await access.subscriber(chatId).catch(() => null);
-    await answerCallback(base, callback.id, subscriber?.authorized
-      ? 'حسابك مفعل لاستقبال إشارات SUMMECA. أدوات التداول والإدارة خاصة بالمالك.'
-      : 'هذا البوت خاص. فعّل حسابك أولًا بكود صالح.'
+    const data = String(callback?.data ?? '');
+
+    if (data === 'access:activate') {
+      if (subscriber?.authorized) {
+        await answerCallback(base, callback.id, 'حسابك مفعل بالفعل ✅');
+        await directMessage(base, chatId, '✅ حسابك مفعل بالفعل وتستقبل إشارات SUMMECA تلقائيًا.');
+      } else {
+        awaitingActivation.add(chatId);
+        await answerCallback(base, callback.id, 'أرسل كود التفعيل الآن');
+        await directMessage(
+          base,
+          chatId,
+          '🔑 تفعيل SUMMECA\n\nأرسل كود التفعيل الذي حصلت عليه من المالك الآن.\nمثال: SMC-ABCD-2345',
+          activationPromptMarkup()
+        );
+      }
+      return { keep: false };
+    }
+
+    if (data === 'access:cancel') {
+      awaitingActivation.delete(chatId);
+      await answerCallback(base, callback.id, 'تم الإلغاء');
+      await directMessage(base, chatId, 'تم إلغاء إدخال الكود. يمكنك الضغط على «🔑 تفعيل الكود» متى أردت.', activationButtonMarkup());
+      return { keep: false };
+    }
+
+    await answerCallback(
+      base,
+      callback.id,
+      subscriber?.authorized
+        ? 'حسابك مفعل لاستقبال إشارات SUMMECA. أدوات التداول والإدارة خاصة بالمالك.'
+        : 'هذا البوت خاص. فعّل حسابك أولًا بكود صالح.',
+      true
     );
     return { keep: false };
   }
@@ -169,6 +229,7 @@ async function processAccessUpdate(update, base, ownerChatId) {
   if (!message || message?.chat?.type !== 'private') return { keep: false };
   const text = String(message?.text ?? '').trim();
   const subscriber = await access.subscriber(chatId).catch(() => null);
+  const waitingForCode = awaitingActivation.has(chatId);
 
   const activateMatch = text.match(/^\/(?:activate|تفعيل)(?:@\w+)?\s+(\S+)\s*$/i)
     || text.match(/^\/start(?:@\w+)?\s+(SMC-[A-Z0-9]{4}-[A-Z0-9]{4})\s*$/i)
@@ -178,10 +239,13 @@ async function processAccessUpdate(update, base, ownerChatId) {
     try {
       const result = await access.activate(activateMatch[1], message);
       if (result?.ok) {
+        awaitingActivation.delete(chatId);
         const expiry = result.permanent || !result.access_expires_at
           ? 'دائم'
           : new Date(result.access_expires_at).toISOString().slice(0, 10);
-        await directMessage(base, chatId,
+        await directMessage(
+          base,
+          chatId,
           `✅ تم تفعيل SUMMECA Meme Radar بنجاح.\n\nستصلك إشارات العملات والتنبيهات تلقائيًا.\nصلاحية الوصول: ${expiry}\n\nأدوات الإدارة والتداول الحساسة تبقى خاصة بالمالك.`
         );
       } else {
@@ -191,11 +255,23 @@ async function processAccessUpdate(update, base, ownerChatId) {
           expired_code: 'انتهت صلاحية الكود.',
           used: 'هذا الكود استُخدم مسبقًا.'
         }[result?.reason] || 'تعذر تفعيل الكود.';
-        await directMessage(base, chatId, `❌ ${reason}`);
+        awaitingActivation.add(chatId);
+        await directMessage(base, chatId, `❌ ${reason}\n\nأرسل كودًا آخر أو اضغط إلغاء.`, activationPromptMarkup());
       }
     } catch (error) {
-      await directMessage(base, chatId, `❌ تعذر التفعيل الآن: ${error.message}`);
+      awaitingActivation.add(chatId);
+      await directMessage(base, chatId, `❌ تعذر التفعيل الآن: ${error.message}\n\nحاول مرة أخرى أو اضغط إلغاء.`, activationPromptMarkup());
     }
+    return { keep: false };
+  }
+
+  if (waitingForCode) {
+    await directMessage(
+      base,
+      chatId,
+      '❌ صيغة الكود غير صحيحة.\n\nأرسل الكود بالشكل التالي: SMC-XXXX-XXXX',
+      activationPromptMarkup()
+    );
     return { keep: false };
   }
 
@@ -205,8 +281,11 @@ async function processAccessUpdate(update, base, ownerChatId) {
         '✅ حسابك مفعل في SUMMECA Meme Radar.\n\nستصلك الإشارات والتنبيهات تلقائيًا. أدوات الإدارة والتداول الحساسة خاصة بالمالك.'
       );
     } else {
-      await directMessage(base, chatId,
-        '🔒 SUMMECA Meme Radar خاص.\n\nللدخول تحتاج كود تفعيل من المالك. بعد استلامه أرسله هكذا:\n/activate SMC-XXXX-XXXX'
+      await directMessage(
+        base,
+        chatId,
+        '🔒 SUMMECA Meme Radar خاص.\n\nللدخول تحتاج كود تفعيل من المالك. اضغط الزر أدناه ثم أرسل الكود.',
+        activationButtonMarkup()
       );
     }
     return { keep: false };
@@ -217,8 +296,11 @@ async function processAccessUpdate(update, base, ownerChatId) {
       '✅ حسابك مفعل لاستقبال إشارات SUMMECA تلقائيًا.\n\nأدوات التحكم والتداول الحساسة خاصة بالمالك.'
     );
   } else {
-    await directMessage(base, chatId,
-      '🔒 البوت خاص. اطلب كود تفعيل من المالك ثم استخدم /activate متبوعًا بالكود.'
+    await directMessage(
+      base,
+      chatId,
+      '🔒 البوت خاص. تحتاج كود تفعيل من المالك.',
+      activationButtonMarkup()
     );
   }
   return { keep: false };
@@ -234,7 +316,7 @@ async function filterTelegramUpdates(response, base) {
   }
   if (!payload?.ok || !Array.isArray(payload.result)) return response;
 
-  const ownerChatId = await access.ownerChatId().catch(() => '');
+  const ownerChatId = await resolveOwnerChatId();
   if (!ownerChatId) return response;
 
   const original = payload.result;
@@ -309,7 +391,7 @@ globalThis.fetch = async (input, init = {}) => {
   const response = await nativeFetch(input, transformed);
   if (!response.ok || !payload?.chat_id || !isBroadcastAlert(payload)) return response;
 
-  const ownerChatId = await access.ownerChatId().catch(() => '');
+  const ownerChatId = await resolveOwnerChatId();
   if (ownerChatId && String(payload.chat_id) === String(ownerChatId)) {
     await broadcastAlert(base, method, payload, ownerChatId).catch((error) => console.error('[telegram:broadcast]', error.message));
   }
