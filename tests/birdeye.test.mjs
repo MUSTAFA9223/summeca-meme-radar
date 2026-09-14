@@ -28,3 +28,34 @@ test('normalizeSecurity only sets known booleans and concentration', () => {
   assert.equal(s.honeypot, false);
   assert.equal(s.top10HolderPct, 21.5);
 });
+
+test('normalizeSecurity understands current Solana authority and Token-2022 fields', () => {
+  const s = normalizeSecurity({
+    data: {
+      ownerAddress: null,
+      renounced: true,
+      freezeAuthority: null,
+      isToken2022: true,
+      nonTransferable: false,
+      transferFeeEnable: false,
+      fakeToken: false
+    }
+  });
+  assert.equal(s.mintAuthorityDisabled, true);
+  assert.equal(s.freezeAuthorityDisabled, true);
+  assert.equal(s.isToken2022, true);
+  assert.equal(s.nonTransferable, false);
+  assert.equal(s.transferFeeEnable, false);
+  assert.equal(s.fakeToken, false);
+});
+
+test('normalizeSecurity treats a live authority as not disabled', () => {
+  const s = normalizeSecurity({
+    data: {
+      ownerAddress: 'Auth111111111111111111111111111111111111',
+      freezeAuthority: 'Freeze1111111111111111111111111111111111'
+    }
+  });
+  assert.equal(s.mintAuthorityDisabled, false);
+  assert.equal(s.freezeAuthorityDisabled, false);
+});
