@@ -79,3 +79,26 @@ test('confirmed honeypot remains blocked even with strong momentum', () => {
   assert.equal(safety.trackingAllowed, false);
   assert.equal(entryQuality(snapshot).key, 'blocked');
 });
+
+test('WOFI-style vertical no-sell launch is excluded from momentum alerts', () => {
+  const snapshot = {
+    ...safeBase,
+    symbol: 'WOFI',
+    listedAt: Date.now() - 7 * 60 * 1000,
+    priceUsd: 0.01283,
+    liquidityUsd: 304311.69,
+    marketCapUsd: 12835431,
+    volume5mUsd: 143968.48,
+    buys30s: 38.445,
+    sells30s: 0,
+    priceChange5mPct: 29705,
+    priceChange1hPct: 29705,
+    honeypot: undefined
+  };
+  const safety = persistedSafety(snapshot);
+  assert.equal(safety.status, 'ignored');
+  assert.equal(safety.trackingAllowed, false);
+  assert.equal(isRisingMomentum(snapshot), false);
+  assert.equal(momentumScore(snapshot), 0);
+  assert.equal(entryQuality(snapshot).key, 'ignored');
+});
