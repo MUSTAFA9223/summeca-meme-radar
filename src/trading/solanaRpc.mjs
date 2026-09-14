@@ -1,9 +1,13 @@
 export const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 export const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
+const PUBLICNODE_SOLANA_RPC = 'https://solana-rpc.publicnode.com';
 const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 const SAFE_MINT_CACHE_MS = 10 * 60 * 1000;
 const UNSAFE_MINT_CACHE_MS = 20 * 1000;
+const PUBLIC_SECURITY_MIN_INTERVAL_MS = 300;
+const HELIUS_SECURITY_BACKOFF_MS = 60_000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const extensionKey = (value) => String(value ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase();
 
@@ -78,6 +82,9 @@ export class SolanaRpcClient {
       ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(this.apiKey)}`
       : PUBLIC_SOLANA_RPC;
     this.mintSecurityCache = new Map();
+    this.publicSecurityTail = Promise.resolve();
+    this.publicSecurityNextAt = 0;
+    this.heliusSecurityRateLimitedUntil = 0;
   }
 
   async #rpcAt(endpoint, method, params = []) {
@@ -96,6 +103,27 @@ export class SolanaRpcClient {
     return this.#rpcAt(this.endpoint, method, params);
   }
 
+  #queuedPublicSecurity(endpoint, method, params) {
+    const task = this.publicSecurityTail.then(async () => {
+      const waitMs = Math.max(0, this.publicSecurityNextAt - Date.now());
+      if (waitMs) await sleep(waitMs);
+      this.publicSecurityNextAt = Date.now() + PUBLIC_SECURITY_MIN_INTERVAL_MS;
+      return this.#rpcAt(endpoint, method, params);
+    });
+    this.publicSecurityTail = task.catch(() => undefined);
+    return task;
+  }
+
+  async #readOnlySecurityRpc(method, params) {
+    try {
+      return await this.#queuedPublicSecurity(PUBLICNODE_SOLANA_RPC, method, params);
+    } catch (error) {
+      const transient = /HTTP 429|HTTP 5\d\d|fetch failed|timeout/i.test(String(error?.message ?? error));
+      if (!transient) throw error;
+      return this.#queuedPublicSecurity(PUBLIC_SOLANA_RPC, method, params);
+    }
+  }
+
   async getMintSecurity(mint) {
     const key = String(mint ?? '').trim();
     const cached = this.mintSecurityCache.get(key);
@@ -103,14 +131,20 @@ export class SolanaRpcClient {
 
     const params = [key, { encoding: 'jsonParsed', commitment: 'confirmed' }];
     let result;
-    try {
-      result = await this.rpc('getAccountInfo', params);
-    } catch (error) {
-      const isHeliusRateLimit = Boolean(this.apiKey) && /getAccountInfo HTTP 429/i.test(String(error?.message ?? error));
-      if (!isHeliusRateLimit) throw error;
-      console.warn(`[solana:rpc-fallback] Helius rate limited mint=${key.slice(0, 8)}…; using public Solana RPC for read-only mint security`);
-      result = await this.#rpcAt(PUBLIC_SOLANA_RPC, 'getAccountInfo', params);
+
+    if (this.apiKey && Date.now() >= this.heliusSecurityRateLimitedUntil) {
+      try {
+        result = await this.rpc('getAccountInfo', params);
+      } catch (error) {
+        const message = String(error?.message ?? error);
+        const isHeliusRateLimit = /getAccountInfo HTTP 429/i.test(message);
+        if (!isHeliusRateLimit) throw error;
+        this.heliusSecurityRateLimitedUntil = Date.now() + HELIUS_SECURITY_BACKOFF_MS;
+        console.warn(`[solana:rpc-fallback] Helius rate limited mint=${key.slice(0, 8)}…; using throttled read-only RPC fallback`);
+      }
     }
+
+    if (!result) result = await this.#readOnlySecurityRpc('getAccountInfo', params);
 
     const parsed = parseMintSecurityAccount(result);
     const ttlMs = parsed.onchainSecurityVerified ? SAFE_MINT_CACHE_MS : UNSAFE_MINT_CACHE_MS;
