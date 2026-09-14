@@ -119,8 +119,13 @@ async function createActivationCode(base, ownerId, days) {
   const duration = created.accessDays ? `${created.accessDays} يوم` : 'دائم';
   return telegramCall(base, 'sendMessage', {
     chat_id: ownerId,
-    text: `🔐 كود تفعيل جديد\n\n${created.code}\n\nالمدة بعد التفعيل: ${duration}\nالاستخدام: مرة واحدة فقط\n\nأرسل الكود للمستخدم، ثم يفتح البوت ويرسل:\n/activate ${created.code}`,
-    reply_markup: adminKeyboard()
+    text: `🔐 كود تفعيل جديد\n\n${created.code}\n\nالمدة بعد التفعيل: ${duration}\nالاستخدام: مرة واحدة فقط\n\nاضغط «📋 نسخ الكود» وأرسله للمستخدم.`,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📋 نسخ الكود', copy_text: { text: created.code } }],
+        ...adminKeyboard().inline_keyboard
+      ]
+    }
   });
 }
 
