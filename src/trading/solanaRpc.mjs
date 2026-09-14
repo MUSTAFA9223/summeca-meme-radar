@@ -1,3 +1,72 @@
+export const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+export const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+
+const extensionKey = (value) => String(value ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+
+const extensionName = (extension) => {
+  if (typeof extension === 'string') return extension;
+  return extension?.extension ?? extension?.type ?? extension?.name ?? '';
+};
+
+const dangerousToken2022Extension = (name) => {
+  const key = extensionKey(name);
+  return [
+    'transferfeeconfig',
+    'nontransferable',
+    'permanentdelegate',
+    'transferhook',
+    'defaultaccountstate',
+    'pausable',
+    'confidentialtransfermint',
+    'confidentialtransferfeeconfig'
+  ].includes(key);
+};
+
+export function parseMintSecurityAccount(result) {
+  const account = result?.value ?? result ?? null;
+  if (!account) throw new Error('mint account not found');
+  const owner = String(account.owner ?? '');
+  if (![TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID].includes(owner)) {
+    throw new Error(`mint account is not owned by a supported token program: ${owner || 'unknown'}`);
+  }
+
+  const parsed = account?.data?.parsed;
+  if (!parsed || String(parsed.type ?? '').toLowerCase() !== 'mint') {
+    throw new Error('mint account did not parse as a token mint');
+  }
+  const info = parsed.info ?? {};
+  if (!Object.prototype.hasOwnProperty.call(info, 'mintAuthority')) throw new Error('mint authority missing from parsed mint');
+  if (!Object.prototype.hasOwnProperty.call(info, 'freezeAuthority')) throw new Error('freeze authority missing from parsed mint');
+
+  const isToken2022 = owner === TOKEN_2022_PROGRAM_ID || String(parsed.program ?? '').toLowerCase().includes('2022');
+  const rawExtensions = Array.isArray(info.extensions)
+    ? info.extensions
+    : Array.isArray(parsed.extensions)
+      ? parsed.extensions
+      : null;
+  const extensionNames = Array.isArray(rawExtensions)
+    ? rawExtensions.map(extensionName).filter(Boolean)
+    : [];
+  const unsafeExtensions = extensionNames.filter(dangerousToken2022Extension);
+  const extensionsVerified = !isToken2022 || Array.isArray(rawExtensions);
+
+  return {
+    mintAuthorityDisabled: info.mintAuthority === null,
+    freezeAuthorityDisabled: info.freezeAuthority === null,
+    isToken2022,
+    token2022ExtensionsVerified: extensionsVerified,
+    token2022Extensions: extensionNames,
+    token2022UnsafeExtensions: unsafeExtensions,
+    nonTransferable: isToken2022 ? extensionNames.some((name) => extensionKey(name) === 'nontransferable') : false,
+    transferFeeEnable: isToken2022 ? extensionNames.some((name) => extensionKey(name) === 'transferfeeconfig') : false,
+    onchainSecurityVerified: info.mintAuthority === null
+      && info.freezeAuthority === null
+      && extensionsVerified
+      && unsafeExtensions.length === 0,
+    securitySource: 'solana-rpc'
+  };
+}
+
 export class SolanaRpcClient {
   constructor({ heliusApiKey }) {
     this.apiKey = String(heliusApiKey ?? '').trim();
@@ -16,6 +85,11 @@ export class SolanaRpcClient {
     if (!response.ok) throw new Error(`Solana RPC ${method} HTTP ${response.status}`);
     if (payload?.error) throw new Error(`Solana RPC ${method}: ${payload.error.message ?? JSON.stringify(payload.error)}`);
     return payload?.result;
+  }
+
+  async getMintSecurity(mint) {
+    const result = await this.rpc('getAccountInfo', [mint, { encoding: 'jsonParsed', commitment: 'confirmed' }]);
+    return parseMintSecurityAccount(result);
   }
 
   async getSolBalanceLamports(address) {
