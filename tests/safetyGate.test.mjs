@@ -33,6 +33,11 @@ test('allows verified active Pump.fun bonding-curve signal', () => {
   assert.equal(result.emergency, false);
 });
 
+test('allows missing dedicated honeypot field when authorities are proven safe and a sell is observed', () => {
+  const result = evaluateSignalSafety({ ...safeSnapshot, honeypot: undefined }, safeScores);
+  assert.equal(result.ok, true);
+});
+
 test('blocks a signal with no valid price', () => {
   const result = evaluateSignalSafety({ ...safeSnapshot, priceUsd: 0 }, safeScores);
   assert.equal(result.ok, false);
@@ -45,7 +50,7 @@ test('blocks automatic entry until a real sell has been observed', () => {
   assert.ok(result.reasons.includes('no verified sell observed'));
 });
 
-test('fails closed when authority and honeypot checks are not explicit', () => {
+test('fails closed when mint/freeze authority checks are not explicit', () => {
   const result = evaluateSignalSafety({
     ...safeSnapshot,
     honeypot: undefined,
@@ -53,9 +58,34 @@ test('fails closed when authority and honeypot checks are not explicit', () => {
     freezeAuthorityDisabled: undefined
   }, safeScores);
   assert.equal(result.ok, false);
-  assert.ok(result.reasons.includes('honeypot status not explicitly safe'));
   assert.ok(result.reasons.includes('mint authority not verified disabled'));
   assert.ok(result.reasons.includes('freeze authority not verified disabled'));
+});
+
+test('blocks non-transferable Token-2022 assets', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    honeypot: undefined,
+    isToken2022: true,
+    nonTransferable: true,
+    transferFeeEnable: false
+  }, safeScores);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.includes('non-transferable token'));
+  assert.equal(result.emergency, true);
+});
+
+test('blocks Token-2022 transfer fee assets from automatic entry', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    honeypot: undefined,
+    isToken2022: true,
+    nonTransferable: false,
+    transferFeeEnable: true
+  }, safeScores);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.includes('Token-2022 transfer fee enabled'));
+  assert.equal(result.emergency, true);
 });
 
 test('blocks dangerous known holder concentration', () => {
