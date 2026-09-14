@@ -28,6 +28,7 @@ export class SupabaseStore {
       method,
       headers: {
         apikey: this.secretKey,
+        Authorization: `Bearer ${this.secretKey}`,
         accept: 'application/json',
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
         ...(prefer ? { Prefer: prefer } : {}),
@@ -112,6 +113,14 @@ export class SupabaseStore {
         raw: {
           source: snapshot.source ?? null,
           imageUrl: snapshot.imageUrl ?? null,
+          listedAt: snapshot.listedAt ?? null,
+          volume5mUsd: finite(snapshot.volume5mUsd),
+          priceChange5mPct: finite(snapshot.priceChange5mPct),
+          priceChange1hPct: finite(snapshot.priceChange1hPct),
+          marketDataVerified: snapshot.marketDataVerified === true,
+          securityVerified: snapshot.securityVerified === true,
+          dexPairAddress: snapshot.dexPairAddress ?? null,
+          directCreate: snapshot.directCreate === true,
           blockers: scores?.blockers ?? []
         }
       }
@@ -282,15 +291,48 @@ export class SupabaseStore {
 
   async listRecentSignals(limit = 5) {
     if (!this.enabled) return [];
-    const safeLimit = Math.max(1, Math.min(10, Number(limit) || 5));
-    const rows = await this.#request(`signals?select=created_at,signal_type,entry_score,moon_score,risk_score,tokens(symbol,address)&order=created_at.desc&limit=${safeLimit}`);
+    const safeLimit = Math.max(1, Math.min(20, Number(limit) || 5));
+    const rows = await this.#request(`signals?select=created_at,signal_type,entry_score,moon_score,risk_score,tokens(symbol,address,name)&order=created_at.desc&limit=${safeLimit}`);
     return Array.isArray(rows) ? rows : [];
   }
 
   async listRecentPaperTrades(limit = 5) {
     if (!this.enabled) return [];
-    const safeLimit = Math.max(1, Math.min(10, Number(limit) || 5));
-    const rows = await this.#request(`paper_trades?select=status,opened_at,closed_at,pnl_pct,entry_price_usd,exit_price_usd,tokens(symbol,address)&order=opened_at.desc&limit=${safeLimit}`);
+    const safeLimit = Math.max(1, Math.min(20, Number(limit) || 5));
+    const rows = await this.#request(`paper_trades?select=status,opened_at,closed_at,pnl_pct,peak_pnl_pct,entry_price_usd,exit_price_usd,size_usd,metadata,tokens(symbol,address,name)&order=opened_at.desc&limit=${safeLimit}`);
     return Array.isArray(rows) ? rows : [];
+  }
+
+  async listTrendingSnapshots({ minutes = 5, limit = 150 } = {}) {
+    if (!this.enabled) return [];
+    const safeMinutes = Math.max(1, Math.min(60, Number(minutes) || 5));
+    const safeLimit = Math.max(20, Math.min(300, Number(limit) || 150));
+    const since = new Date(Date.now() - safeMinutes * 60_000).toISOString();
+    const select = 'id,token_id,observed_at,price_usd,liquidity_usd,market_cap_usd,buys_30s,sells_30s,buy_volume_30s_usd,sell_volume_30s_usd,unique_buyers_30s,buyer_acceleration,volume_acceleration,top10_holder_pct,creator_pct,honeypot,mint_authority_disabled,freeze_authority_disabled,entry_score,moon_score,risk_score,raw,tokens(address,symbol,name,source,listed_at)';
+    const rows = await this.#request(`snapshots?select=${select}&observed_at=gte.${encodeURIComponent(since)}&order=observed_at.desc&limit=${safeLimit}`);
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  async latestSnapshotForAddress(address) {
+    if (!this.enabled || !address) return null;
+    const tokens = await this.#request(`tokens?select=id,address,symbol,name,source,listed_at&address=eq.${encodeURIComponent(address)}&limit=1`);
+    const token = Array.isArray(tokens) ? tokens[0] : null;
+    if (!token?.id) return null;
+    const select = 'id,token_id,observed_at,price_usd,liquidity_usd,market_cap_usd,buys_30s,sells_30s,buy_volume_30s_usd,sell_volume_30s_usd,unique_buyers_30s,buyer_acceleration,volume_acceleration,top10_holder_pct,creator_pct,honeypot,mint_authority_disabled,freeze_authority_disabled,entry_score,moon_score,risk_score,raw';
+    const rows = await this.#request(`snapshots?select=${select}&token_id=eq.${encodeURIComponent(token.id)}&order=observed_at.desc&limit=1`);
+    const row = Array.isArray(rows) ? rows[0] : null;
+    return row ? { ...row, tokens: token } : null;
+  }
+
+  async listOpenLiveTrades(walletAddress, limit = 5) {
+    if (!this.enabled || !walletAddress) return [];
+    const safeLimit = Math.max(1, Math.min(20, Number(limit) || 5));
+    try {
+      const rows = await this.#request(`live_trades?select=status,opened_at,entry_price_usd,input_sol,high_water_pnl_pct,highest_price_usd,metadata,tokens(symbol,address,name)&wallet_address=eq.${encodeURIComponent(walletAddress)}&status=in.(open,closing)&order=opened_at.desc&limit=${safeLimit}`);
+      return Array.isArray(rows) ? rows : [];
+    } catch (error) {
+      if (/404|relation .*live_trades/i.test(String(error?.message ?? ''))) return [];
+      throw error;
+    }
   }
 }
