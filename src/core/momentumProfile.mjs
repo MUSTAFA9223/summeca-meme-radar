@@ -26,6 +26,8 @@ export function normalizeMomentumSnapshot(snapshot = {}) {
   const riskScore = finite(snapshot.riskScore ?? snapshot.risk_score, 100);
   const top10HolderPct = finite(snapshot.top10HolderPct ?? snapshot.top10_holder_pct);
   const creatorPct = finite(snapshot.creatorPct ?? snapshot.creator_pct);
+  const insiderPct = finite(snapshot.insiderPct ?? snapshot.insider_pct);
+  const bundlerPct = finite(snapshot.bundlerPct ?? snapshot.bundler_pct);
   const listedAtRaw = snapshot.listedAt ?? token.listed_at ?? raw.listedAt;
   const listedAt = typeof listedAtRaw === 'number' ? listedAtRaw : Date.parse(listedAtRaw ?? '') || 0;
   const ageSec = listedAt > 0 ? Math.max(0, (Date.now() - listedAt) / 1000) : null;
@@ -59,6 +61,8 @@ export function normalizeMomentumSnapshot(snapshot = {}) {
     riskScore,
     top10HolderPct,
     creatorPct,
+    insiderPct,
+    bundlerPct,
     honeypot,
     mintAuthorityDisabled,
     freezeAuthorityDisabled,
@@ -68,8 +72,27 @@ export function normalizeMomentumSnapshot(snapshot = {}) {
   };
 }
 
-export function isRisingMomentum(snapshot = {}) {
+const ignoredLaunchPattern = (snapshot = {}) => {
   const s = normalizeMomentumSnapshot(snapshot);
+  const fresh = s.ageSec != null && s.ageSec <= 15 * 60;
+  const peakChange = Math.max(s.priceChange5mPct, s.priceChange1hPct);
+  const oneWayFlow = s.buys30s >= 8 && s.sells30s < 1;
+  const oversized = s.marketCapUsd >= 1_000_000;
+  const stretchedValuation = s.liquidityUsd > 0 && s.marketCapUsd / s.liquidityUsd >= 25;
+  const knownConcentration = s.top10HolderPct > 40 || s.insiderPct > 10 || s.bundlerPct > 12 || s.creatorPct > 8;
+  const freshVerticalNoSell = fresh && oneWayFlow && oversized && peakChange >= 1000;
+  const freshStretchedNoSell = fresh && oneWayFlow && oversized && stretchedValuation && peakChange >= 300;
+  const reasons = [];
+  if (knownConcentration) reasons.push('concentrated insider/holder launch');
+  if (freshVerticalNoSell) reasons.push(`fresh vertical spike ${peakChange.toFixed(0)}% with no verified sell`);
+  if (freshStretchedNoSell) reasons.push('fresh stretched valuation with one-way buy flow');
+  return { ignored: reasons.length > 0, reasons, normalized: s };
+};
+
+export function isRisingMomentum(snapshot = {}) {
+  const ignored = ignoredLaunchPattern(snapshot);
+  if (ignored.ignored) return false;
+  const s = ignored.normalized;
   const ratio = s.buys30s / Math.max(1, s.sells30s);
   return s.priceChange5mPct >= 5
     || (ratio >= 1.8 && s.buys30s >= 4 && (s.volume5mUsd >= 1000 || s.buyVolume30sUsd >= 250))
@@ -78,7 +101,8 @@ export function isRisingMomentum(snapshot = {}) {
 }
 
 export function persistedSafety(snapshot = {}) {
-  const s = normalizeMomentumSnapshot(snapshot);
+  const ignored = ignoredLaunchPattern(snapshot);
+  const s = ignored.normalized;
   const pendingReasons = [];
   const dangerReasons = [];
   const trades = s.buys30s + s.sells30s;
@@ -98,31 +122,40 @@ export function persistedSafety(snapshot = {}) {
   if (s.sells30s < 1) pendingReasons.push('no verified sell observed');
   if (s.riskScore > 35) pendingReasons.push(`risk ${Math.round(s.riskScore)}/100`);
   if (s.top10HolderPct > 40) dangerReasons.push('top-10 concentration');
+  if (s.insiderPct > 10) dangerReasons.push('insider concentration');
+  if (s.bundlerPct > 12) dangerReasons.push('bundler concentration');
   if (s.creatorPct > 8) dangerReasons.push('creator concentration');
 
   const uniqueDangerReasons = [...new Set(dangerReasons)];
   const uniquePendingReasons = [...new Set(pendingReasons)].filter((reason) => !uniqueDangerReasons.includes(reason));
-  const status = uniqueDangerReasons.length > 0
-    ? 'dangerous'
-    : uniquePendingReasons.length > 0
-      ? 'unknown'
-      : 'safe';
-  const reasons = [...uniqueDangerReasons, ...uniquePendingReasons];
+  const status = ignored.ignored
+    ? 'ignored'
+    : uniqueDangerReasons.length > 0
+      ? 'dangerous'
+      : uniquePendingReasons.length > 0
+        ? 'unknown'
+        : 'safe';
+  const reasons = ignored.ignored
+    ? [...ignored.reasons, ...uniqueDangerReasons, ...uniquePendingReasons]
+    : [...uniqueDangerReasons, ...uniquePendingReasons];
 
   return {
     ok: status === 'safe',
     entryAllowed: status === 'safe',
-    trackingAllowed: status !== 'dangerous',
+    trackingAllowed: status !== 'dangerous' && status !== 'ignored',
     status,
     reasons,
     pendingReasons: uniquePendingReasons,
     dangerReasons: uniqueDangerReasons,
+    ignoredReasons: ignored.reasons,
     normalized: s
   };
 }
 
 export function momentumScore(snapshot = {}) {
-  const s = normalizeMomentumSnapshot(snapshot);
+  const ignored = ignoredLaunchPattern(snapshot);
+  if (ignored.ignored) return 0;
+  const s = ignored.normalized;
   const ratio = s.buys30s / Math.max(1, s.sells30s);
   let score = 0;
   score += Math.max(-12, Math.min(24, s.priceChange5mPct * 0.8));
@@ -142,6 +175,9 @@ export function entryQuality(snapshot = {}) {
   const s = normalizeMomentumSnapshot(snapshot);
   const safety = persistedSafety(snapshot);
   const momentum = momentumScore(snapshot);
+  if (safety.status === 'ignored') {
+    return { key: 'ignored', ar: '🚫 نمط إطلاق مشبوه — متجاهل', en: '🚫 Suspicious launch pattern — ignored', momentum, reasons: safety.reasons };
+  }
   if (safety.status === 'dangerous') {
     return { key: 'blocked', ar: '⛔ خطر مؤكد — متابعة فقط', en: '⛔ Confirmed risk — tracking only', momentum, reasons: safety.reasons };
   }
