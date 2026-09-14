@@ -1,285 +1,238 @@
 import { env } from '../config/env.mjs';
+import { entryQuality, isRisingMomentum, momentumScore, normalizeMomentumSnapshot, persistedSafety } from '../core/momentumProfile.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 
 const POLL_MS = 7_000;
-const SIGNAL_MAX_AGE_MS = 120_000;
-const TRACK_TTL_MS = 6 * 60 * 60 * 1000;
-const WATCH_ENTRY_THRESHOLD = Math.min(Number(env.entryScoreThreshold) || 82, 70);
-const MILESTONES = [25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000, 10000];
+const ALERT_COOLDOWN_MS = 90_000;
+const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-const num = (v, fallback = 0) => Number.isFinite(Number(v)) ? Number(v) : fallback;
 const compactMoney = (value) => {
-  const n = num(value);
-  if (n <= 0) return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '—';
   if (n >= 1e9) return `${(n / 1e9).toFixed(n >= 1e10 ? 0 : 1)}B`;
   if (n >= 1e6) return `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(n >= 1e4 ? 0 : 1)}K`;
   return n.toFixed(n >= 100 ? 0 : 1);
 };
+
 const priceText = (value) => {
-  const n = num(value);
-  if (n <= 0) return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '—';
   return n >= 0.01 ? n.toLocaleString('en-US', { maximumFractionDigits: 8 }) : n.toExponential(6);
 };
 
-function rising(snapshot) {
-  const buys = num(snapshot.buys_30s);
-  const sells = num(snapshot.sells_30s);
-  const ratio = buys / Math.max(1, sells);
-  const buyVolume30s = num(snapshot.buy_volume_30s_usd);
-  const price5 = num(snapshot.raw?.priceChange5mPct);
-  const volume5 = num(snapshot.raw?.volume5mUsd);
-  const buyerAcceleration = num(snapshot.buyer_acceleration);
-  const volumeAcceleration = num(snapshot.volume_acceleration);
-
-  // The watch-pool persists estimated 30-second flow even when the upstream
-  // 5-minute aggregate is unavailable. Use that real persisted flow instead
-  // of silently requiring a raw field that may not exist in snapshots.
-  return price5 >= 5
-    || (ratio >= 1.8 && buys >= 4 && (volume5 >= 1_000 || buyVolume30s >= 250))
-    || (ratio >= 3 && buys >= 6)
-    || (buyerAcceleration >= 1.5 && volumeAcceleration >= 1.5 && ratio >= 1.25);
-}
-
-function strictSafety(snapshot) {
-  const reasons = [];
-  if (snapshot.honeypot !== false) reasons.push('honeypot not explicitly safe');
-  if (snapshot.mint_authority_disabled !== true) reasons.push('mint authority not verified disabled');
-  if (snapshot.freeze_authority_disabled !== true) reasons.push('freeze authority not verified disabled');
-  if (num(snapshot.sells_30s) < 1) reasons.push('no verified sell observed');
-  if (num(snapshot.risk_score, 100) > 35) reasons.push(`risk ${num(snapshot.risk_score)}/100`);
-  if (num(snapshot.top10_holder_pct) > 40) reasons.push('top-10 concentration');
-  if (num(snapshot.creator_pct) > 8) reasons.push('creator concentration');
-  return { ok: reasons.length === 0, reasons };
-}
-
-function publicLinksKeyboard(mint, approved = false) {
-  const dex = `https://dexscreener.com/solana/${encodeURIComponent(mint)}`;
-  const phantomToken = `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}`;
-  const fomo = `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}`;
-  const caip19 = `solana:101/address:${mint}`;
-  const phantomBuy = `https://phantom.app/ul/v1/swap?buy=${encodeURIComponent(caip19)}&sell=`;
-  const rows = [];
-  if (approved) {
-    rows.push([
-      { text: '🟢 شراء سريع', url: phantomBuy },
+const watchKeyboard = (mint) => ({
+  inline_keyboard: [
+    [
+      { text: '📊 DEX', url: `https://dexscreener.com/solana/${encodeURIComponent(mint)}` },
+      { text: '🔥 FOMO', url: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` },
+      { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` }
+    ],
+    [
+      { text: '🧪 شراء Paper', callback_data: `paper:menu:${mint}` },
+      { text: '⚡ تداول حقيقي', callback_data: `live:menu:${mint}` }
+    ],
+    [
+      { text: '🗑️ إلغاء المتابعة', callback_data: `watch:remove:${mint}` },
       { text: '📋 العقد', copy_text: { text: mint } }
-    ]);
-  } else {
-    rows.push([{ text: '📋 العقد', copy_text: { text: mint } }]);
-  }
-  rows.push([
-    { text: '📊 DEX', url: dex },
-    { text: '🔥 FOMO', url: fomo },
-    { text: '👻 Phantom', url: phantomToken }
-  ]);
-  return { inline_keyboard: rows };
-}
+    ]
+  ]
+});
 
-class MomentumAlertStore {
+class WatchStore {
   constructor(url, key) {
-    this.url = String(url || '').replace(/\/$/, '');
-    this.key = String(key || '');
+    this.url = String(url ?? '').replace(/\/$/, '');
+    this.key = String(key ?? '');
   }
+
   get enabled() { return Boolean(this.url && this.key); }
+
   async request(path) {
-    const res = await fetch(`${this.url}/rest/v1/${path}`, {
+    const response = await fetch(`${this.url}/rest/v1/${path}`, {
       headers: { apikey: this.key, Authorization: `Bearer ${this.key}`, accept: 'application/json' }
     });
-    const text = await res.text().catch(() => '');
-    if (!res.ok) throw new Error(`Supabase GET ${path} HTTP ${res.status}${text ? `: ${text.slice(0, 160)}` : ''}`);
+    const text = await response.text().catch(() => '');
+    if (!response.ok) throw new Error(`Supabase GET ${path} HTTP ${response.status}${text ? `: ${text.slice(0, 180)}` : ''}`);
     return text ? JSON.parse(text) : [];
   }
+
+  async setting(key) {
+    const rows = await this.request(`app_settings?select=value&key=eq.${encodeURIComponent(key)}&limit=1`);
+    return String(rows?.[0]?.value ?? '');
+  }
+
   async chatId() {
     if (env.telegramChatId) return String(env.telegramChatId);
-    const rows = await this.request('app_settings?select=value&key=eq.telegram_chat_id&limit=1');
-    return String(rows?.[0]?.value || '');
+    return this.setting('telegram_chat_id');
   }
+
   async language() {
-    const rows = await this.request('app_settings?select=value&key=eq.telegram_language&limit=1');
-    return String(rows?.[0]?.value || env.telegramLanguage || 'ar');
+    return (await this.setting('telegram_language')) || env.telegramLanguage || 'ar';
   }
-  async recentSnapshots() {
-    const since = new Date(Date.now() - SIGNAL_MAX_AGE_MS).toISOString();
-    const q = new URLSearchParams({
-      select: 'id,token_id,observed_at,price_usd,liquidity_usd,market_cap_usd,buys_30s,sells_30s,buy_volume_30s_usd,sell_volume_30s_usd,unique_buyers_30s,buyer_acceleration,volume_acceleration,top10_holder_pct,creator_pct,honeypot,mint_authority_disabled,freeze_authority_disabled,entry_score,moon_score,risk_score,raw,tokens(address,symbol,name,source)',
-      observed_at: `gte.${since}`,
-      order: 'observed_at.desc',
-      limit: '120'
-    });
-    return await this.request(`snapshots?${q}`);
+
+  async watchlist() {
+    const raw = await this.setting('watchlist_tokens');
+    if (!raw) return [];
+    try {
+      return [...new Set(JSON.parse(raw).map(String).filter((value) => SOLANA_ADDRESS.test(value)))].slice(0, 30);
+    } catch {
+      return [];
+    }
   }
-  async latestForToken(tokenId) {
-    const q = new URLSearchParams({
-      select: 'id,token_id,observed_at,price_usd,liquidity_usd,market_cap_usd,buys_30s,sells_30s,buy_volume_30s_usd,sell_volume_30s_usd,unique_buyers_30s,buyer_acceleration,volume_acceleration,top10_holder_pct,creator_pct,honeypot,mint_authority_disabled,freeze_authority_disabled,entry_score,moon_score,risk_score,raw,tokens(address,symbol,name,source)',
-      token_id: `eq.${tokenId}`,
-      order: 'observed_at.desc',
-      limit: '1'
-    });
-    const rows = await this.request(`snapshots?${q}`);
-    return rows?.[0] || null;
+
+  async latestForAddresses(addresses) {
+    if (!addresses.length) return [];
+    const tokenFilter = addresses.map((value) => `"${value}"`).join(',');
+    const tokens = await this.request(`tokens?select=id,address,symbol,name,source,listed_at&address=in.(${tokenFilter})`);
+    if (!Array.isArray(tokens) || !tokens.length) return [];
+    const ids = tokens.map((token) => token.id).filter(Boolean);
+    if (!ids.length) return [];
+    const snapshotFields = 'id,token_id,observed_at,price_usd,liquidity_usd,market_cap_usd,buys_30s,sells_30s,buy_volume_30s_usd,sell_volume_30s_usd,unique_buyers_30s,buyer_acceleration,volume_acceleration,top10_holder_pct,creator_pct,honeypot,mint_authority_disabled,freeze_authority_disabled,entry_score,moon_score,risk_score,raw';
+    const rows = await this.request(`snapshots?select=${snapshotFields}&token_id=in.(${ids.join(',')})&order=observed_at.desc&limit=${Math.min(200, ids.length * 10)}`);
+    const tokenById = new Map(tokens.map((token) => [String(token.id), token]));
+    const latest = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const key = String(row.token_id);
+      if (!latest.has(key)) latest.set(key, { ...row, tokens: tokenById.get(key) ?? {} });
+    }
+    return [...latest.values()];
   }
 }
 
-class MomentumAlertWorker {
+class WatchlistAlertWorker {
   constructor() {
-    this.store = new MomentumAlertStore(env.supabaseUrl, env.supabaseSecretKey);
+    this.store = new WatchStore(env.supabaseUrl, env.supabaseSecretKey);
     this.chatId = '';
     this.language = env.telegramLanguage || 'ar';
-    this.alerted = new Map();
+    this.state = new Map();
     this.running = false;
     this.timer = null;
   }
 
   async init() {
     if (!this.store.enabled || !env.telegramBotToken) {
-      console.log('[momentum-alerts] disabled: Supabase or Telegram not configured');
+      console.log('[watchlist-alerts] disabled: Supabase or Telegram not configured');
       return false;
     }
     this.chatId = await this.store.chatId();
     this.language = await this.store.language();
     if (!this.chatId) {
-      console.log('[momentum-alerts] disabled: Telegram chat not linked');
+      console.log('[watchlist-alerts] disabled: Telegram chat not linked');
       return false;
     }
-    console.log(`[momentum-alerts] READY threshold=${WATCH_ENTRY_THRESHOLD} chat=linked language=${this.language}`);
+    console.log(`[watchlist-alerts] READY safety-gated chat=linked language=${this.language}`);
     return true;
   }
 
-  async send(textAr, textEn, extra = {}) {
-    const text = this.language === 'en' ? textEn : this.language === 'bilingual' ? `${textAr}\n\n────────────\n\n${textEn}` : textAr;
-    return telegramApi(env.telegramBotToken, 'sendMessage', { chat_id: this.chatId, text, ...extra });
+  pick(ar, en) {
+    if (this.language === 'en') return en;
+    if (this.language === 'bilingual') return `${ar}\n\n────────────\n\n${en}`;
+    return ar;
   }
 
-  async sendMomentum(snapshot) {
-    const token = snapshot.tokens || {};
-    const mint = String(token.address || '');
-    const symbol = String(token.symbol || 'TOKEN').replace(/^\$/, '');
-    const name = String(token.name || symbol);
-    const safety = strictSafety(snapshot);
-    const statusAr = safety.ok ? '✅ فحص السكام: ناجح — دخول معتمد' : '⚠️ فحص السكام: قيد التحقق — مراقبة فقط';
-    const statusEn = safety.ok ? '✅ Scam check: PASSED — entry approved' : '⚠️ Scam check: pending — WATCH ONLY';
-    const ar = [
-      '🔥 SUMMECA TRENDING — زخم قوي', '',
-      `$${symbol}  •  ${name}`, '',
-      `CA: ${mint}`, '',
-      `MC: $${compactMoney(snapshot.market_cap_usd)}  |  Vol 5m: $${compactMoney(snapshot.raw?.volume5mUsd)}`,
-      `💧 Liquidity: $${compactMoney(snapshot.liquidity_usd)}  |  💵 Price: $${priceText(snapshot.price_usd)}`,
-      `🟢 Buy 30s: ${num(snapshot.buys_30s).toFixed(1)}  |  🔴 Sell 30s: ${num(snapshot.sells_30s).toFixed(1)}  |  👥 ${num(snapshot.unique_buyers_30s).toFixed(1)}`,
-      '',
-      `🎯 Entry ${num(snapshot.entry_score).toFixed(0)}/100  |  🚀 Moon ${num(snapshot.moon_score).toFixed(0)}/100  |  🛡️ Risk ${num(snapshot.risk_score).toFixed(0)}/100`,
-      statusAr,
-      safety.ok ? '' : `سبب الانتظار: ${safety.reasons.slice(0, 3).join(' | ')}`,
-      '', '📈 بدأت متابعة الأداء من هذه الإشارة.'
-    ].filter(Boolean).join('\n');
-    const en = [
-      '🔥 SUMMECA TRENDING — STRONG MOMENTUM', '',
-      `$${symbol}  •  ${name}`, '',
-      `CA: ${mint}`, '',
-      `MC: $${compactMoney(snapshot.market_cap_usd)}  |  Vol 5m: $${compactMoney(snapshot.raw?.volume5mUsd)}`,
-      `💧 Liquidity: $${compactMoney(snapshot.liquidity_usd)}  |  💵 Price: $${priceText(snapshot.price_usd)}`,
-      `🟢 Buy 30s: ${num(snapshot.buys_30s).toFixed(1)}  |  🔴 Sell 30s: ${num(snapshot.sells_30s).toFixed(1)}  |  👥 ${num(snapshot.unique_buyers_30s).toFixed(1)}`,
-      '',
-      `🎯 Entry ${num(snapshot.entry_score).toFixed(0)}/100  |  🚀 Moon ${num(snapshot.moon_score).toFixed(0)}/100  |  🛡️ Risk ${num(snapshot.risk_score).toFixed(0)}/100`,
-      statusEn,
-      safety.ok ? '' : `Waiting on: ${safety.reasons.slice(0, 3).join(' | ')}`,
-      '', '📈 Performance tracking started from this signal.'
-    ].filter(Boolean).join('\n');
-
-    let message;
-    const image = snapshot.raw?.imageUrl;
-    const text = this.language === 'en' ? en : this.language === 'bilingual' ? `${ar}\n\n────────────\n\n${en}` : ar;
-    if (image && text.length <= 1000) {
+  async send(snapshot, textAr, textEn) {
+    const s = normalizeMomentumSnapshot(snapshot);
+    const text = this.pick(textAr, textEn);
+    const body = { chat_id: this.chatId, reply_markup: watchKeyboard(s.address) };
+    if (s.imageUrl && text.length <= 1000) {
       try {
-        message = await telegramApi(env.telegramBotToken, 'sendPhoto', {
-          chat_id: this.chatId,
-          photo: image,
-          caption: text,
-          reply_markup: publicLinksKeyboard(mint, safety.ok)
-        });
+        return await telegramApi(env.telegramBotToken, 'sendPhoto', { ...body, photo: s.imageUrl, caption: text });
       } catch (error) {
-        console.warn('[momentum-alerts:photo]', error.message);
+        console.warn('[watchlist-alerts:photo]', error.message);
       }
     }
-    if (!message) message = await this.send(ar, en, { reply_markup: publicLinksKeyboard(mint, safety.ok) });
-
-    this.alerted.set(snapshot.token_id, {
-      tokenId: snapshot.token_id,
-      mint,
-      symbol,
-      rootMessageId: Number(message.message_id),
-      referencePrice: num(snapshot.price_usd),
-      peakReturn: 0,
-      lastMilestone: 0,
-      approved: safety.ok,
-      startedAt: Date.now()
-    });
-    console.log(`[momentum-alerts] SENT mint=${mint.slice(0, 8)}… entry=${num(snapshot.entry_score).toFixed(0)} risk=${num(snapshot.risk_score).toFixed(0)} safety=${safety.ok}`);
+    return telegramApi(env.telegramBotToken, 'sendMessage', { ...body, text });
   }
 
-  async track(state) {
-    if (Date.now() - state.startedAt > TRACK_TTL_MS) {
-      this.alerted.delete(state.tokenId);
+  band(score) {
+    if (score >= 90) return 3;
+    if (score >= 80) return 2;
+    if (score >= 65) return 1;
+    return 0;
+  }
+
+  async inspect(snapshot) {
+    const s = normalizeMomentumSnapshot(snapshot);
+    if (!SOLANA_ADDRESS.test(s.address)) return;
+    const safety = persistedSafety(snapshot);
+    const rising = isRisingMomentum(snapshot);
+    const score = momentumScore(snapshot);
+    const quality = entryQuality(snapshot);
+    const now = Date.now();
+    const previous = this.state.get(s.address) ?? { band: 0, safe: false, lastAlertAt: 0, warned: false };
+    const nextBand = this.band(score);
+
+    if (!safety.ok) {
+      if (previous.safe && !previous.warned) {
+        await this.send(snapshot,
+          `🚨 تحذير متابعة — $${s.symbol}\n\nفقدت العملة اعتماد الأمان.\n${safety.reasons.slice(0, 4).join(' | ')}\nRisk: ${Math.round(s.riskScore)}/100\nCA: ${s.address}`,
+          `🚨 WATCHLIST RISK — $${s.symbol}\n\nThe token lost its safety approval.\n${safety.reasons.slice(0, 4).join(' | ')}\nRisk: ${Math.round(s.riskScore)}/100\nCA: ${s.address}`
+        );
+        previous.warned = true;
+      }
+      previous.safe = false;
+      previous.band = 0;
+      this.state.set(s.address, previous);
       return;
     }
-    const snapshot = await this.store.latestForToken(state.tokenId);
-    if (!snapshot || num(snapshot.price_usd) <= 0 || state.referencePrice <= 0) return;
 
-    const safety = strictSafety(snapshot);
-    if (!state.approved && safety.ok) {
-      state.approved = true;
-      await this.send(
-        `✅ دخول معتمد — ${state.symbol}\n\nاكتمل فحص السكام بنجاح.\nEntry ${num(snapshot.entry_score).toFixed(0)}/100 | Risk ${num(snapshot.risk_score).toFixed(0)}/100\nيمكن استخدام زر الشراء السريع الآن.`,
-        `✅ ENTRY APPROVED — ${state.symbol}\n\nStrict scam check has passed.\nEntry ${num(snapshot.entry_score).toFixed(0)}/100 | Risk ${num(snapshot.risk_score).toFixed(0)}/100\nQuick buy is now enabled.`,
-        {
-          reply_parameters: { message_id: state.rootMessageId, allow_sending_without_reply: true },
-          reply_markup: publicLinksKeyboard(state.mint, true)
-        }
-      );
-      console.log(`[momentum-alerts] APPROVED mint=${state.mint.slice(0, 8)}…`);
+    previous.warned = false;
+    const shouldAlert = rising && nextBand > 0 && (nextBand > previous.band || (!previous.safe && now - previous.lastAlertAt >= ALERT_COOLDOWN_MS));
+    if (shouldAlert) {
+      const ratio = s.buys30s / Math.max(1, s.sells30s);
+      const ar = [
+        nextBand >= 3 ? '🚀 متابعة — زخم انفجاري' : nextBand >= 2 ? '🔥 متابعة — الزخم يتسارع' : '📈 متابعة — حركة صاعدة',
+        '',
+        `$${s.symbol} • ${s.name}`,
+        `Momentum: ${score}/100 | Entry: ${Math.round(s.entryScore)}/100 | Risk: ${Math.round(s.riskScore)}/100`,
+        `${quality.ar}`,
+        `🟢 شراء 30ث: ${s.buys30s.toFixed(1)} | 🔴 بيع: ${s.sells30s.toFixed(1)} | النسبة: ${ratio.toFixed(2)}x`,
+        `Vol 5m: $${compactMoney(s.volume5mUsd)} | MC: $${compactMoney(s.marketCapUsd)}`,
+        `السعر: $${priceText(s.priceUsd)} | تغير 5د: ${s.priceChange5mPct.toFixed(1)}%`,
+        '',
+        '✅ فحص الأمان ناجح',
+        `CA: ${s.address}`
+      ].join('\n');
+      const en = [
+        nextBand >= 3 ? '🚀 WATCHLIST — EXPLOSIVE MOMENTUM' : nextBand >= 2 ? '🔥 WATCHLIST — MOMENTUM ACCELERATING' : '📈 WATCHLIST — RISING ACTIVITY',
+        '',
+        `$${s.symbol} • ${s.name}`,
+        `Momentum: ${score}/100 | Entry: ${Math.round(s.entryScore)}/100 | Risk: ${Math.round(s.riskScore)}/100`,
+        `${quality.en}`,
+        `🟢 Buys 30s: ${s.buys30s.toFixed(1)} | 🔴 Sells: ${s.sells30s.toFixed(1)} | Ratio: ${ratio.toFixed(2)}x`,
+        `Vol 5m: $${compactMoney(s.volume5mUsd)} | MC: $${compactMoney(s.marketCapUsd)}`,
+        `Price: $${priceText(s.priceUsd)} | 5m: ${s.priceChange5mPct.toFixed(1)}%`,
+        '',
+        '✅ Safety gate passed',
+        `CA: ${s.address}`
+      ].join('\n');
+      await this.send(snapshot, ar, en);
+      previous.lastAlertAt = now;
+      console.log(`[watchlist-alerts] SENT mint=${s.address.slice(0, 8)}… momentum=${score} band=${nextBand}`);
     }
 
-    const ret = (num(snapshot.price_usd) / state.referencePrice - 1) * 100;
-    if (!Number.isFinite(ret)) return;
-    state.peakReturn = Math.max(state.peakReturn, ret);
-    const milestone = [...MILESTONES].reverse().find((m) => ret >= m && m > state.lastMilestone);
-    if (!milestone) return;
-    state.lastMilestone = milestone;
-    await this.send(
-      `🚀 تحديث ${state.symbol} — تجاوز +${milestone}%\n\nالصعود من الإشارة: +${ret.toFixed(1)}%\nأعلى صعود: +${state.peakReturn.toFixed(1)}%\nالسعر: $${priceText(snapshot.price_usd)}\nEntry ${num(snapshot.entry_score).toFixed(0)}/100 | Risk ${num(snapshot.risk_score).toFixed(0)}/100`,
-      `🚀 ${state.symbol} update — crossed +${milestone}%\n\nReturn from signal: +${ret.toFixed(1)}%\nPeak: +${state.peakReturn.toFixed(1)}%\nPrice: $${priceText(snapshot.price_usd)}\nEntry ${num(snapshot.entry_score).toFixed(0)}/100 | Risk ${num(snapshot.risk_score).toFixed(0)}/100`,
-      {
-        reply_parameters: { message_id: state.rootMessageId, allow_sending_without_reply: true },
-        reply_markup: publicLinksKeyboard(state.mint, state.approved)
-      }
-    );
-    console.log(`[momentum-alerts] UPDATE mint=${state.mint.slice(0, 8)}… milestone=${milestone} return=${ret.toFixed(1)}%`);
+    previous.safe = true;
+    previous.band = Math.max(previous.band, nextBand);
+    this.state.set(s.address, previous);
   }
 
   async tick() {
     if (this.running) return;
     this.running = true;
     try {
-      for (const state of [...this.alerted.values()]) {
-        try { await this.track(state); } catch (error) { console.error('[momentum-alerts:track]', error.message); }
+      this.language = await this.store.language();
+      const watchlist = await this.store.watchlist();
+      if (!watchlist.length) {
+        if (this.state.size) this.state.clear();
+        return;
       }
-
-      const rows = await this.store.recentSnapshots();
-      const latestByToken = new Map();
-      for (const row of rows) if (!latestByToken.has(row.token_id)) latestByToken.set(row.token_id, row);
-      const eligibleBase = [...latestByToken.values()]
-        .filter((s) => !this.alerted.has(s.token_id))
-        .filter((s) => num(s.price_usd) > 0)
-        .filter((s) => num(s.entry_score) >= WATCH_ENTRY_THRESHOLD)
-        .filter((s) => num(s.risk_score, 100) <= 55);
-      const candidates = eligibleBase.filter(rising)
-        .sort((a, b) => num(b.entry_score) - num(a.entry_score));
-
-      console.log(`[momentum-alerts] scan snapshots=${latestByToken.size} eligible=${eligibleBase.length} rising=${candidates.length} tracked=${this.alerted.size}`);
-
-      for (const snapshot of candidates.slice(0, 2)) {
-        try { await this.sendMomentum(snapshot); } catch (error) { console.error('[momentum-alerts:send]', error.message); }
+      const rows = await this.store.latestForAddresses(watchlist);
+      const active = new Set(watchlist);
+      for (const key of [...this.state.keys()]) if (!active.has(key)) this.state.delete(key);
+      for (const snapshot of rows) {
+        try { await this.inspect(snapshot); } catch (error) { console.error('[watchlist-alerts:inspect]', error.message); }
       }
+      console.log(`[watchlist-alerts] scan watched=${watchlist.length} snapshots=${rows.length}`);
     } finally {
       this.running = false;
     }
@@ -288,13 +241,13 @@ class MomentumAlertWorker {
   async start() {
     if (!(await this.init())) return false;
     await this.tick();
-    this.timer = setInterval(() => this.tick().catch((error) => console.error('[momentum-alerts]', error.message)), POLL_MS);
+    this.timer = setInterval(() => this.tick().catch((error) => console.error('[watchlist-alerts]', error.message)), POLL_MS);
     return true;
   }
 }
 
 let singleton;
 export async function startMomentumAlertWorker() {
-  if (!singleton) singleton = new MomentumAlertWorker();
+  if (!singleton) singleton = new WatchlistAlertWorker();
   return singleton.start();
 }
