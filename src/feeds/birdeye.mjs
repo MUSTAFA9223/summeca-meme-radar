@@ -7,6 +7,7 @@ const MAX_RPM = Number.isFinite(rawMaxRpm) ? Math.max(1, Math.min(55, Math.floor
 const requestTimestamps = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let lastDiscoveryWarningAt = 0;
+let discoveryDisabled = false;
 
 async function waitForRateSlot() {
   while (true) {
@@ -103,7 +104,7 @@ const mergeDiscovery = (direct, listed) => {
 
 export async function fetchNewListings(apiKey, { limit = 20 } = {}) {
   const direct = drainDirectCreates(50);
-  if (!apiKey) return direct;
+  if (!apiKey || discoveryDisabled) return direct;
 
   let body;
   try {
@@ -112,10 +113,15 @@ export async function fetchNewListings(apiKey, { limit = 20 } = {}) {
       meme_platform_enabled: true
     });
   } catch (error) {
+    const message = String(error?.message ?? error);
+    const rejected = /\/defi\/v2\/tokens\/new_listing HTTP 400/i.test(message);
+    if (rejected) discoveryDisabled = true;
     const now = Date.now();
-    if (now - lastDiscoveryWarningAt >= 60_000) {
+    if (rejected || now - lastDiscoveryWarningAt >= 60_000) {
       lastDiscoveryWarningAt = now;
-      console.warn(`[birdeye:discovery] ${error?.message ?? error}; continuing with Helius Direct Create`);
+      console.warn(rejected
+        ? '[birdeye:discovery] endpoint returned HTTP 400; disabling Birdeye discovery for this runtime; Helius Direct Create remains primary'
+        : `[birdeye:discovery] ${message}; continuing with Helius Direct Create`);
     }
     return direct;
   }
