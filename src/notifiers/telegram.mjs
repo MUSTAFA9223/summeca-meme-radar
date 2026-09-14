@@ -50,6 +50,11 @@ const price = (value) => {
   return n.toExponential(6);
 };
 const pct = (value) => `${Number(value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 1 })}%`;
+const escapeHtml = (value) => String(value ?? '')
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;');
+const boldTelegram = (value) => `<b>${escapeHtml(value)}</b>`;
 
 const sourceLabel = (source) => {
   const value = String(source ?? '').toLowerCase();
@@ -185,7 +190,7 @@ export class TelegramNotifier {
       `🚀 Moon ${sc.moon}/100  |  🛡️ Risk ${sc.risk}/100`,
       quality.ar,
       '✅ فحص السكام/الأمان: ناجح',
-      p ? `🧪 Paper: $${p.usdSize.toFixed(2)} @ ${p.entryPriceUsd}` : '📈 بدأت متابعة الأداء من هذه الإشارة.', '',
+      '📈 بدأت متابعة الأداء من هذه الإشارة.', '',
       '⚠️ لا يوجد ضمان للربح؛ راقب الانزلاق والسيولة.'
     ].join('\n');
 
@@ -202,40 +207,37 @@ export class TelegramNotifier {
       `🚀 Moon ${sc.moon}/100  |  🛡️ Risk ${sc.risk}/100`,
       quality.en,
       '✅ Scam/safety check: PASSED',
-      p ? `🧪 Paper: $${p.usdSize.toFixed(2)} @ ${p.entryPriceUsd}` : '📈 Performance tracking started from this signal.', '',
+      '📈 Performance tracking started from this signal.', '',
       '⚠️ Profit is not guaranteed; review slippage and liquidity.'
     ].join('\n');
 
     const text = this.#pick(ar, en);
+    const boldText = boldTelegram(text);
     const replyMarkup = tokenKeyboard(s.address, this.language, { early: venue.includes('Pump.fun'), safe: true });
     const reply = replyToMessageId ? { reply_parameters: { message_id: Number(replyToMessageId), allow_sending_without_reply: true } } : {};
 
     if (s.imageUrl) {
       try {
-        if (text.length <= 1000) {
+        if (boldText.length <= 1024) {
           return await telegramApi(this.token, 'sendPhoto', {
             chat_id: this.chatId,
             photo: s.imageUrl,
-            caption: text,
+            caption: boldText,
+            parse_mode: 'HTML',
             ...reply,
             ...(replyMarkup ? { reply_markup: replyMarkup } : {})
           });
         }
-        const photo = await telegramApi(this.token, 'sendPhoto', {
-          chat_id: this.chatId,
-          photo: s.imageUrl,
-          caption: `🔥 SUMMECA TRENDING\n$${symbol} • ${displayName}`,
-          ...reply
-        });
-        return await this.#send(text, {
-          reply_parameters: { message_id: Number(photo.message_id), allow_sending_without_reply: true },
-          ...(replyMarkup ? { reply_markup: replyMarkup } : {})
-        });
       } catch (error) {
         console.warn('[telegram:photo]', error.message);
       }
     }
-    return this.#send(text, { ...reply, ...(replyMarkup ? { reply_markup: replyMarkup } : {}) });
+
+    return this.#send(boldText, {
+      parse_mode: 'HTML',
+      ...reply,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+    });
   }
 
   async signalUpdate(s, sc, event) {
