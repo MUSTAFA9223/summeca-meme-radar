@@ -44,16 +44,19 @@ function hasCallback(markup, callbackData) {
 
 function adminKeyboard() {
   return {
-    inline_keyboard: [[
-      { text: '🔐 إنشاء كود تفعيل', callback_data: 'admin:code' },
-      { text: '👥 المستخدمون', callback_data: 'admin:users' }
-    ]]
+    inline_keyboard: [
+      [
+        { text: '🔐 إنشاء كود تفعيل', callback_data: 'admin:code' },
+        { text: '👥 المستخدمون', callback_data: 'admin:users' }
+      ],
+      [{ text: '🏠 القائمة الرئيسية', callback_data: 'menu:home' }]
+    ]
   };
 }
 
 function withOwnerAdminButtons(payload, ownerId) {
   if (!payload || String(payload.chat_id ?? '') !== String(ownerId)) return payload;
-  if (hasCallback(payload.reply_markup, 'admin:code')) return payload;
+  if (hasCallback(payload.reply_markup, 'admin:home')) return payload;
 
   const text = String(payload.text ?? payload.caption ?? '');
   const isMainMenu = hasCallback(payload.reply_markup, 'menu:status')
@@ -63,7 +66,13 @@ function withOwnerAdminButtons(payload, ownerId) {
   const keyboard = Array.isArray(payload.reply_markup?.inline_keyboard)
     ? payload.reply_markup.inline_keyboard.map((row) => [...row])
     : [];
-  keyboard.push(...adminKeyboard().inline_keyboard);
+
+  const adminButton = { text: '🛠️ الأدمن', callback_data: 'admin:home' };
+  const helpRow = keyboard.find((row) =>
+    Array.isArray(row) && row.some((button) => button?.callback_data === 'menu:help')
+  );
+  if (helpRow) helpRow.push(adminButton);
+  else keyboard.push([adminButton]);
 
   return {
     ...payload,
@@ -74,7 +83,7 @@ function withOwnerAdminButtons(payload, ownerId) {
 async function sendOwnerPanel(base, ownerId) {
   return telegramCall(base, 'sendMessage', {
     chat_id: ownerId,
-    text: '🛠️ لوحة المالك — SUMMECA\n\nإدارة أكواد التفعيل والمستخدمين:',
+    text: '🛠️ لوحة الأدمن — SUMMECA\n\nإدارة أكواد التفعيل والمستخدمين:',
     reply_markup: adminKeyboard()
   });
 }
@@ -93,7 +102,8 @@ async function sendCodeMenu(base, ownerId) {
           { text: '30 يوم', callback_data: 'admin:code:30' },
           { text: '90 يوم', callback_data: 'admin:code:90' }
         ],
-        [{ text: '⬅️ لوحة المالك', callback_data: 'admin:home' }]
+        [{ text: '⬅️ لوحة الأدمن', callback_data: 'admin:home' }],
+        [{ text: '🏠 القائمة الرئيسية', callback_data: 'menu:home' }]
       ]
     }
   });
@@ -152,15 +162,9 @@ async function consumeOwnerUpdate(update, base, ownerId) {
   const message = update?.message ?? update?.edited_message;
   const messageChatId = String(message?.chat?.id ?? '');
   const text = String(message?.text ?? '').trim();
-  if (message && messageChatId === String(ownerId)) {
-    if (/^\/admin(?:@\w+)?\s*$/i.test(text)) {
-      await sendOwnerPanel(base, ownerId).catch((error) => console.error('[telegram:owner-panel]', error.message));
-      return true;
-    }
-    if (/^\/(?:start|menu)(?:@\w+)?(?:\s|$)/i.test(text)) {
-      await sendOwnerPanel(base, ownerId).catch((error) => console.error('[telegram:owner-panel]', error.message));
-      return false;
-    }
+  if (message && messageChatId === String(ownerId) && /^\/admin(?:@\w+)?\s*$/i.test(text)) {
+    await sendOwnerPanel(base, ownerId).catch((error) => console.error('[telegram:owner-panel]', error.message));
+    return true;
   }
 
   return false;
@@ -233,8 +237,17 @@ async function pushOwnerPanelOnStartup() {
   const ownerId = await ownerChatId();
   if (!ownerId) return;
   const base = `https://api.telegram.org/bot${env.telegramBotToken}`;
-  await sendOwnerPanel(base, ownerId);
-  console.log('[telegram:owner-panel] startup panel sent');
+  await telegramCall(base, 'sendMessage', {
+    chat_id: ownerId,
+    text: '✅ SUMMECA Meme Radar يعمل الآن.\n\nافتح القائمة الرئيسية وستجد زر 🛠️ الأدمن مع بقية الأزرار.',
+    reply_markup: {
+      inline_keyboard: [[
+        { text: '🏠 فتح القائمة', callback_data: 'menu:home' },
+        { text: '🛠️ الأدمن', callback_data: 'admin:home' }
+      ]]
+    }
+  });
+  console.log('[telegram:owner-panel] startup controls sent');
 }
 
 const startupTimer = setTimeout(() => {
