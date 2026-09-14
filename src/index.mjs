@@ -184,24 +184,24 @@ async function notifyEmergencyRisk(snapshot, scores, safety, thread) {
   const ar = [
     `🚨 طوارئ مخاطرة — ${snapshot.symbol ?? 'TOKEN'}`,
     '',
-    'تم إيقاف هذه العملة كإشارة دخول/صعود.',
+    'تم منع أي دخول جديد على هذه العملة، لكن متابعة الزخم والأداء ستستمر.',
     `الأسباب: ${reasons.join(' | ')}`,
     `Risk: ${scores.risk}/100`,
     Number(snapshot.priceUsd) > 0 ? `السعر الحالي: $${snapshot.priceUsd}` : '',
     Number(snapshot.liquidityUsd) >= 0 ? `السيولة الحالية: $${Number(snapshot.liquidityUsd).toFixed(2)}` : '',
     '',
-    '⚠️ لا يعتمد البوت أي دخول جديد عليها. التداول الحقيقي ما زال مقفولًا.'
+    '⛔ لا دخول حقيقي جديد. 👀 المتابعة التحليلية مستمرة.'
   ].filter(Boolean).join('\n');
   const en = [
     `🚨 RISK EMERGENCY — ${snapshot.symbol ?? 'TOKEN'}`,
     '',
-    'This token has been stopped as an entry/rising signal.',
+    'New entry is blocked, but momentum and performance tracking will continue.',
     `Reasons: ${reasons.join(' | ')}`,
     `Risk: ${scores.risk}/100`,
     Number(snapshot.priceUsd) > 0 ? `Current price: $${snapshot.priceUsd}` : '',
     Number(snapshot.liquidityUsd) >= 0 ? `Current liquidity: $${Number(snapshot.liquidityUsd).toFixed(2)}` : '',
     '',
-    '⚠️ No new bot entry is allowed. Live trading remains locked.'
+    '⛔ No new live entry. 👀 Analytical tracking continues.'
   ].filter(Boolean).join('\n');
   const body = {
     chat_id: telegramChatId,
@@ -222,14 +222,54 @@ async function notifyEmergencyRisk(snapshot, scores, safety, thread) {
         peakReturnPct: thread.peakReturnPct,
         lastMilestonePct: thread.lastMilestonePct,
         lastUpdateAt: snapshot.observedAt,
-        active: false
+        active: true
       });
     } catch (error) {
-      console.error('[supabase:emergency-thread-stop]', address, error.message);
+      console.error('[supabase:emergency-thread-continue]', address, error.message);
     }
   }
-  signalTracker.remove(address);
-  console.warn(`[safety:emergency] stopped mint=${address.slice(0, 8)}… reasons=${reasons.join('; ')}`);
+  console.warn(`[safety:emergency] entry blocked; tracking continues mint=${address.slice(0, 8)}… reasons=${reasons.join('; ')}`);
+}
+
+async function notifyTrackedSafetyUpdate(snapshot, scores, safety, event) {
+  if (!runtime.alertsEnabled || !env.telegramBotToken || !telegramChatId || !event?.thread?.rootMessageId) return null;
+  const returnPct = Number(event.returnPct ?? 0);
+  const peakReturnPct = Number(event.peakReturnPct ?? event.thread.peakReturnPct ?? 0);
+  const price = Number(event.priceUsd ?? snapshot.priceUsd ?? 0);
+  const statusAr = safety.status === 'dangerous'
+    ? `⛔ خطر مؤكد — متابعة فقط\n${safety.dangerReasons.slice(0, 3).join(' | ')}`
+    : `⚠️ الأمان قيد التحقق — لا دخول حقيقي\n${safety.pendingReasons.slice(0, 3).join(' | ')}`;
+  const statusEn = safety.status === 'dangerous'
+    ? `⛔ Confirmed risk — tracking only\n${safety.dangerReasons.slice(0, 3).join(' | ')}`
+    : `⚠️ Safety pending — no live entry\n${safety.pendingReasons.slice(0, 3).join(' | ')}`;
+  const milestone = event.type === 'milestone' ? `+${event.milestonePct}%` : 'tracking';
+  const ar = [
+    `📈 تحديث متابعة $${snapshot.symbol ?? 'TOKEN'} — ${milestone}`,
+    '',
+    `الصعود من الإشارة: ${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(1)}%`,
+    `أعلى صعود: ${peakReturnPct >= 0 ? '+' : ''}${peakReturnPct.toFixed(1)}%`,
+    price > 0 ? `السعر: $${price}` : '',
+    `Momentum/Entry: ${scores.entry}/100 | Risk: ${scores.risk}/100`,
+    `🟢 شراء 30ث: ${Number(snapshot.buys30s ?? 0).toFixed(1)} | 🔴 بيع: ${Number(snapshot.sells30s ?? 0).toFixed(1)}`,
+    '',
+    statusAr
+  ].filter(Boolean).join('\n');
+  const en = [
+    `📈 $${snapshot.symbol ?? 'TOKEN'} tracking update — ${milestone}`,
+    '',
+    `Return from signal: ${returnPct >= 0 ? '+' : ''}${returnPct.toFixed(1)}%`,
+    `Peak: ${peakReturnPct >= 0 ? '+' : ''}${peakReturnPct.toFixed(1)}%`,
+    price > 0 ? `Price: $${price}` : '',
+    `Entry: ${scores.entry}/100 | Risk: ${scores.risk}/100`,
+    `🟢 Buys 30s: ${Number(snapshot.buys30s ?? 0).toFixed(1)} | 🔴 Sells: ${Number(snapshot.sells30s ?? 0).toFixed(1)}`,
+    '',
+    statusEn
+  ].filter(Boolean).join('\n');
+  return telegramApi(env.telegramBotToken, 'sendMessage', {
+    chat_id: telegramChatId,
+    text: runtime.language === 'en' ? en : runtime.language === 'bilingual' ? `${ar}\n\n────────────\n\n${en}` : ar,
+    reply_parameters: { message_id: Number(event.thread.rootMessageId), allow_sending_without_reply: true }
+  }).catch((error) => console.error('[telegram:tracked-safety-update]', error.message));
 }
 
 async function notifyQueuedPaperFill(position, intent, warnings = []) {
@@ -431,7 +471,7 @@ async function persistEntry(snapshot, scores, position, refs) {
   }
 }
 
-async function persistWatchSignal(snapshot, scores, refs) {
+async function persistWatchSignal(snapshot, scores, refs, safety) {
   if (!store.enabled || !refs?.tokenId) return;
   try {
     await store.saveSignal({
@@ -440,7 +480,8 @@ async function persistWatchSignal(snapshot, scores, refs) {
       type: 'watch',
       scores,
       reason: {
-        trigger: 'telegram-rising-momentum-signal',
+        trigger: safety?.ok ? 'telegram-rising-momentum-signal' : 'telegram-rising-momentum-pending-safety',
+        safetyStatus: safety?.status ?? 'unknown',
         priceAvailable: Number(snapshot.priceUsd) > 0,
         priceChange5mPct: snapshot.priceChange5mPct ?? null,
         buyers30s: snapshot.buys30s ?? 0,
@@ -503,9 +544,47 @@ async function persistTrackingEvent(snapshot, scores, refs, event) {
   }
 }
 
-async function startSignalThread(snapshot, scores, refs, paperPosition) {
+async function startSignalThread(snapshot, scores, refs, paperPosition, safety) {
   if (!runtime.alertsEnabled || signalTracker.has(snapshot.address)) return null;
-  const message = await telegram.signal(snapshot, scores, paperPosition ?? undefined);
+
+  let message = null;
+  if (safety?.ok) {
+    message = await telegram.signal(snapshot, scores, paperPosition ?? undefined);
+  } else if (telegram.enabled && env.telegramBotToken && telegramChatId) {
+    const ratio = Number(snapshot.buys30s ?? 0) / Math.max(1, Number(snapshot.sells30s ?? 0));
+    const ar = [
+      '⚡ SUMMECA EARLY MOMENTUM — الأمان قيد التحقق', '',
+      `$${snapshot.symbol ?? 'TOKEN'} • ${snapshot.name ?? snapshot.symbol ?? 'Token'}`,
+      `CA: ${snapshot.address}`, '',
+      `MC: $${Math.round(Number(snapshot.marketCapUsd ?? 0)).toLocaleString('en-US')} | Vol 5m: $${Math.round(Number(snapshot.volume5mUsd ?? 0)).toLocaleString('en-US')}`,
+      `💧 Liquidity: $${Math.round(Number(snapshot.liquidityUsd ?? 0)).toLocaleString('en-US')} | Price: $${snapshot.priceUsd ?? '—'}`,
+      `🟢 شراء 30ث: ${Number(snapshot.buys30s ?? 0).toFixed(1)} | 🔴 بيع: ${Number(snapshot.sells30s ?? 0).toFixed(1)} | Ratio ${ratio.toFixed(2)}x`,
+      `🎯 Entry ${scores.entry}/100 | 🚀 Moon ${scores.moon}/100 | 🛡️ Risk ${scores.risk}/100`, '',
+      '⚠️ لم يثبت خطر مؤكد، لكن فحص الأمان لم يكتمل بعد.',
+      `الناقص: ${(safety?.pendingReasons ?? safety?.reasons ?? []).slice(0, 4).join(' | ')}`,
+      '👀 بدأت متابعة الأداء الآن. لا يوجد دخول حقيقي حتى نجاح بوابة الأمان.'
+    ].join('\n');
+    const en = [
+      '⚡ SUMMECA EARLY MOMENTUM — SAFETY PENDING', '',
+      `$${snapshot.symbol ?? 'TOKEN'} • ${snapshot.name ?? snapshot.symbol ?? 'Token'}`,
+      `CA: ${snapshot.address}`, '',
+      `MC: $${Math.round(Number(snapshot.marketCapUsd ?? 0)).toLocaleString('en-US')} | Vol 5m: $${Math.round(Number(snapshot.volume5mUsd ?? 0)).toLocaleString('en-US')}`,
+      `💧 Liquidity: $${Math.round(Number(snapshot.liquidityUsd ?? 0)).toLocaleString('en-US')} | Price: $${snapshot.priceUsd ?? '—'}`,
+      `🟢 Buys 30s: ${Number(snapshot.buys30s ?? 0).toFixed(1)} | 🔴 Sells: ${Number(snapshot.sells30s ?? 0).toFixed(1)} | Ratio ${ratio.toFixed(2)}x`,
+      `🎯 Entry ${scores.entry}/100 | 🚀 Moon ${scores.moon}/100 | 🛡️ Risk ${scores.risk}/100`, '',
+      '⚠️ No confirmed danger was found, but the safety check is incomplete.',
+      `Pending: ${(safety?.pendingReasons ?? safety?.reasons ?? []).slice(0, 4).join(' | ')}`,
+      '👀 Performance tracking starts now. No live entry until the strict safety gate passes.'
+    ].join('\n');
+    message = await telegramApi(env.telegramBotToken, 'sendMessage', {
+      chat_id: telegramChatId,
+      text: runtime.language === 'en' ? en : runtime.language === 'bilingual' ? `${ar}\n\n────────────\n\n${en}` : ar
+    }).catch((error) => {
+      console.error('[telegram:pending-signal]', error.message);
+      return null;
+    });
+  }
+
   if (!message?.message_id) return null;
 
   const thread = signalTracker.start({
@@ -667,17 +746,16 @@ async function tick(trigger = 'poll') {
 
       if (isTracked) {
         const thread = signalTracker.get(s.address);
-        if (safety.emergency) {
-          await notifyEmergencyRisk(s, scores, safety, thread);
-        } else if (safety.ok) {
-          const trackingEvent = signalTracker.observe(s);
-          if (trackingEvent) {
-            await persistTrackingEvent(s, scores, refs, trackingEvent);
-            if (trackingEvent.type === 'expired') {
-              signalTracker.remove(s.address);
-            } else if (runtime.alertsEnabled) {
-              await telegram.signalUpdate(s, scores, trackingEvent);
-            }
+        if (safety.emergency) await notifyEmergencyRisk(s, scores, safety, thread);
+
+        const trackingEvent = signalTracker.observe(s);
+        if (trackingEvent) {
+          await persistTrackingEvent(s, scores, refs, trackingEvent);
+          if (trackingEvent.type === 'expired') {
+            signalTracker.remove(s.address);
+          } else if (runtime.alertsEnabled) {
+            if (safety.ok) await telegram.signalUpdate(s, scores, trackingEvent);
+            else await notifyTrackedSafetyUpdate(s, scores, safety, trackingEvent);
           }
         }
       }
@@ -737,9 +815,9 @@ async function tick(trigger = 'poll') {
         signalTracked: signalTracker.has(s.address)
       }));
 
-      if (rising && safety.ok && scores.entry >= env.entryScoreThreshold && !signalTracker.has(s.address)) {
-        if (!p) await persistWatchSignal(s, scores, refs);
-        await startSignalThread(s, scores, refs, p);
+      if (rising && safety.trackingAllowed && scores.entry >= env.entryScoreThreshold && !signalTracker.has(s.address)) {
+        if (!p) await persistWatchSignal(s, scores, refs, safety);
+        await startSignalThread(s, scores, refs, p, safety);
       }
     }
     return true;
@@ -792,7 +870,7 @@ process.once('SIGTERM', () => shutdown('SIGTERM'));
 
 const liveMode = Boolean(env.birdeyeApiKey);
 const heliusMode = liveMode && env.heliusWsEnabled && Boolean(env.heliusApiKey);
-console.log(`SUMMECA Meme Radar v0.14 — PAPER ONLY — ${liveMode ? 'Birdeye + DexScreener 20-token watch pool' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + fail-closed safety + emergency risk stops + raw creates hidden + rising-momentum alerts + direct in-bot paper buy/sell`);
+console.log(`SUMMECA Meme Radar v0.15 — PAPER ONLY — ${liveMode ? 'Birdeye + DexScreener 20-token watch pool' : 'demo feed'}${heliusMode ? ' + Helius Direct Create + WebSocket' : ''}${store.enabled ? ' + Supabase persistence' : ''}${telegram.enabled ? ` + Telegram controls (${runtime.language})` : ''} + tri-state safety + continued momentum tracking + emergency entry blocks + raw creates hidden + direct in-bot paper buy/sell`);
 await telegramController.start();
 startHeliusWakeups();
 await tick('startup');
