@@ -104,6 +104,31 @@ test('SEMI-like strong momentum remains trackable while safety evidence is pendi
   assert.equal(result.emergency, false);
 });
 
+test('WOFI-like vertical no-sell launch is ignored completely', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    source: 'dexscreener:pumpswap',
+    listedAt: Date.now() - 7 * 60 * 1000,
+    priceUsd: 0.01283,
+    liquidityUsd: 304311.69,
+    marketCapUsd: 12835431,
+    volume5mUsd: 143968.48,
+    buys30s: 38.445,
+    sells30s: 0,
+    priceChange5mPct: 29705,
+    priceChange1hPct: 29705,
+    honeypot: undefined,
+    mintAuthorityDisabled: true,
+    freezeAuthorityDisabled: true
+  }, { risk: 20, blockers: [] });
+  assert.equal(result.ok, false);
+  assert.equal(result.entryAllowed, false);
+  assert.equal(result.trackingAllowed, false);
+  assert.equal(result.status, 'ignored');
+  assert.equal(result.emergency, false);
+  assert.match(result.ignoredReasons.join(' '), /vertical spike/i);
+});
+
 test('blocks non-transferable Token-2022 assets', () => {
   const result = evaluateSignalSafety({
     ...safeSnapshot,
@@ -166,12 +191,13 @@ test('fails closed when Token-2022 extension parsing is unavailable while still 
   assert.ok(result.reasons.includes('Token-2022 extensions not verified'));
 });
 
-test('blocks dangerous known holder concentration', () => {
+test('known dangerous holder concentration is ignored from alerts', () => {
   const result = evaluateSignalSafety({ ...safeSnapshot, top10HolderPct: 55 }, { risk: 30, blockers: [] });
   assert.equal(result.ok, false);
-  assert.equal(result.status, 'dangerous');
+  assert.equal(result.status, 'ignored');
   assert.equal(result.trackingAllowed, false);
-  assert.match(result.reasons.join(' '), /top-10 concentration/i);
+  assert.equal(result.emergency, false);
+  assert.match(result.reasons.join(' '), /concentrated insider\/holder launch/i);
 });
 
 test('treats critically low PumpSwap liquidity as emergency', () => {
