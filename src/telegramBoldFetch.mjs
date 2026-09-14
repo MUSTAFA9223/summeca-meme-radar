@@ -237,8 +237,10 @@ async function filterTelegramUpdates(response, base) {
   const ownerChatId = await access.ownerChatId().catch(() => '');
   if (!ownerChatId) return response;
 
+  const original = payload.result;
+  const highestUpdateId = original.reduce((max, update) => Math.max(max, Number(update?.update_id ?? 0)), 0);
   const kept = [];
-  for (const update of payload.result) {
+  for (const update of original) {
     try {
       const result = await processAccessUpdate(update, base, ownerChatId);
       if (result.keep) kept.push(update);
@@ -246,6 +248,8 @@ async function filterTelegramUpdates(response, base) {
       console.error('[telegram:access-update]', error.message);
     }
   }
+  const highestKeptId = kept.reduce((max, update) => Math.max(max, Number(update?.update_id ?? 0)), 0);
+  if (highestUpdateId > highestKeptId) kept.push({ update_id: highestUpdateId });
   payload.result = kept;
 
   const headers = new Headers(response.headers);
