@@ -26,12 +26,18 @@ function rising(snapshot) {
   const buys = num(snapshot.buys_30s);
   const sells = num(snapshot.sells_30s);
   const ratio = buys / Math.max(1, sells);
+  const buyVolume30s = num(snapshot.buy_volume_30s_usd);
   const price5 = num(snapshot.raw?.priceChange5mPct);
   const volume5 = num(snapshot.raw?.volume5mUsd);
   const buyerAcceleration = num(snapshot.buyer_acceleration);
   const volumeAcceleration = num(snapshot.volume_acceleration);
+
+  // The watch-pool persists estimated 30-second flow even when the upstream
+  // 5-minute aggregate is unavailable. Use that real persisted flow instead
+  // of silently requiring a raw field that may not exist in snapshots.
   return price5 >= 5
-    || (ratio >= 1.8 && buys >= 4 && volume5 >= 2_000)
+    || (ratio >= 1.8 && buys >= 4 && (volume5 >= 1_000 || buyVolume30s >= 250))
+    || (ratio >= 3 && buys >= 6)
     || (buyerAcceleration >= 1.5 && volumeAcceleration >= 1.5 && ratio >= 1.25);
 }
 
@@ -261,18 +267,19 @@ class MomentumAlertWorker {
       const rows = await this.store.recentSnapshots();
       const latestByToken = new Map();
       for (const row of rows) if (!latestByToken.has(row.token_id)) latestByToken.set(row.token_id, row);
-      const candidates = [...latestByToken.values()]
+      const eligibleBase = [...latestByToken.values()]
         .filter((s) => !this.alerted.has(s.token_id))
         .filter((s) => num(s.price_usd) > 0)
         .filter((s) => num(s.entry_score) >= WATCH_ENTRY_THRESHOLD)
-        .filter((s) => num(s.risk_score, 100) <= 55)
-        .filter(rising)
+        .filter((s) => num(s.risk_score, 100) <= 55);
+      const candidates = eligibleBase.filter(rising)
         .sort((a, b) => num(b.entry_score) - num(a.entry_score));
+
+      console.log(`[momentum-alerts] scan snapshots=${latestByToken.size} eligible=${eligibleBase.length} rising=${candidates.length} tracked=${this.alerted.size}`);
 
       for (const snapshot of candidates.slice(0, 2)) {
         try { await this.sendMomentum(snapshot); } catch (error) { console.error('[momentum-alerts:send]', error.message); }
       }
-      if (candidates.length) console.log(`[momentum-alerts] candidates=${candidates.length} tracked=${this.alerted.size}`);
     } finally {
       this.running = false;
     }
