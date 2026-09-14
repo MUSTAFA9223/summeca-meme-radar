@@ -5,6 +5,7 @@ import { PUMP_FUN_PROGRAM_ID, resolvePumpCreateMint } from './heliusDirectCreate
 export { PUMP_FUN_PROGRAM_ID };
 
 const PUBLIC_SOLANA_WS = 'wss://api.mainnet-beta.solana.com';
+const MAX_CREATE_HYDRATION_BACKLOG = 8;
 
 export function createHeliusWsUrl(apiKey) {
   if (!apiKey) throw new Error('HELIUS_API_KEY is required for WebSocket streaming');
@@ -67,6 +68,9 @@ export class HeliusProgramStream {
     this.directSeen = new Set();
     this.usePublicFallback = true;
     this.currentProvider = 'solana-public';
+    this.hydrationQueue = Promise.resolve();
+    this.pendingHydrations = 0;
+    this.lastBacklogWarningAt = 0;
   }
 
   start() {
@@ -143,6 +147,28 @@ export class HeliusProgramStream {
     return eventPayload;
   }
 
+  #queueCreate(eventPayload) {
+    if (this.pendingHydrations >= MAX_CREATE_HYDRATION_BACKLOG) {
+      const now = Date.now();
+      if (now - this.lastBacklogWarningAt > 10_000) {
+        this.lastBacklogWarningAt = now;
+        this.logger.warn(`[direct-create] hydration backlog full (${this.pendingHydrations}); sampling new launches until RPC catches up`);
+      }
+      return;
+    }
+
+    this.pendingHydrations += 1;
+    const task = this.hydrationQueue.then(async () => {
+      const hydrated = await this.#hydrateDirectCreate(eventPayload);
+      await Promise.resolve(this.onEvent(hydrated));
+    });
+    this.hydrationQueue = task
+      .catch((error) => this.logger.error('[direct-create] queued hydration failed', error?.message ?? error))
+      .finally(() => {
+        this.pendingHydrations = Math.max(0, this.pendingHydrations - 1);
+      });
+  }
+
   #connect() {
     if (!this.active) return;
     this.requestToProgram.clear();
@@ -176,7 +202,7 @@ export class HeliusProgramStream {
       }, Math.max(10_000, Math.floor(this.staleAfterMs / 3)));
     });
 
-    ws.addEventListener('message', async (event) => {
+    ws.addEventListener('message', (event) => {
       this.lastMessageAt = Date.now();
       let message;
       try {
@@ -217,7 +243,11 @@ export class HeliusProgramStream {
         observedAt: Date.now()
       };
 
-      await this.#hydrateDirectCreate(eventPayload);
+      if (eventPayload.kind === 'create' && !eventPayload.err) {
+        this.#queueCreate(eventPayload);
+        return;
+      }
+
       Promise.resolve(this.onEvent(eventPayload)).catch((error) => {
         this.logger.error('[helius-ws] onEvent failed', error?.message ?? error);
       });
