@@ -21,23 +21,29 @@ const priceText = (value) => {
   return n >= 0.01 ? n.toLocaleString('en-US', { maximumFractionDigits: 8 }) : n.toExponential(6);
 };
 
-const watchKeyboard = (mint) => ({
-  inline_keyboard: [
-    [
-      { text: '📊 DEX', url: `https://dexscreener.com/solana/${encodeURIComponent(mint)}` },
-      { text: '🔥 FOMO', url: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` },
-      { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` }
-    ],
-    [
-      { text: '🧪 شراء Paper', callback_data: `paper:menu:${mint}` },
-      { text: '⚡ تداول حقيقي', callback_data: `live:menu:${mint}` }
-    ],
-    [
-      { text: '🗑️ إلغاء المتابعة', callback_data: `watch:remove:${mint}` },
-      { text: '📋 العقد', copy_text: { text: mint } }
+const watchKeyboard = (mint, { safe = false } = {}) => {
+  const tradeRow = safe
+    ? [
+        { text: '🧪 شراء Paper', callback_data: `paper:menu:${mint}` },
+        { text: '⚡ تداول حقيقي', callback_data: `live:menu:${mint}` }
+      ]
+    : [{ text: '🧪 شراء Paper', callback_data: `paper:menu:${mint}` }];
+
+  return {
+    inline_keyboard: [
+      [
+        { text: '📊 DEX', url: `https://dexscreener.com/solana/${encodeURIComponent(mint)}` },
+        { text: '🔥 FOMO', url: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` },
+        { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` }
+      ],
+      tradeRow,
+      [
+        { text: '🗑️ إلغاء المتابعة', callback_data: `watch:remove:${mint}` },
+        { text: '📋 العقد', copy_text: { text: mint } }
+      ]
     ]
-  ]
-});
+  };
+};
 
 class WatchStore {
   constructor(url, key) {
@@ -120,7 +126,7 @@ class WatchlistAlertWorker {
       console.log('[watchlist-alerts] disabled: Telegram chat not linked');
       return false;
     }
-    console.log(`[watchlist-alerts] READY safety-gated chat=linked language=${this.language}`);
+    console.log(`[watchlist-alerts] READY tri-state-safety chat=linked language=${this.language}`);
     return true;
   }
 
@@ -130,10 +136,10 @@ class WatchlistAlertWorker {
     return ar;
   }
 
-  async send(snapshot, textAr, textEn) {
+  async send(snapshot, textAr, textEn, { safe = false } = {}) {
     const s = normalizeMomentumSnapshot(snapshot);
     const text = this.pick(textAr, textEn);
-    const body = { chat_id: this.chatId, reply_markup: watchKeyboard(s.address) };
+    const body = { chat_id: this.chatId, reply_markup: watchKeyboard(s.address, { safe }) };
     if (s.imageUrl && text.length <= 1000) {
       try {
         return await telegramApi(env.telegramBotToken, 'sendPhoto', { ...body, photo: s.imageUrl, caption: text });
@@ -159,27 +165,46 @@ class WatchlistAlertWorker {
     const score = momentumScore(snapshot);
     const quality = entryQuality(snapshot);
     const now = Date.now();
-    const previous = this.state.get(s.address) ?? { band: 0, safe: false, lastAlertAt: 0, warned: false };
+    const previous = this.state.get(s.address) ?? {
+      band: 0,
+      status: 'unknown',
+      lastAlertAt: 0,
+      warnedDangerous: false
+    };
     const nextBand = this.band(score);
+    const statusChanged = previous.status !== safety.status;
 
-    if (!safety.ok) {
-      if (previous.safe && !previous.warned) {
-        await this.send(snapshot,
-          `🚨 تحذير متابعة — $${s.symbol}\n\nفقدت العملة اعتماد الأمان.\n${safety.reasons.slice(0, 4).join(' | ')}\nRisk: ${Math.round(s.riskScore)}/100\nCA: ${s.address}`,
-          `🚨 WATCHLIST RISK — $${s.symbol}\n\nThe token lost its safety approval.\n${safety.reasons.slice(0, 4).join(' | ')}\nRisk: ${Math.round(s.riskScore)}/100\nCA: ${s.address}`
-        );
-        previous.warned = true;
-      }
-      previous.safe = false;
-      previous.band = 0;
-      this.state.set(s.address, previous);
-      return;
+    // Confirmed danger blocks entry, but it no longer erases the momentum state.
+    // This preserves post-signal performance tracking instead of going silent.
+    if (safety.status === 'dangerous' && !previous.warnedDangerous) {
+      await this.send(snapshot,
+        `🚨 تحذير مخاطرة — $${s.symbol}\n\nتم منع الدخول، لكن المتابعة ستستمر.\n${safety.dangerReasons.slice(0, 4).join(' | ')}\nRisk: ${Math.round(s.riskScore)}/100\nCA: ${s.address}`,
+        `🚨 WATCHLIST RISK — $${s.symbol}\n\nEntry is blocked, but tracking will continue.\n${safety.dangerReasons.slice(0, 4).join(' | ')}\nRisk: ${Math.round(s.riskScore)}/100\nCA: ${s.address}`,
+        { safe: false }
+      );
+      previous.warnedDangerous = true;
+      previous.lastAlertAt = now;
+    } else if (safety.status !== 'dangerous') {
+      previous.warnedDangerous = false;
     }
 
-    previous.warned = false;
-    const shouldAlert = rising && nextBand > 0 && (nextBand > previous.band || (!previous.safe && now - previous.lastAlertAt >= ALERT_COOLDOWN_MS));
+    const shouldAlert = rising
+      && nextBand > 0
+      && (nextBand > previous.band || (statusChanged && now - previous.lastAlertAt >= 5_000));
+
     if (shouldAlert) {
       const ratio = s.buys30s / Math.max(1, s.sells30s);
+      const safetyAr = safety.status === 'safe'
+        ? '✅ فحص الأمان ناجح'
+        : safety.status === 'unknown'
+          ? `⚠️ الأمان قيد التحقق — لا دخول حقيقي\n${safety.pendingReasons.slice(0, 3).join(' | ')}`
+          : `⛔ خطر مؤكد — متابعة فقط\n${safety.dangerReasons.slice(0, 3).join(' | ')}`;
+      const safetyEn = safety.status === 'safe'
+        ? '✅ Safety gate passed'
+        : safety.status === 'unknown'
+          ? `⚠️ Safety pending — no live entry\n${safety.pendingReasons.slice(0, 3).join(' | ')}`
+          : `⛔ Confirmed risk — tracking only\n${safety.dangerReasons.slice(0, 3).join(' | ')}`;
+
       const ar = [
         nextBand >= 3 ? '🚀 متابعة — زخم انفجاري' : nextBand >= 2 ? '🔥 متابعة — الزخم يتسارع' : '📈 متابعة — حركة صاعدة',
         '',
@@ -190,7 +215,7 @@ class WatchlistAlertWorker {
         `Vol 5m: $${compactMoney(s.volume5mUsd)} | MC: $${compactMoney(s.marketCapUsd)}`,
         `السعر: $${priceText(s.priceUsd)} | تغير 5د: ${s.priceChange5mPct.toFixed(1)}%`,
         '',
-        '✅ فحص الأمان ناجح',
+        safetyAr,
         `CA: ${s.address}`
       ].join('\n');
       const en = [
@@ -203,15 +228,15 @@ class WatchlistAlertWorker {
         `Vol 5m: $${compactMoney(s.volume5mUsd)} | MC: $${compactMoney(s.marketCapUsd)}`,
         `Price: $${priceText(s.priceUsd)} | 5m: ${s.priceChange5mPct.toFixed(1)}%`,
         '',
-        '✅ Safety gate passed',
+        safetyEn,
         `CA: ${s.address}`
       ].join('\n');
-      await this.send(snapshot, ar, en);
+      await this.send(snapshot, ar, en, { safe: safety.ok });
       previous.lastAlertAt = now;
-      console.log(`[watchlist-alerts] SENT mint=${s.address.slice(0, 8)}… momentum=${score} band=${nextBand}`);
+      console.log(`[watchlist-alerts] SENT mint=${s.address.slice(0, 8)}… momentum=${score} band=${nextBand} safety=${safety.status}`);
     }
 
-    previous.safe = true;
+    previous.status = safety.status;
     previous.band = Math.max(previous.band, nextBand);
     this.state.set(s.address, previous);
   }
