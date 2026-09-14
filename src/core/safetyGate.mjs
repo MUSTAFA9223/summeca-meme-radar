@@ -9,6 +9,42 @@ const isDexVenue = (source) => {
     || (value.includes('dexscreener') && !value.includes('pump'));
 };
 
+const num = (value, fallback = 0) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+const ignoredLaunchPattern = (snapshot = {}) => {
+  const raw = snapshot.raw ?? {};
+  const listedAtRaw = snapshot.listedAt ?? snapshot.listed_at ?? snapshot.tokens?.listed_at ?? raw.listedAt;
+  const listedAt = typeof listedAtRaw === 'number' ? listedAtRaw : Date.parse(listedAtRaw ?? '') || 0;
+  const ageSec = listedAt > 0 ? Math.max(0, (Date.now() - listedAt) / 1000) : null;
+  const fresh = ageSec != null && ageSec <= 15 * 60;
+  const buys = num(snapshot.buys30s ?? snapshot.buys_30s);
+  const sells = num(snapshot.sells30s ?? snapshot.sells_30s);
+  const marketCap = num(snapshot.marketCapUsd ?? snapshot.market_cap_usd);
+  const liquidity = num(snapshot.liquidityUsd ?? snapshot.liquidity_usd);
+  const price5m = num(snapshot.priceChange5mPct ?? raw.priceChange5mPct);
+  const price1h = num(snapshot.priceChange1hPct ?? raw.priceChange1hPct);
+  const top10 = num(snapshot.top10HolderPct ?? snapshot.top10_holder_pct);
+  const insider = num(snapshot.insiderPct ?? snapshot.insider_pct);
+  const bundler = num(snapshot.bundlerPct ?? snapshot.bundler_pct);
+  const creator = num(snapshot.creatorPct ?? snapshot.creator_pct ?? snapshot.devPct);
+  const peakChange = Math.max(price5m, price1h);
+  const oneWayFlow = buys >= 8 && sells < 1;
+  const oversized = marketCap >= 1_000_000;
+  const stretchedValuation = liquidity > 0 && marketCap / liquidity >= 25;
+  const extremeVertical = peakChange >= 1000;
+  const knownConcentration = top10 > 40 || insider > 10 || bundler > 12 || creator > 8;
+  const freshVerticalNoSell = fresh && oneWayFlow && oversized && extremeVertical;
+  const freshStretchedNoSell = fresh && oneWayFlow && oversized && stretchedValuation && peakChange >= 300;
+  const reasons = [];
+  if (knownConcentration) reasons.push('concentrated insider/holder launch');
+  if (freshVerticalNoSell) reasons.push(`fresh vertical spike ${peakChange.toFixed(0)}% with no verified sell`);
+  if (freshStretchedNoSell) reasons.push('fresh stretched valuation with one-way buy flow');
+  return { ignored: reasons.length > 0, reasons };
+};
+
 export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   const blockers = Array.isArray(scores.blockers) ? scores.blockers.map(String) : [];
   const pendingReasons = [];
@@ -72,26 +108,33 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
     dangerReasons.push(`DEX liquidity critically low ($${Math.max(0, liquidity).toFixed(2)})`);
   }
 
+  const ignored = ignoredLaunchPattern(snapshot);
   const uniqueDangerReasons = [...new Set(dangerReasons)];
   const uniquePendingReasons = [...new Set(pendingReasons)].filter((reason) => !uniqueDangerReasons.includes(reason));
-  const status = uniqueDangerReasons.length > 0
-    ? 'dangerous'
-    : uniquePendingReasons.length > 0
-      ? 'unknown'
-      : 'safe';
-  const reasons = [...uniqueDangerReasons, ...uniquePendingReasons];
+  const status = ignored.ignored
+    ? 'ignored'
+    : uniqueDangerReasons.length > 0
+      ? 'dangerous'
+      : uniquePendingReasons.length > 0
+        ? 'unknown'
+        : 'safe';
+  const reasons = ignored.ignored
+    ? [...ignored.reasons, ...uniqueDangerReasons, ...uniquePendingReasons]
+    : [...uniqueDangerReasons, ...uniquePendingReasons];
 
   return {
     // `ok` intentionally remains the strict execution gate used by live trading.
     ok: status === 'safe',
     entryAllowed: status === 'safe',
-    // Unknown means “keep watching, do not execute”. Existing dangerous threads
-    // may still be observed by the tracker, but no new automatic entry is allowed.
-    trackingAllowed: status !== 'dangerous',
+    // Unknown means “keep watching, do not execute”. Ignored launch patterns are
+    // intentionally excluded from alerts/tracking so vertical one-way noise does
+    // not crowd the radar.
+    trackingAllowed: status !== 'dangerous' && status !== 'ignored',
     status,
     reasons,
     pendingReasons: uniquePendingReasons,
     dangerReasons: uniqueDangerReasons,
+    ignoredReasons: ignored.reasons,
     emergency: status === 'dangerous',
     emergencyReasons: uniqueDangerReasons
   };
