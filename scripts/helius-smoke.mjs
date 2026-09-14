@@ -10,7 +10,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function rpc(method, params = []) {
   let lastError;
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
+  for (let attempt = 1; attempt <= 6; attempt += 1) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
     try {
@@ -32,8 +32,8 @@ async function rpc(method, params = []) {
     } catch (error) {
       lastError = error;
       const transient = error?.retryable === true || error?.name === 'AbortError' || /fetch failed/i.test(String(error?.message ?? ''));
-      if (!transient || attempt === 4) throw error;
-      await wait(750 * attempt);
+      if (!transient || attempt === 6) throw error;
+      await wait(Math.min(8_000, 1_000 * (2 ** (attempt - 1))));
     } finally {
       clearTimeout(timer);
     }
@@ -43,7 +43,9 @@ async function rpc(method, params = []) {
 
 try {
   const started = Date.now();
-  const [health, slot] = await Promise.all([rpc('getHealth'), rpc('getSlot')]);
+  const health = await rpc('getHealth');
+  await wait(1_250);
+  const slot = await rpc('getSlot');
   const elapsedMs = Date.now() - started;
 
   if (health !== 'ok') throw new Error(`Unexpected health response: ${JSON.stringify(health)}`);
