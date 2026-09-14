@@ -1,3 +1,4 @@
+import './telegramBoldFetch.mjs';
 import { env } from './config/env.mjs';
 import './index.mjs';
 import { startMomentumAlertWorker } from './signals/momentumAlertWorker.mjs';
