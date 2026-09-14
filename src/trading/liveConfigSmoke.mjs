@@ -102,11 +102,12 @@ export async function runLiveConfigSmoke(env) {
   if (!Number.isFinite(lamports) || lamports < 0) throw new Error('Helius returned an invalid balance');
   console.log(JSON.stringify({ ok: true, check: 'helius-wallet-read', balanceSol: lamports / 1e9 }));
 
+  // Deliberately omit `taker`: Jupiter returns a quote without assembling a transaction.
+  // This validates the API key + route while remaining read-only even when the wallet has 0 SOL.
   const params = new URLSearchParams({
     inputMint: SOL_MINT,
     outputMint: USDC_MINT,
-    amount: '1000000',
-    taker: walletAddress
+    amount: '100000000'
   });
   const jupiter = await fetchJson(`https://api.jup.ag/swap/v2/order?${params}`, {
     headers: { 'x-api-key': jupiterApiKey, accept: 'application/json' }
@@ -115,16 +116,20 @@ export async function runLiveConfigSmoke(env) {
     throw new Error(`Jupiter API key rejected with HTTP ${jupiter.response.status}`);
   }
   if (!jupiter.response.ok) {
-    throw new Error(`Jupiter order build HTTP ${jupiter.response.status}: ${jupiter.body?.errorMessage ?? jupiter.body?.error ?? 'request failed'}`);
+    throw new Error(`Jupiter quote HTTP ${jupiter.response.status}: ${jupiter.body?.errorMessage ?? jupiter.body?.error ?? 'request failed'}`);
   }
-  if (!jupiter.body?.requestId) throw new Error('Jupiter order response missing requestId');
-  if (!jupiter.body?.transaction) throw new Error('Jupiter order response missing unsigned transaction');
+  if (!jupiter.body?.requestId) throw new Error('Jupiter quote response missing requestId');
+  if (!String(jupiter.body?.outAmount ?? '').match(/^\d+$/) || BigInt(jupiter.body.outAmount) <= 0n) {
+    throw new Error(`Jupiter quote response missing a valid outAmount: ${jupiter.body?.errorMessage ?? 'unknown response'}`);
+  }
   console.log(JSON.stringify({
     ok: true,
-    check: 'jupiter-order-build',
+    check: 'jupiter-quote-only',
     router: jupiter.body.router ?? null,
     mode: jupiter.body.mode ?? null,
-    transactionBuilt: true,
+    quoted: true,
+    transactionBuilt: false,
+    signed: false,
     executed: false
   }));
 
