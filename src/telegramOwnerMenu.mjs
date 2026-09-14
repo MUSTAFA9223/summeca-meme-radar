@@ -1,8 +1,10 @@
 import { env } from './config/env.mjs';
+import { AppSettings } from './storage/appSettings.mjs';
 import { TelegramAccess } from './storage/telegramAccess.mjs';
 
 const previousFetch = globalThis.fetch.bind(globalThis);
 const access = new TelegramAccess(env.supabaseUrl, env.supabaseSecretKey);
+const settings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
 
 let ownerCache = { chatId: '', expiresAt: 0 };
 
@@ -18,7 +20,10 @@ function telegramBase(url) {
 
 async function ownerChatId() {
   if (ownerCache.expiresAt > Date.now() && ownerCache.chatId) return ownerCache.chatId;
-  const chatId = await access.ownerChatId().catch(() => '');
+  let chatId = await access.ownerChatId().catch(() => '');
+  if (!chatId && settings.enabled) {
+    chatId = await settings.get('telegram_chat_id').catch(() => '');
+  }
   ownerCache = { chatId: String(chatId ?? ''), expiresAt: Date.now() + 60_000 };
   return ownerCache.chatId;
 }
@@ -235,7 +240,10 @@ globalThis.fetch = async (input, init = {}) => {
 async function pushOwnerPanelOnStartup() {
   if (!env.telegramBotToken || !access.enabled) return;
   const ownerId = await ownerChatId();
-  if (!ownerId) return;
+  if (!ownerId) {
+    console.warn('[telegram:owner-panel] owner chat not resolved');
+    return;
+  }
   const base = `https://api.telegram.org/bot${env.telegramBotToken}`;
   await telegramCall(base, 'sendMessage', {
     chat_id: ownerId,
