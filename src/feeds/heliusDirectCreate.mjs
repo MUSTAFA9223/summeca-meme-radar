@@ -1,5 +1,6 @@
 const PUMP_FUN_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const pubkey = (value) => {
@@ -35,9 +36,7 @@ export function extractPumpCreateMint(transaction, programId = PUMP_FUN_PROGRAM_
   return newMint ?? null;
 }
 
-async function rpc(apiKey, method, params, timeoutMs = 6000) {
-  if (!apiKey) throw new Error('HELIUS_API_KEY is required for direct create mode');
-  const endpoint = `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
+async function rpcAt(endpoint, method, params, timeoutMs = 6000, provider = 'Solana RPC') {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -47,12 +46,26 @@ async function rpc(apiKey, method, params, timeoutMs = 6000) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', id: 'summeca-direct-create', method, params })
     });
-    if (!response.ok) throw new Error(`Helius ${method} HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`${provider} ${method} HTTP ${response.status}`);
     const body = await response.json();
-    if (body?.error) throw new Error(`Helius ${method} ${body.error.code}: ${body.error.message}`);
+    if (body?.error) throw new Error(`${provider} ${method} ${body.error.code}: ${body.error.message}`);
     return body?.result ?? null;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function rpc(apiKey, method, params, timeoutMs = 6000) {
+  if (!apiKey) return rpcAt(PUBLIC_SOLANA_RPC, method, params, timeoutMs, 'Public Solana RPC');
+  const helius = `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
+  try {
+    return await rpcAt(helius, method, params, timeoutMs, 'Helius');
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    const transient = /HTTP 429|HTTP 5\d\d|fetch failed|aborted|timeout/i.test(message);
+    if (!transient) throw error;
+    console.warn(`[direct-create:rpc-fallback] ${message}; using public Solana RPC`);
+    return rpcAt(PUBLIC_SOLANA_RPC, method, params, timeoutMs, 'Public Solana RPC');
   }
 }
 
