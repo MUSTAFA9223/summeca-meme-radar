@@ -1,7 +1,14 @@
 const PUMP_FUN_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const PUBLICNODE_SOLANA_RPC = 'https://solana-rpc.publicnode.com';
 const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
+const PUBLIC_RPC_MIN_INTERVAL_MS = 350;
+const HELIUS_BACKOFF_MS = 60_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+let publicRpcTail = Promise.resolve();
+let publicRpcNextAt = 0;
+let heliusRateLimitedUntil = 0;
 
 const pubkey = (value) => {
   if (typeof value === 'string') return value;
@@ -55,8 +62,33 @@ async function rpcAt(endpoint, method, params, timeoutMs = 6000, provider = 'Sol
   }
 }
 
+function queuedPublicRpc(endpoint, method, params, timeoutMs, provider) {
+  const task = publicRpcTail.then(async () => {
+    const waitMs = Math.max(0, publicRpcNextAt - Date.now());
+    if (waitMs) await sleep(waitMs);
+    publicRpcNextAt = Date.now() + PUBLIC_RPC_MIN_INTERVAL_MS;
+    return rpcAt(endpoint, method, params, timeoutMs, provider);
+  });
+  publicRpcTail = task.catch(() => undefined);
+  return task;
+}
+
+async function publicReadRpc(method, params, timeoutMs = 6000) {
+  try {
+    return await queuedPublicRpc(PUBLICNODE_SOLANA_RPC, method, params, timeoutMs, 'PublicNode Solana RPC');
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    const transient = /HTTP 429|HTTP 5\d\d|fetch failed|aborted|timeout/i.test(message);
+    if (!transient) throw error;
+    return queuedPublicRpc(PUBLIC_SOLANA_RPC, method, params, timeoutMs, 'Public Solana RPC');
+  }
+}
+
 async function rpc(apiKey, method, params, timeoutMs = 6000) {
-  if (!apiKey) return rpcAt(PUBLIC_SOLANA_RPC, method, params, timeoutMs, 'Public Solana RPC');
+  if (!apiKey || Date.now() < heliusRateLimitedUntil) {
+    return publicReadRpc(method, params, timeoutMs);
+  }
+
   const helius = `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
   try {
     return await rpcAt(helius, method, params, timeoutMs, 'Helius');
@@ -64,14 +96,15 @@ async function rpc(apiKey, method, params, timeoutMs = 6000) {
     const message = String(error?.message ?? error);
     const transient = /HTTP 429|HTTP 5\d\d|fetch failed|aborted|timeout/i.test(message);
     if (!transient) throw error;
-    console.warn(`[direct-create:rpc-fallback] ${message}; using public Solana RPC`);
-    return rpcAt(PUBLIC_SOLANA_RPC, method, params, timeoutMs, 'Public Solana RPC');
+    if (/HTTP 429/i.test(message)) heliusRateLimitedUntil = Date.now() + HELIUS_BACKOFF_MS;
+    console.warn(`[direct-create:rpc-fallback] ${message}; using throttled read-only RPC fallback`);
+    return publicReadRpc(method, params, timeoutMs);
   }
 }
 
 export async function resolvePumpCreateMint(apiKey, signature, {
-  retries = 7,
-  retryDelayMs = 350,
+  retries = 3,
+  retryDelayMs = 500,
   programId = PUMP_FUN_PROGRAM_ID
 } = {}) {
   const sig = String(signature ?? '').trim();
