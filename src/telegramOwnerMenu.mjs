@@ -42,24 +42,41 @@ function hasCallback(markup, callbackData) {
   ));
 }
 
+function adminKeyboard() {
+  return {
+    inline_keyboard: [[
+      { text: '🔐 إنشاء كود تفعيل', callback_data: 'admin:code' },
+      { text: '👥 المستخدمون', callback_data: 'admin:users' }
+    ]]
+  };
+}
+
 function withOwnerAdminButtons(payload, ownerId) {
   if (!payload || String(payload.chat_id ?? '') !== String(ownerId)) return payload;
-  if (!hasCallback(payload.reply_markup, 'menu:status')) return payload;
   if (hasCallback(payload.reply_markup, 'admin:code')) return payload;
+
+  const text = String(payload.text ?? payload.caption ?? '');
+  const isMainMenu = hasCallback(payload.reply_markup, 'menu:status')
+    || /SUMMECA Meme Radar/i.test(text);
+  if (!isMainMenu) return payload;
 
   const keyboard = Array.isArray(payload.reply_markup?.inline_keyboard)
     ? payload.reply_markup.inline_keyboard.map((row) => [...row])
     : [];
-
-  keyboard.push([
-    { text: '🔐 إنشاء كود تفعيل', callback_data: 'admin:code' },
-    { text: '👥 المستخدمون', callback_data: 'admin:users' }
-  ]);
+  keyboard.push(...adminKeyboard().inline_keyboard);
 
   return {
     ...payload,
     reply_markup: { ...(payload.reply_markup ?? {}), inline_keyboard: keyboard }
   };
+}
+
+async function sendOwnerPanel(base, ownerId) {
+  return telegramCall(base, 'sendMessage', {
+    chat_id: ownerId,
+    text: '🛠️ لوحة المالك — SUMMECA\n\nإدارة أكواد التفعيل والمستخدمين:',
+    reply_markup: adminKeyboard()
+  });
 }
 
 async function sendCodeMenu(base, ownerId) {
@@ -75,7 +92,8 @@ async function sendCodeMenu(base, ownerId) {
         [
           { text: '30 يوم', callback_data: 'admin:code:30' },
           { text: '90 يوم', callback_data: 'admin:code:90' }
-        ]
+        ],
+        [{ text: '⬅️ لوحة المالك', callback_data: 'admin:home' }]
       ]
     }
   });
@@ -86,7 +104,8 @@ async function createActivationCode(base, ownerId, days) {
   const duration = created.accessDays ? `${created.accessDays} يوم` : 'دائم';
   return telegramCall(base, 'sendMessage', {
     chat_id: ownerId,
-    text: `🔐 كود تفعيل جديد\n\n${created.code}\n\nالمدة بعد التفعيل: ${duration}\nالاستخدام: مرة واحدة فقط\n\nأرسل الكود للمستخدم، ثم يفتح البوت ويرسل:\n/activate ${created.code}`
+    text: `🔐 كود تفعيل جديد\n\n${created.code}\n\nالمدة بعد التفعيل: ${duration}\nالاستخدام: مرة واحدة فقط\n\nأرسل الكود للمستخدم، ثم يفتح البوت ويرسل:\n/activate ${created.code}`,
+    reply_markup: adminKeyboard()
   });
 }
 
@@ -100,49 +119,54 @@ async function showUsers(base, ownerId) {
   });
   return telegramCall(base, 'sendMessage', {
     chat_id: ownerId,
-    text: `👥 المستخدمون (${users.length})\n\n${lines.join('\n') || 'لا يوجد مستخدمون.'}`
+    text: `👥 المستخدمون (${users.length})\n\n${lines.join('\n') || 'لا يوجد مستخدمون.'}`,
+    reply_markup: adminKeyboard()
   });
 }
 
-async function consumeOwnerCallback(update, base, ownerId) {
+async function consumeOwnerUpdate(update, base, ownerId) {
   const callback = update?.callback_query;
-  const chatId = String(callback?.message?.chat?.id ?? '');
+  const callbackChatId = String(callback?.message?.chat?.id ?? '');
   const data = String(callback?.data ?? '');
-  if (!callback || chatId !== String(ownerId) || !data.startsWith('admin:')) return false;
 
-  try {
-    await telegramCall(base, 'answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
-
-    if (data === 'admin:code') {
-      await sendCodeMenu(base, ownerId);
-      return true;
+  if (callback && callbackChatId === String(ownerId) && data.startsWith('admin:')) {
+    try {
+      await telegramCall(base, 'answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
+      if (data === 'admin:home') await sendOwnerPanel(base, ownerId);
+      else if (data === 'admin:code') await sendCodeMenu(base, ownerId);
+      else if (data === 'admin:users') await showUsers(base, ownerId);
+      else if (data === 'admin:code:permanent') await createActivationCode(base, ownerId, null);
+      else {
+        const match = data.match(/^admin:code:(7|30|90)$/);
+        if (match) await createActivationCode(base, ownerId, Number(match[1]));
+      }
+    } catch (error) {
+      await telegramCall(base, 'sendMessage', {
+        chat_id: ownerId,
+        text: `تعذر تنفيذ أمر الإدارة: ${error.message}`
+      }).catch(() => {});
     }
-    if (data === 'admin:users') {
-      await showUsers(base, ownerId);
-      return true;
-    }
-    if (data === 'admin:code:permanent') {
-      await createActivationCode(base, ownerId, null);
-      return true;
-    }
-
-    const match = data.match(/^admin:code:(7|30|90)$/);
-    if (match) {
-      await createActivationCode(base, ownerId, Number(match[1]));
-      return true;
-    }
-  } catch (error) {
-    await telegramCall(base, 'sendMessage', {
-      chat_id: ownerId,
-      text: `تعذر تنفيذ أمر الإدارة: ${error.message}`
-    }).catch(() => {});
     return true;
   }
 
-  return true;
+  const message = update?.message ?? update?.edited_message;
+  const messageChatId = String(message?.chat?.id ?? '');
+  const text = String(message?.text ?? '').trim();
+  if (message && messageChatId === String(ownerId)) {
+    if (/^\/admin(?:@\w+)?\s*$/i.test(text)) {
+      await sendOwnerPanel(base, ownerId).catch((error) => console.error('[telegram:owner-panel]', error.message));
+      return true;
+    }
+    if (/^\/(?:start|menu)(?:@\w+)?(?:\s|$)/i.test(text)) {
+      await sendOwnerPanel(base, ownerId).catch((error) => console.error('[telegram:owner-panel]', error.message));
+      return false;
+    }
+  }
+
+  return false;
 }
 
-async function filterOwnerCallbacks(response, base) {
+async function filterOwnerUpdates(response, base) {
   if (!access.enabled) return response;
   let payload;
   try {
@@ -160,7 +184,7 @@ async function filterOwnerCallbacks(response, base) {
   const highestUpdateId = original.reduce((max, update) => Math.max(max, Number(update?.update_id ?? 0)), 0);
 
   for (const update of original) {
-    if (await consumeOwnerCallback(update, base, ownerId)) continue;
+    if (await consumeOwnerUpdate(update, base, ownerId)) continue;
     kept.push(update);
   }
 
@@ -185,7 +209,7 @@ globalThis.fetch = async (input, init = {}) => {
 
   if (method === 'getUpdates') {
     const response = await previousFetch(input, init);
-    return filterOwnerCallbacks(response, base);
+    return filterOwnerUpdates(response, base);
   }
 
   if (method === 'sendMessage' && typeof init?.body === 'string') {
@@ -197,7 +221,7 @@ globalThis.fetch = async (input, init = {}) => {
         return previousFetch(input, { ...init, body: JSON.stringify(enhanced) });
       }
     } catch {
-      // Keep the original Telegram request if the payload is not JSON.
+      // Preserve the original Telegram request on parsing or lookup errors.
     }
   }
 
