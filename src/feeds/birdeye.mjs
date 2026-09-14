@@ -1,6 +1,8 @@
+import { SolanaRpcClient } from '../trading/solanaRpc.mjs';
 import { drainDirectCreates } from './directCreateQueue.mjs';
 
 const BASE_URL = 'https://public-api.birdeye.so';
+const directSecurityRpc = new SolanaRpcClient({ heliusApiKey: process.env.HELIUS_API_KEY });
 
 const rawMaxRpm = Number(process.env.BIRDEYE_MAX_RPM ?? 50);
 const MAX_RPM = Number.isFinite(rawMaxRpm) ? Math.max(1, Math.min(55, Math.floor(rawMaxRpm))) : 50;
@@ -282,13 +284,20 @@ export async function fetchRecentTradeSummary(apiKey, address, { nowMs = Date.no
 
 export async function enrichTokenSnapshot(apiKey, base, { includeSecurity = true } = {}) {
   const jobs = [fetchTokenOverview(apiKey, base.address), fetchRecentTradeSummary(apiKey, base.address)];
-  if (includeSecurity) jobs.push(fetchTokenSecurity(apiKey, base.address));
+  if (includeSecurity) {
+    jobs.push(fetchTokenSecurity(apiKey, base.address));
+    jobs.push(directSecurityRpc.getMintSecurity(base.address));
+  }
   const results = await Promise.allSettled(jobs);
   const overview = results[0]?.status === 'fulfilled' ? results[0].value : {};
   const flow = results[1]?.status === 'fulfilled' ? results[1].value : {};
   const security = includeSecurity && results[2]?.status === 'fulfilled' ? results[2].value : {};
+  const onchainSecurity = includeSecurity && results[3]?.status === 'fulfilled' ? results[3].value : {};
   if (includeSecurity && results[2]?.status === 'rejected') {
     console.warn(`[birdeye:security] ${base.address} ${results[2].reason?.message ?? results[2].reason ?? 'request failed'}`);
   }
-  return { ...base, ...overview, ...flow, ...security, observedAt: Date.now() };
+  if (includeSecurity && results[3]?.status === 'rejected') {
+    console.warn(`[solana:security] ${base.address} ${results[3].reason?.message ?? results[3].reason ?? 'request failed'}`);
+  }
+  return { ...base, ...overview, ...flow, ...security, ...onchainSecurity, observedAt: Date.now() };
 }
