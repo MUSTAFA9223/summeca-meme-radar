@@ -76,16 +76,17 @@ const ignoredLaunchPattern = (snapshot = {}) => {
   const s = normalizeMomentumSnapshot(snapshot);
   const fresh = s.ageSec != null && s.ageSec <= 15 * 60;
   const peakChange = Math.max(s.priceChange5mPct, s.priceChange1hPct);
-  const oneWayFlow = s.buys30s >= 8 && s.sells30s < 1;
+  const ratio = s.buys30s / Math.max(1, s.sells30s);
+  const dominantBuyFlow = s.buys30s >= 8 && (s.sells30s < 1 || ratio >= 8);
   const oversized = s.marketCapUsd >= 1_000_000;
   const stretchedValuation = s.liquidityUsd > 0 && s.marketCapUsd / s.liquidityUsd >= 25;
   const knownConcentration = s.top10HolderPct > 40 || s.insiderPct > 10 || s.bundlerPct > 12 || s.creatorPct > 8;
-  const freshVerticalNoSell = fresh && oneWayFlow && oversized && peakChange >= 1000;
-  const freshStretchedNoSell = fresh && oneWayFlow && oversized && stretchedValuation && peakChange >= 300;
+  const freshVerticalDominance = fresh && dominantBuyFlow && oversized && peakChange >= 1000;
+  const freshStretchedDominance = fresh && dominantBuyFlow && oversized && stretchedValuation && peakChange >= 300;
   const reasons = [];
   if (knownConcentration) reasons.push('concentrated insider/holder launch');
-  if (freshVerticalNoSell) reasons.push(`fresh vertical spike ${peakChange.toFixed(0)}% with no verified sell`);
-  if (freshStretchedNoSell) reasons.push('fresh stretched valuation with one-way buy flow');
+  if (freshVerticalDominance) reasons.push(`fresh vertical spike ${peakChange.toFixed(0)}% with extreme buy dominance`);
+  if (freshStretchedDominance) reasons.push('fresh stretched valuation with extreme buy dominance');
   return { ignored: reasons.length > 0, reasons, normalized: s };
 };
 
