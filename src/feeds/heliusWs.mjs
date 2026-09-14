@@ -4,9 +4,15 @@ import { PUMP_FUN_PROGRAM_ID, resolvePumpCreateMint } from './heliusDirectCreate
 
 export { PUMP_FUN_PROGRAM_ID };
 
+const PUBLIC_SOLANA_WS = 'wss://api.mainnet-beta.solana.com';
+
 export function createHeliusWsUrl(apiKey) {
   if (!apiKey) throw new Error('HELIUS_API_KEY is required for WebSocket streaming');
   return `wss://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
+}
+
+export function createPublicSolanaWsUrl() {
+  return PUBLIC_SOLANA_WS;
 }
 
 export function buildLogsSubscribeRequest(programId, id = 1, commitment = 'processed') {
@@ -59,6 +65,8 @@ export class HeliusProgramStream {
     this.requestToProgram = new Map();
     this.subscriptionToProgram = new Map();
     this.directSeen = new Set();
+    this.usePublicFallback = false;
+    this.currentProvider = 'helius';
   }
 
   start() {
@@ -120,7 +128,7 @@ export class HeliusProgramStream {
       enqueueDirectCreate(base);
       eventPayload.mint = mint;
       eventPayload.directCreate = true;
-      this.logger.log(`[direct-create] detected mint=${mint.slice(0, 8)}… slot=${eventPayload.slot}`);
+      this.logger.log(`[direct-create] detected mint=${mint.slice(0, 8)}… slot=${eventPayload.slot} via=${eventPayload.provider}`);
 
       void fetchHeliusAssetMetadata(this.apiKey, mint)
         .then((metadata) => {
@@ -140,13 +148,17 @@ export class HeliusProgramStream {
     this.requestToProgram.clear();
     this.subscriptionToProgram.clear();
 
-    const ws = new WebSocket(createHeliusWsUrl(this.apiKey));
+    const usingPublic = this.usePublicFallback;
+    const provider = usingPublic ? 'solana-public' : 'helius';
+    const wsUrl = usingPublic ? createPublicSolanaWsUrl() : createHeliusWsUrl(this.apiKey);
+    const ws = new WebSocket(wsUrl);
     this.ws = ws;
+    this.currentProvider = provider;
 
     ws.addEventListener('open', () => {
       this.reconnectAttempt = 0;
       this.lastMessageAt = Date.now();
-      this.logger.log(`[helius-ws] connected; subscribing to ${this.programIds.length} program(s)`);
+      this.logger.log(`[helius-ws] connected provider=${provider}; subscribing to ${this.programIds.length} program(s)`);
 
       this.programIds.forEach((programId, index) => {
         const id = 100 + index;
@@ -158,7 +170,7 @@ export class HeliusProgramStream {
       this.watchdogTimer = setInterval(() => {
         if (!this.active || this.ws !== ws) return;
         if (Date.now() - this.lastMessageAt > this.staleAfterMs) {
-          this.logger.warn('[helius-ws] stream stale; reconnecting');
+          this.logger.warn(`[helius-ws] stream stale provider=${provider}; reconnecting`);
           ws.close(4000, 'stale stream');
         }
       }, Math.max(10_000, Math.floor(this.staleAfterMs / 3)));
@@ -177,8 +189,14 @@ export class HeliusProgramStream {
         const programId = this.requestToProgram.get(Number(message.id));
         if (programId) {
           this.subscriptionToProgram.set(message.result, programId);
-          this.logger.log(`[helius-ws] subscribed ${programId.slice(0, 8)}… id=${message.result}`);
+          this.logger.log(`[helius-ws] subscribed provider=${provider} ${programId.slice(0, 8)}… id=${message.result}`);
         }
+        return;
+      }
+
+      if (message?.id !== undefined && message?.error) {
+        this.logger.warn(`[helius-ws] subscription error provider=${provider}: ${message.error.message ?? 'unknown error'}`);
+        try { ws.close(4001, 'subscription error'); } catch {}
         return;
       }
 
@@ -188,7 +206,7 @@ export class HeliusProgramStream {
       const value = message?.params?.result?.value ?? {};
       const logs = Array.isArray(value.logs) ? value.logs : [];
       const eventPayload = {
-        provider: 'helius',
+        provider,
         programId,
         subscriptionId,
         signature: value.signature ?? '',
@@ -206,7 +224,8 @@ export class HeliusProgramStream {
     });
 
     ws.addEventListener('error', () => {
-      this.logger.warn('[helius-ws] connection error');
+      this.logger.warn(`[helius-ws] connection error provider=${provider}`);
+      try { ws.close(4002, 'connection error'); } catch {}
     });
 
     ws.addEventListener('close', (event) => {
@@ -214,9 +233,11 @@ export class HeliusProgramStream {
       this.watchdogTimer = null;
       if (!this.active || this.ws !== ws) return;
       this.ws = null;
+      this.usePublicFallback = !usingPublic;
       const delay = Math.min(this.reconnectMaxMs, this.reconnectMinMs * (2 ** this.reconnectAttempt));
       this.reconnectAttempt += 1;
-      this.logger.warn(`[helius-ws] closed code=${event.code}; reconnecting in ${delay}ms`);
+      const nextProvider = this.usePublicFallback ? 'solana-public' : 'helius';
+      this.logger.warn(`[helius-ws] closed provider=${provider} code=${event.code}; next=${nextProvider} in ${delay}ms`);
       this.reconnectTimer = setTimeout(() => this.#connect(), delay);
     });
   }
