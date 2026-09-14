@@ -22,6 +22,7 @@ const ignoredLaunchPattern = (snapshot = {}) => {
   const fresh = ageSec != null && ageSec <= 15 * 60;
   const buys = num(snapshot.buys30s ?? snapshot.buys_30s);
   const sells = num(snapshot.sells30s ?? snapshot.sells_30s);
+  const ratio = buys / Math.max(1, sells);
   const marketCap = num(snapshot.marketCapUsd ?? snapshot.market_cap_usd);
   const liquidity = num(snapshot.liquidityUsd ?? snapshot.liquidity_usd);
   const price5m = num(snapshot.priceChange5mPct ?? raw.priceChange5mPct);
@@ -31,17 +32,17 @@ const ignoredLaunchPattern = (snapshot = {}) => {
   const bundler = num(snapshot.bundlerPct ?? snapshot.bundler_pct);
   const creator = num(snapshot.creatorPct ?? snapshot.creator_pct ?? snapshot.devPct);
   const peakChange = Math.max(price5m, price1h);
-  const oneWayFlow = buys >= 8 && sells < 1;
+  const dominantBuyFlow = buys >= 8 && (sells < 1 || ratio >= 8);
   const oversized = marketCap >= 1_000_000;
   const stretchedValuation = liquidity > 0 && marketCap / liquidity >= 25;
   const extremeVertical = peakChange >= 1000;
   const knownConcentration = top10 > 40 || insider > 10 || bundler > 12 || creator > 8;
-  const freshVerticalNoSell = fresh && oneWayFlow && oversized && extremeVertical;
-  const freshStretchedNoSell = fresh && oneWayFlow && oversized && stretchedValuation && peakChange >= 300;
+  const freshVerticalDominance = fresh && dominantBuyFlow && oversized && extremeVertical;
+  const freshStretchedDominance = fresh && dominantBuyFlow && oversized && stretchedValuation && peakChange >= 300;
   const reasons = [];
   if (knownConcentration) reasons.push('concentrated insider/holder launch');
-  if (freshVerticalNoSell) reasons.push(`fresh vertical spike ${peakChange.toFixed(0)}% with no verified sell`);
-  if (freshStretchedNoSell) reasons.push('fresh stretched valuation with one-way buy flow');
+  if (freshVerticalDominance) reasons.push(`fresh vertical spike ${peakChange.toFixed(0)}% with extreme buy dominance`);
+  if (freshStretchedDominance) reasons.push('fresh stretched valuation with extreme buy dominance');
   return { ignored: reasons.length > 0, reasons };
 };
 
