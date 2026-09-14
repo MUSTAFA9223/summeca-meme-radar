@@ -62,11 +62,22 @@ test('fails closed when mint/freeze authority checks are not explicit', () => {
   assert.ok(result.reasons.includes('freeze authority not verified disabled'));
 });
 
+test('direct Solana mint-security failure cannot be overridden by provider metadata', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    onchainSecurityVerified: false,
+    securitySource: 'solana-rpc'
+  }, safeScores);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.includes('on-chain mint security not verified'));
+});
+
 test('blocks non-transferable Token-2022 assets', () => {
   const result = evaluateSignalSafety({
     ...safeSnapshot,
     honeypot: undefined,
     isToken2022: true,
+    token2022ExtensionsVerified: true,
     nonTransferable: true,
     transferFeeEnable: false
   }, safeScores);
@@ -80,12 +91,42 @@ test('blocks Token-2022 transfer fee assets from automatic entry', () => {
     ...safeSnapshot,
     honeypot: undefined,
     isToken2022: true,
+    token2022ExtensionsVerified: true,
     nonTransferable: false,
     transferFeeEnable: true
   }, safeScores);
   assert.equal(result.ok, false);
   assert.ok(result.reasons.includes('Token-2022 transfer fee enabled'));
   assert.equal(result.emergency, true);
+});
+
+test('blocks any other directly detected risky Token-2022 extension', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    honeypot: undefined,
+    isToken2022: true,
+    token2022ExtensionsVerified: true,
+    nonTransferable: false,
+    transferFeeEnable: false,
+    onchainSecurityVerified: false,
+    token2022UnsafeExtensions: ['permanentDelegate']
+  }, safeScores);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.includes('Token-2022 risky extension: permanentDelegate'));
+  assert.equal(result.emergency, true);
+});
+
+test('fails closed when Token-2022 extension parsing is unavailable', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    honeypot: undefined,
+    isToken2022: true,
+    token2022ExtensionsVerified: false,
+    nonTransferable: false,
+    transferFeeEnable: false
+  }, safeScores);
+  assert.equal(result.ok, false);
+  assert.ok(result.reasons.includes('Token-2022 extensions not verified'));
 });
 
 test('blocks dangerous known holder concentration', () => {
