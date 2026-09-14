@@ -1,4 +1,5 @@
 import './telegramBoldFetch.mjs';
+import './telegramOwnerMenu.mjs';
 import { env } from './config/env.mjs';
 import './index.mjs';
 import { startEvmRadarWorker } from './signals/evmRadarWorker.mjs';
