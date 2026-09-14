@@ -79,20 +79,46 @@ export function isRisingMomentum(snapshot = {}) {
 
 export function persistedSafety(snapshot = {}) {
   const s = normalizeMomentumSnapshot(snapshot);
-  const reasons = [];
+  const pendingReasons = [];
+  const dangerReasons = [];
   const trades = s.buys30s + s.sells30s;
-  if (!(s.priceUsd > 0)) reasons.push('price unavailable');
-  if (!s.marketDataVerified) reasons.push('market data not verified');
-  if (!s.securityVerified) reasons.push('security not verified');
-  if (s.honeypot !== false) reasons.push('honeypot not explicitly safe');
-  if (s.mintAuthorityDisabled !== true) reasons.push('mint authority not verified disabled');
-  if (s.freezeAuthorityDisabled !== true) reasons.push('freeze authority not verified disabled');
-  if (!(trades >= 5 || s.volume5mUsd >= 1000)) reasons.push('insufficient verified trading activity');
-  if (s.sells30s < 1) reasons.push('no verified sell observed');
-  if (s.riskScore > 35) reasons.push(`risk ${Math.round(s.riskScore)}/100`);
-  if (s.top10HolderPct > 40) reasons.push('top-10 concentration');
-  if (s.creatorPct > 8) reasons.push('creator concentration');
-  return { ok: reasons.length === 0, reasons, normalized: s };
+
+  if (!(s.priceUsd > 0)) pendingReasons.push('price unavailable');
+  if (!s.marketDataVerified) pendingReasons.push('market data not verified');
+  if (!s.securityVerified) pendingReasons.push('security not verified');
+
+  // Missing provider fields are pending evidence, not proof of a scam.
+  if (s.honeypot === true) dangerReasons.push('honeypot flag');
+  if (s.mintAuthorityDisabled === false) dangerReasons.push('mint authority active');
+  else if (s.securityVerified && s.mintAuthorityDisabled !== true) pendingReasons.push('mint authority not verified disabled');
+  if (s.freezeAuthorityDisabled === false) dangerReasons.push('freeze authority active');
+  else if (s.securityVerified && s.freezeAuthorityDisabled !== true) pendingReasons.push('freeze authority not verified disabled');
+
+  if (!(trades >= 5 || s.volume5mUsd >= 1000)) pendingReasons.push('insufficient verified trading activity');
+  if (s.sells30s < 1) pendingReasons.push('no verified sell observed');
+  if (s.riskScore > 35) pendingReasons.push(`risk ${Math.round(s.riskScore)}/100`);
+  if (s.top10HolderPct > 40) dangerReasons.push('top-10 concentration');
+  if (s.creatorPct > 8) dangerReasons.push('creator concentration');
+
+  const uniqueDangerReasons = [...new Set(dangerReasons)];
+  const uniquePendingReasons = [...new Set(pendingReasons)].filter((reason) => !uniqueDangerReasons.includes(reason));
+  const status = uniqueDangerReasons.length > 0
+    ? 'dangerous'
+    : uniquePendingReasons.length > 0
+      ? 'unknown'
+      : 'safe';
+  const reasons = [...uniqueDangerReasons, ...uniquePendingReasons];
+
+  return {
+    ok: status === 'safe',
+    entryAllowed: status === 'safe',
+    trackingAllowed: status !== 'dangerous',
+    status,
+    reasons,
+    pendingReasons: uniquePendingReasons,
+    dangerReasons: uniqueDangerReasons,
+    normalized: s
+  };
 }
 
 export function momentumScore(snapshot = {}) {
@@ -116,7 +142,12 @@ export function entryQuality(snapshot = {}) {
   const s = normalizeMomentumSnapshot(snapshot);
   const safety = persistedSafety(snapshot);
   const momentum = momentumScore(snapshot);
-  if (!safety.ok) return { key: 'blocked', ar: '⛔ غير معتمد', en: '⛔ Blocked', momentum, reasons: safety.reasons };
+  if (safety.status === 'dangerous') {
+    return { key: 'blocked', ar: '⛔ خطر مؤكد — متابعة فقط', en: '⛔ Confirmed risk — tracking only', momentum, reasons: safety.reasons };
+  }
+  if (safety.status === 'unknown') {
+    return { key: 'pending', ar: '⚠️ الأمان قيد التحقق — متابعة فقط', en: '⚠️ Safety pending — tracking only', momentum, reasons: safety.reasons };
+  }
   const late = s.priceChange5mPct >= 70 || (s.ageSec != null && s.ageSec > 600);
   if (late) return { key: 'late', ar: '⚠️ الدخول متأخر', en: '⚠️ Entry late', momentum, reasons: [] };
   if (momentum >= 82 && s.entryScore >= 85 && (s.ageSec == null || s.ageSec <= 240)) {
