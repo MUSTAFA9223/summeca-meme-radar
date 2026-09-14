@@ -65,8 +65,8 @@ export class HeliusProgramStream {
     this.requestToProgram = new Map();
     this.subscriptionToProgram = new Map();
     this.directSeen = new Set();
-    this.usePublicFallback = false;
-    this.currentProvider = 'helius';
+    this.usePublicFallback = true;
+    this.currentProvider = 'solana-public';
   }
 
   start() {
