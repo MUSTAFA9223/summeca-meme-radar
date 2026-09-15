@@ -29,6 +29,14 @@ const bestPair = (pairs, address) => (Array.isArray(pairs) ? pairs : [])
   .filter((pair) => pair?.chainId === 'solana' && (pair?.baseToken?.address === address || pair?.quoteToken?.address === address))
   .sort((a, b) => pairScore(b) - pairScore(a))[0];
 
+const freshAcceleration = ({ trades5, volume5mUsd, observedWindowSec }) => {
+  const windows30 = Math.max(1, observedWindowSec / 30);
+  return {
+    buyerAcceleration: Math.min(10, Math.max(0, trades5) / Math.max(1, windows30 * 1.5)),
+    volumeAcceleration: Math.min(10, Math.max(0, volume5mUsd) / Math.max(250, windows30 * 350))
+  };
+};
+
 const snapshotFromPair = (base, pair) => {
   if (!pair) return {};
   const address = String(base?.address ?? '').trim();
@@ -58,6 +66,7 @@ const snapshotFromPair = (base, pair) => {
   const previousTrade5mAvg = Math.max(1, (trades1h - trades5) / 11);
   const previousVolume5mAvg = Math.max(1, (volume1hUsd - volume5mUsd) / 11);
   const hasHistory = ageSec >= 360;
+  const fresh = freshAcceleration({ trades5, volume5mUsd, observedWindowSec });
   const token = tokenSide(pair, address);
 
   return {
@@ -75,8 +84,8 @@ const snapshotFromPair = (base, pair) => {
     volume5mUsd,
     priceChange5mPct: num(pair?.priceChange?.m5),
     priceChange1hPct: num(pair?.priceChange?.h1),
-    buyerAcceleration: hasHistory ? trades5 / previousTrade5mAvg : 0,
-    volumeAcceleration: hasHistory ? volume5mUsd / previousVolume5mAvg : 0,
+    buyerAcceleration: hasHistory ? trades5 / previousTrade5mAvg : fresh.buyerAcceleration,
+    volumeAcceleration: hasHistory ? volume5mUsd / previousVolume5mAvg : fresh.volumeAcceleration,
     dexPairAddress: pair.pairAddress ? String(pair.pairAddress) : undefined,
     observedAt: now,
     listedAt
@@ -116,6 +125,8 @@ const snapshotFromGeckoPool = (base, pool) => {
   const previousTrade5mAvg = Math.max(1, (trades1h - trades5) / 11);
   const previousVolume5mAvg = Math.max(1, (volume1hUsd - volume5mUsd) / 11);
   const priceUsd = isBase ? num(attributes.base_token_price_usd) : num(attributes.quote_token_price_usd);
+  const hasHistory = ageSec >= 360;
+  const fresh = freshAcceleration({ trades5, volume5mUsd, observedWindowSec });
 
   return {
     source: `geckoterminal:${String(pool?.relationships?.dex?.data?.id ?? 'solana')}`,
@@ -129,8 +140,8 @@ const snapshotFromGeckoPool = (base, pool) => {
     volume5mUsd,
     priceChange5mPct: num(attributes.price_change_percentage?.m5),
     priceChange1hPct: num(attributes.price_change_percentage?.h1),
-    buyerAcceleration: ageSec >= 360 ? trades5 / previousTrade5mAvg : 0,
-    volumeAcceleration: ageSec >= 360 ? volume5mUsd / previousVolume5mAvg : 0,
+    buyerAcceleration: hasHistory ? trades5 / previousTrade5mAvg : fresh.buyerAcceleration,
+    volumeAcceleration: hasHistory ? volume5mUsd / previousVolume5mAvg : fresh.volumeAcceleration,
     dexPairAddress: attributes.address ? String(attributes.address) : undefined,
     observedAt: now,
     listedAt
