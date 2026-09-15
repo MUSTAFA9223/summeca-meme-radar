@@ -17,8 +17,23 @@ test('summarizeTrades derives 30s flow and acceleration', () => {
   assert.equal(s.buyVolume30sUsd, 180);
   assert.equal(s.sellVolume30sUsd, 20);
   assert.equal(s.uniqueBuyers30s, 2);
+  assert.equal(s.uniqueBuyersVerified, true);
   assert.equal(s.buyerAcceleration, 2);
   assert.equal(s.volumeAcceleration, 4);
+});
+
+test('summarizeTrades counts Birdeye v3 signers as unique buyers', () => {
+  const nowMs = 2_000_000_000_000;
+  const sec = (offset) => Math.floor((nowMs + offset * 1000) / 1000);
+  const items = [
+    { block_unix_time: sec(-10), tx_type: 'buy', signers: ['WalletA'], volume_usd: 40 },
+    { block_unix_time: sec(-9), tx_type: 'buy', signers: ['WalletB'], volume_usd: 30 },
+    { block_unix_time: sec(-8), tx_type: 'buy', signers: ['WalletA'], volume_usd: 20 }
+  ];
+  const s = summarizeTrades(items, { nowMs, windowSeconds: 30 });
+  assert.equal(s.buys30s, 3);
+  assert.equal(s.uniqueBuyers30s, 2);
+  assert.equal(s.uniqueBuyersVerified, true);
 });
 
 test('normalizeSecurity only sets known booleans and concentration', () => {
