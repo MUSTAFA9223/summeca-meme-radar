@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 
 const mask = (value, left = 6, right = 4) => {
   const text = String(value ?? '');
@@ -31,6 +32,14 @@ async function fetchJson(url, options = {}, timeoutMs = 12_000) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function readSolBalance(endpoint, walletAddress) {
+  return fetchJson(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [walletAddress] })
+  });
 }
 
 export async function runLiveConfigSmoke(env) {
@@ -91,16 +100,21 @@ export async function runLiveConfigSmoke(env) {
   if (!publicKey?.length) throw new Error('Could not derive public key from authorization private key');
   console.log(JSON.stringify({ ok: true, check: 'privy-authorization-key', parsed: true }));
 
-  const helius = await fetchJson(`https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'getBalance', params: [walletAddress] })
-  });
-  if (!helius.response.ok) throw new Error(`Helius HTTP ${helius.response.status}`);
-  if (helius.body?.error) throw new Error(`Helius RPC ${helius.body.error.code}: ${helius.body.error.message}`);
-  const lamports = Number(helius.body?.result?.value);
-  if (!Number.isFinite(lamports) || lamports < 0) throw new Error('Helius returned an invalid balance');
-  console.log(JSON.stringify({ ok: true, check: 'helius-wallet-read', balanceSol: lamports / 1e9 }));
+  const heliusEndpoint = `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(heliusApiKey)}`;
+  let balanceRead = await readSolBalance(heliusEndpoint, walletAddress);
+  let balanceProvider = 'helius';
+  if (balanceRead.response.status === 429 || balanceRead.response.status >= 500) {
+    // This startup smoke is intentionally read-only. Provider throttling must not
+    // make a valid wallet configuration look broken, so verify the same public
+    // on-chain balance through Solana mainnet when Helius is temporarily limited.
+    balanceRead = await readSolBalance(PUBLIC_SOLANA_RPC, walletAddress);
+    balanceProvider = 'solana-public-fallback';
+  }
+  if (!balanceRead.response.ok) throw new Error(`Solana balance read HTTP ${balanceRead.response.status}`);
+  if (balanceRead.body?.error) throw new Error(`Solana RPC ${balanceRead.body.error.code}: ${balanceRead.body.error.message}`);
+  const lamports = Number(balanceRead.body?.result?.value);
+  if (!Number.isFinite(lamports) || lamports < 0) throw new Error('Solana RPC returned an invalid balance');
+  console.log(JSON.stringify({ ok: true, check: 'wallet-balance-read', provider: balanceProvider, balanceSol: lamports / 1e9 }));
 
   // Deliberately omit `taker`: Jupiter returns a quote without assembling a transaction.
   // This validates the API key + route while remaining read-only even when the wallet has 0 SOL.
