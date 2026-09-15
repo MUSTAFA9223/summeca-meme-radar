@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { ultraEarlyMomentumProfile } from '../core/momentumProfile.mjs';
 import { peakExitDecision } from '../core/peakHunter.mjs';
 
 const finite = (value, fallback = null) => {
@@ -55,6 +56,7 @@ export class PaperTrader {
 
     const openedAtMs = Date.parse(String(row.opened_at ?? ''));
     const realizedPnlUsd = finite(metadata.realized_pnl_usd, 0) ?? 0;
+    const manual = metadata.manual === true;
     const position = {
       address,
       symbol: token.symbol ?? metadata.symbol ?? row.symbol ?? 'TOKEN',
@@ -70,8 +72,9 @@ export class PaperTrader {
       highWaterPnlPct: finite(row.peak_pnl_pct, 0) ?? 0,
       moonScoreAtEntry: finite(row.moon_score, 0) ?? 0,
       status: 'open',
-      manual: metadata.manual === true,
+      manual,
       sizing: metadata.sizing ?? null,
+      strategy: String(metadata.strategy ?? metadata.sizing?.strategy ?? (manual ? 'manual' : 'standard')),
       persistenceId: row.id ?? null,
       restored: true
     };
@@ -86,7 +89,7 @@ export class PaperTrader {
     return p?.status === 'open' ? p : null;
   }
 
-  #openPosition(s, scores, usdSize, { manual = false, sizing = null } = {}) {
+  #openPosition(s, scores, usdSize, { manual = false, sizing = null, strategy = 'standard' } = {}) {
     const requested = Number(usdSize);
     if (!Number.isFinite(requested) || requested <= 0 || Number(s.priceUsd) <= 0) {
       return { ok: false, reason: 'price-or-size-unavailable' };
@@ -119,6 +122,7 @@ export class PaperTrader {
       status: 'open',
       manual,
       sizing,
+      strategy,
       persistenceId: null,
       restored: false
     };
@@ -128,8 +132,24 @@ export class PaperTrader {
   }
 
   maybeEnter(s, scores, threshold) {
-    if (scores.entry < threshold || scores.blockers.length || s.priceUsd <= 0) return null;
-    const result = this.#openPosition(s, scores, this.cfg.tradeSizeUsd);
+    const ultraEarly = ultraEarlyMomentumProfile(s, scores);
+    const effectiveThreshold = ultraEarly.eligible ? Math.min(Number(threshold), 72) : Number(threshold);
+    if (scores.entry < effectiveThreshold || scores.blockers.length || s.priceUsd <= 0) return null;
+
+    const sizeMultiplier = ultraEarly.eligible ? 0.35 : 1;
+    const requestedUsd = Number(this.cfg.tradeSizeUsd) * sizeMultiplier;
+    const strategy = ultraEarly.eligible ? 'ultra-early-momentum' : 'standard';
+    const sizing = ultraEarly.eligible
+      ? {
+          mode: 'strategy',
+          strategy,
+          sizeMultiplier,
+          ageSec: ultraEarly.ageSec,
+          buySellRatio: ultraEarly.ratio
+        }
+      : null;
+
+    const result = this.#openPosition(s, scores, requestedUsd, { strategy, sizing });
     return result.ok ? result.position : null;
   }
 
@@ -148,6 +168,7 @@ export class PaperTrader {
 
     return this.#openPosition(s, scores, requestedUsd, {
       manual: true,
+      strategy: 'manual',
       sizing: { mode, value }
     });
   }
@@ -235,20 +256,62 @@ export class PaperTrader {
     };
   }
 
+  #ultraEarlyExitDecision(s, p, scores, pnlPct) {
+    if (p.strategy !== 'ultra-early-momentum') return null;
+
+    const observedAt = finite(s?.observedAt, Date.now()) ?? Date.now();
+    const entryAt = finite(p.entryAt, observedAt) ?? observedAt;
+    const holdSec = Math.max(0, (observedAt - entryAt) / 1000);
+    const buys = Math.max(0, finite(s?.buys30s, 0) ?? 0);
+    const sells = Math.max(0, finite(s?.sells30s, 0) ?? 0);
+    const ratio = buys / Math.max(1, sells);
+    const acceleration = finite(s?.buyerAcceleration, 0) ?? 0;
+    const drawdown = Math.max(0, Number(p.highWaterPnlPct ?? 0) - pnlPct);
+    const momentumBreaking = ratio < 1
+      || sells > buys
+      || acceleration < 0.75
+      || Number(scores?.moon ?? 0) < 58;
+
+    if (pnlPct <= -6) {
+      return { exit: true, reason: 'ultra-early stop-loss (-6%)', holdSec, drawdown };
+    }
+    if (pnlPct >= 25) {
+      return { exit: true, reason: 'ultra-early quick take-profit (+25%)', holdSec, drawdown };
+    }
+    if (Number(p.highWaterPnlPct ?? 0) >= 12 && drawdown >= 5) {
+      return { exit: true, reason: 'ultra-early tight trailing exit (5%)', holdSec, drawdown };
+    }
+    if (holdSec >= 12 && Number(p.highWaterPnlPct ?? 0) >= 6 && momentumBreaking && drawdown >= 2.5) {
+      return { exit: true, reason: 'ultra-early momentum reversal', holdSec, drawdown };
+    }
+    if (holdSec >= 45 && pnlPct >= 3) {
+      return { exit: true, reason: 'ultra-early timed profit exit', holdSec, drawdown };
+    }
+    if (holdSec >= 75) {
+      return { exit: true, reason: 'ultra-early max-hold exit (75s)', holdSec, drawdown };
+    }
+    return { exit: false, holdSec, drawdown };
+  }
+
   update(s, scores) {
     const p = this.#positions.get(s.address);
     if (!p || p.status !== 'open' || s.priceUsd <= 0) return {};
     const pnlPct = ((s.priceUsd / p.entryPriceUsd) - 1) * 100;
     if (s.priceUsd > p.highWaterPriceUsd) p.highWaterPriceUsd = s.priceUsd;
     p.highWaterPnlPct = Math.max(p.highWaterPnlPct, pnlPct);
-    const d = peakExitDecision({
-      snapshot: s,
-      scores,
-      pnlPct,
-      highWaterPnlPct: p.highWaterPnlPct,
-      stopLossPct: this.cfg.stopLossPct,
-      peakHunterStartPct: this.cfg.peakHunterStartPct
-    });
+
+    let d = this.#ultraEarlyExitDecision(s, p, scores, pnlPct);
+    if (!d || !d.exit) {
+      const standard = peakExitDecision({
+        snapshot: s,
+        scores,
+        pnlPct,
+        highWaterPnlPct: p.highWaterPnlPct,
+        stopLossPct: this.cfg.stopLossPct,
+        peakHunterStartPct: this.cfg.peakHunterStartPct
+      });
+      if (!d || standard.exit) d = standard;
+    }
     if (!d.exit) return { pnlPct };
 
     const remainingPnlUsd = Number(p.usdSize) * (pnlPct / 100);
