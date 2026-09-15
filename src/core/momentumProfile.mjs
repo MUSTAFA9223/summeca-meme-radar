@@ -74,12 +74,61 @@ export function normalizeMomentumSnapshot(snapshot = {}) {
   };
 }
 
+export function ultraEarlyMomentumProfile(snapshot = {}, scores = null) {
+  const ignored = ignoredLaunchPattern(snapshot);
+  const s = normalizeMomentumSnapshot(snapshot);
+  const ratio = s.buys30s / Math.max(1, s.sells30s);
+  const entryScore = finite(scores?.entry ?? s.entryScore, 0);
+  const riskScore = finite(scores?.risk ?? s.riskScore, 100);
+  const blockers = Array.isArray(scores?.blockers) ? scores.blockers : [];
+  const ageKnown = s.ageSec != null;
+  const veryFresh = ageKnown && s.ageSec <= 90;
+  const enoughLiquidity = s.liquidityUsd >= 3_000;
+  const earlyFlow = s.buys30s >= 3
+    && ratio >= 2
+    && (s.buyVolume30sUsd >= 120 || s.volume5mUsd >= 500);
+  const acceleration = s.priceChange5mPct >= 2
+    || ratio >= 3
+    || s.buyerAcceleration >= 1.2
+    || s.volumeAcceleration >= 1.2;
+  const marketReady = s.marketDataVerified && s.priceUsd > 0;
+  const scoreReady = entryScore <= 0 || entryScore >= 68;
+  const riskReady = riskScore >= 100 || riskScore <= 35;
+  const eligible = !ignored.ignored
+    && veryFresh
+    && enoughLiquidity
+    && earlyFlow
+    && acceleration
+    && marketReady
+    && scoreReady
+    && riskReady
+    && blockers.length === 0;
+
+  return {
+    eligible,
+    ageSec: s.ageSec,
+    ratio,
+    entryScore,
+    riskScore,
+    buys30s: s.buys30s,
+    sells30s: s.sells30s,
+    buyVolume30sUsd: s.buyVolume30sUsd,
+    volume5mUsd: s.volume5mUsd,
+    liquidityUsd: s.liquidityUsd,
+    priceChange5mPct: s.priceChange5mPct,
+    buyerAcceleration: s.buyerAcceleration,
+    volumeAcceleration: s.volumeAcceleration
+  };
+}
+
 export function isRisingMomentum(snapshot = {}) {
   const ignored = ignoredLaunchPattern(snapshot);
   if (ignored.ignored) return false;
   const s = normalizeMomentumSnapshot(snapshot);
   const ratio = s.buys30s / Math.max(1, s.sells30s);
-  return s.priceChange5mPct >= 5
+  const ultraEarly = ultraEarlyMomentumProfile(snapshot).eligible;
+  return ultraEarly
+    || s.priceChange5mPct >= 5
     || (ratio >= 1.8 && s.buys30s >= 4 && (s.volume5mUsd >= 1000 || s.buyVolume30sUsd >= 250))
     || (ratio >= 3 && s.buys30s >= 6)
     || (s.buyerAcceleration >= 1.5 && s.volumeAcceleration >= 1.5 && ratio >= 1.25);
@@ -171,6 +220,9 @@ export function entryQuality(snapshot = {}) {
   }
   const late = s.priceChange5mPct >= 70 || (s.ageSec != null && s.ageSec > 600);
   if (late) return { key: 'late', ar: '⚠️ الدخول متأخر', en: '⚠️ Entry late', momentum, reasons: [] };
+  if (ultraEarlyMomentumProfile(snapshot).eligible && momentum >= 55) {
+    return { key: 'ultra-early', ar: '⚡ زخم مبكر جدًا', en: '⚡ Ultra-early momentum', momentum, reasons: [] };
+  }
   if (momentum >= 82 && s.entryScore >= 85 && (s.ageSec == null || s.ageSec <= 240)) {
     return { key: 'excellent', ar: '🎯 دخول مبكر ممتاز', en: '🎯 Excellent early entry', momentum, reasons: [] };
   }
