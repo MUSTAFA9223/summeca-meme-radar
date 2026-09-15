@@ -168,6 +168,9 @@ export class TelegramNotifier {
     const sellers = Number(s.sells30s ?? 0);
     const ratio = buyers / Math.max(1, sellers);
     const uniqueBuyers = Number(s.uniqueBuyers30s ?? 0);
+    const uniqueBuyersLabel = s.uniqueBuyersVerified === true && Number.isFinite(uniqueBuyers)
+      ? uniqueBuyers.toFixed(0)
+      : '—';
     const venue = sourceLabel(s.source);
     const marketCap = compactMoney(s.marketCapUsd);
     const volume5m = compactMoney(s.volume5mUsd);
@@ -185,7 +188,7 @@ export class TelegramNotifier {
       `MC: $${marketCap}  |  Vol 5m: $${volume5m}`,
       `💧 Liquidity: $${liquidity}  |  💵 Price: ${currentPrice ? `$${currentPrice}` : '—'}`,
       `🟢 Buy 30s: ${buyers.toFixed(1)}  |  🔴 Sell: ${sellers.toFixed(1)}  |  Ratio ${ratio.toFixed(2)}x`,
-      `👥 Unique buyers: ${uniqueBuyers.toFixed(1)}  |  5m: ${Number(s.priceChange5mPct ?? 0).toFixed(1)}%`, '',
+      `👥 Unique buyers: ${uniqueBuyersLabel}  |  5m: ${Number(s.priceChange5mPct ?? 0).toFixed(1)}%`, '',
       `⚡ Momentum ${momentum}/100  |  🎯 Entry ${sc.entry}/100`,
       `🚀 Moon ${sc.moon}/100  |  🛡️ Risk ${sc.risk}/100`,
       quality.ar,
@@ -202,7 +205,7 @@ export class TelegramNotifier {
       `MC: $${marketCap}  |  Vol 5m: $${volume5m}`,
       `💧 Liquidity: $${liquidity}  |  💵 Price: ${currentPrice ? `$${currentPrice}` : '—'}`,
       `🟢 Buys 30s: ${buyers.toFixed(1)}  |  🔴 Sells: ${sellers.toFixed(1)}  |  Ratio ${ratio.toFixed(2)}x`,
-      `👥 Unique buyers: ${uniqueBuyers.toFixed(1)}  |  5m: ${Number(s.priceChange5mPct ?? 0).toFixed(1)}%`, '',
+      `👥 Unique buyers: ${uniqueBuyersLabel}  |  5m: ${Number(s.priceChange5mPct ?? 0).toFixed(1)}%`, '',
       `⚡ Momentum ${momentum}/100  |  🎯 Entry ${sc.entry}/100`,
       `🚀 Moon ${sc.moon}/100  |  🛡️ Risk ${sc.risk}/100`,
       quality.en,
