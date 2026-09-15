@@ -1,3 +1,5 @@
+import { ignoredLaunchPattern } from './launchPattern.mjs';
+
 const finite = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -72,28 +74,10 @@ export function normalizeMomentumSnapshot(snapshot = {}) {
   };
 }
 
-const ignoredLaunchPattern = (snapshot = {}) => {
-  const s = normalizeMomentumSnapshot(snapshot);
-  const fresh = s.ageSec != null && s.ageSec <= 15 * 60;
-  const peakChange = Math.max(s.priceChange5mPct, s.priceChange1hPct);
-  const ratio = s.buys30s / Math.max(1, s.sells30s);
-  const dominantBuyFlow = s.buys30s >= 8 && (s.sells30s < 1 || ratio >= 8);
-  const oversized = s.marketCapUsd >= 1_000_000;
-  const stretchedValuation = s.liquidityUsd > 0 && s.marketCapUsd / s.liquidityUsd >= 25;
-  const knownConcentration = s.top10HolderPct > 40 || s.insiderPct > 10 || s.bundlerPct > 12 || s.creatorPct > 8;
-  const freshVerticalDominance = fresh && dominantBuyFlow && oversized && peakChange >= 1000;
-  const freshStretchedDominance = fresh && dominantBuyFlow && oversized && stretchedValuation && peakChange >= 300;
-  const reasons = [];
-  if (knownConcentration) reasons.push('concentrated insider/holder launch');
-  if (freshVerticalDominance) reasons.push(`fresh vertical spike ${peakChange.toFixed(0)}% with extreme buy dominance`);
-  if (freshStretchedDominance) reasons.push('fresh stretched valuation with extreme buy dominance');
-  return { ignored: reasons.length > 0, reasons, normalized: s };
-};
-
 export function isRisingMomentum(snapshot = {}) {
   const ignored = ignoredLaunchPattern(snapshot);
   if (ignored.ignored) return false;
-  const s = ignored.normalized;
+  const s = normalizeMomentumSnapshot(snapshot);
   const ratio = s.buys30s / Math.max(1, s.sells30s);
   return s.priceChange5mPct >= 5
     || (ratio >= 1.8 && s.buys30s >= 4 && (s.volume5mUsd >= 1000 || s.buyVolume30sUsd >= 250))
@@ -103,7 +87,7 @@ export function isRisingMomentum(snapshot = {}) {
 
 export function persistedSafety(snapshot = {}) {
   const ignored = ignoredLaunchPattern(snapshot);
-  const s = ignored.normalized;
+  const s = normalizeMomentumSnapshot(snapshot);
   const pendingReasons = [];
   const dangerReasons = [];
   const trades = s.buys30s + s.sells30s;
@@ -156,7 +140,7 @@ export function persistedSafety(snapshot = {}) {
 export function momentumScore(snapshot = {}) {
   const ignored = ignoredLaunchPattern(snapshot);
   if (ignored.ignored) return 0;
-  const s = ignored.normalized;
+  const s = normalizeMomentumSnapshot(snapshot);
   const ratio = s.buys30s / Math.max(1, s.sells30s);
   let score = 0;
   score += Math.max(-12, Math.min(24, s.priceChange5mPct * 0.8));
