@@ -3,7 +3,7 @@ const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const PUBLICNODE_SOLANA_RPC = 'https://solana-rpc.publicnode.com';
 const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 const PUBLIC_RPC_MIN_INTERVAL_MS = 350;
-const HELIUS_BACKOFF_MS = 60_000;
+const HELIUS_BACKOFF_MS = 180_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let publicRpcTail = Promise.resolve();
@@ -116,7 +116,9 @@ export async function resolvePumpCreateMint(apiKey, signature, {
       const transaction = await rpc(apiKey, 'getTransaction', [sig, {
         encoding: 'jsonParsed',
         commitment: 'confirmed',
-        maxSupportedTransactionVersion: 0
+        // Solana RPC nodes now return v1 transactions for some fresh launches.
+        // Accept v0 and v1 so fallback providers do not reject otherwise valid creates.
+        maxSupportedTransactionVersion: 1
       }]);
       if (transaction) {
         const mint = extractPumpCreateMint(transaction, programId);
