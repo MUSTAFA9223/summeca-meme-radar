@@ -3,6 +3,11 @@ const num = (value, fallback = 0) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
+const ABSOLUTE_MAX_MARKET_CAP_USD = 1_000_000;
+const FRESH_MAX_MARKET_CAP_USD = 750_000;
+const ABSOLUTE_MAX_RISE_PCT = 1_000;
+const FRESH_MAX_RISE_PCT = 500;
+
 export function ignoredLaunchPattern(snapshot = {}) {
   const raw = snapshot.raw ?? {};
   const token = snapshot.tokens ?? {};
@@ -26,14 +31,26 @@ export function ignoredLaunchPattern(snapshot = {}) {
   const peakChange = Math.max(price5m, price1h);
 
   const knownConcentration = top10 > 40 || insider > 10 || bundler > 12 || creator > 8;
-  const stretchedValuation = liquidity > 0 && marketCap >= 500_000 && marketCap / liquidity >= 25;
+  const valuationRatio = liquidity > 0 ? marketCap / liquidity : 0;
+  const stretchedValuation = liquidity > 0 && marketCap >= 500_000 && valuationRatio >= 25;
+  const inflatedValuation = liquidity > 0 && marketCap >= 500_000 && valuationRatio >= 20;
   const dominantBuyFlow = buys >= 4 && (sells < 1 || ratio >= 6);
   const heavyBuyFlow = buys >= 6 && ratio >= 3;
   const highVolume = volume5m >= 15_000;
 
-  // These filters intentionally reject already-vertical launch patterns. They are
-  // not a scam verdict; they simply keep WOFI-style, one-way, already-exploded
-  // launches out of alerts/tracking so the radar focuses on earlier opportunities.
+  // Hard invisibility rules for this early-launch radar. Once a token already has
+  // a seven-figure market cap or a four-digit percentage run-up it is outside the
+  // intended discovery window, regardless of whether a provider calls it safe.
+  // These are suppression rules, not a legal/factual claim that every such token
+  // is fraudulent.
+  const oversizedMarketCap = marketCap >= ABSOLUTE_MAX_MARKET_CAP_USD;
+  const freshOversizedMarketCap = fresh && marketCap >= FRESH_MAX_MARKET_CAP_USD;
+  const absurdRunUp = peakChange >= ABSOLUTE_MAX_RISE_PCT;
+  const freshExplodedRunUp = fresh && peakChange >= FRESH_MAX_RISE_PCT;
+  const inflatedMarketCap = marketCap >= 500_000 && inflatedValuation;
+
+  // Additional pattern-based filters intentionally reject already-vertical launch
+  // structures even below the hard caps.
   const oneWayVertical = fresh
     && peakChange >= 1_200
     && volume5m >= 10_000
@@ -54,6 +71,11 @@ export function ignoredLaunchPattern(snapshot = {}) {
 
   const reasons = [];
   if (knownConcentration) reasons.push('concentrated insider/holder launch');
+  if (oversizedMarketCap) reasons.push(`oversized market cap $${Math.round(marketCap).toLocaleString('en-US')}`);
+  else if (freshOversizedMarketCap) reasons.push(`oversized fresh market cap $${Math.round(marketCap).toLocaleString('en-US')}`);
+  if (absurdRunUp) reasons.push(`extreme run-up ${peakChange.toFixed(0)}%`);
+  else if (freshExplodedRunUp) reasons.push(`already-exploded fresh run-up ${peakChange.toFixed(0)}%`);
+  if (inflatedMarketCap) reasons.push(`inflated valuation ${valuationRatio.toFixed(1)}x liquidity`);
   if (oneWayVertical) reasons.push(`one-way vertical spike ${peakChange.toFixed(0)}% with no verified sell`);
   if (extremeVertical) reasons.push(`extreme vertical spike ${peakChange.toFixed(0)}% after launch`);
   if (lateVertical) reasons.push(`already-exploded launch ${peakChange.toFixed(0)}% with heavy buy dominance`);
@@ -64,6 +86,7 @@ export function ignoredLaunchPattern(snapshot = {}) {
     reasons: [...new Set(reasons)],
     ageSec,
     peakChange,
+    marketCap,
     ratio
   };
 }
