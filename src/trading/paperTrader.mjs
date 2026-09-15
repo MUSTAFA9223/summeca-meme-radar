@@ -75,6 +75,7 @@ export class PaperTrader {
       manual,
       sizing: metadata.sizing ?? null,
       strategy: String(metadata.strategy ?? metadata.sizing?.strategy ?? (manual ? 'manual' : 'standard')),
+      declineConfirmations: 0,
       persistenceId: row.id ?? null,
       restored: true
     };
@@ -123,6 +124,7 @@ export class PaperTrader {
       manual,
       sizing,
       strategy,
+      declineConfirmations: 0,
       persistenceId: null,
       restored: false
     };
@@ -262,7 +264,14 @@ export class PaperTrader {
     const observedAt = finite(s?.observedAt, Date.now()) ?? Date.now();
     const entryAt = finite(p.entryAt, observedAt) ?? observedAt;
     const holdSec = Math.max(0, (observedAt - entryAt) / 1000);
-    const drawdown = Math.max(0, Number(p.highWaterPnlPct ?? 0) - pnlPct);
+    const highWater = Number(p.highWaterPnlPct ?? 0);
+    const drawdown = Math.max(0, highWater - pnlPct);
+    const buys = Math.max(0, finite(s?.buys30s, 0) ?? 0);
+    const sells = Math.max(0, finite(s?.sells30s, 0) ?? 0);
+    const buyUsd = Math.max(0, finite(s?.buyVolume30sUsd, 0) ?? 0);
+    const sellUsd = Math.max(0, finite(s?.sellVolume30sUsd, 0) ?? 0);
+    const buyerAcceleration = finite(s?.buyerAcceleration, 1) ?? 1;
+    const moon = Number(scores?.moon ?? 0);
     const emergencyBlockers = Array.isArray(scores?.blockers)
       ? scores.blockers.filter((b) => /honeypot|developer is selling|very low liquidity|freeze authority/.test(String(b)))
       : [];
@@ -271,25 +280,71 @@ export class PaperTrader {
       return { exit: true, reason: `emergency-risk: ${emergencyBlockers.join(', ')}`, holdSec, drawdown };
     }
 
-    // Keep a hard capital-protection stop only for launches that fail immediately.
-    // Once the trade has shown any profit, the fast-exit rule is intentionally
-    // break-even only: let the winner run and exit when price returns to entry.
+    // Immediate launch failure protection remains active. This is separate from
+    // profit-taking: a winning trade is otherwise allowed to run until a genuine
+    // reversal is confirmed from its observed peak.
     if (pnlPct <= -6) {
       return { exit: true, reason: 'ultra-early hard stop-loss (-6%)', holdSec, drawdown };
     }
 
-    const highWater = Number(p.highWaterPnlPct ?? 0);
-    if (highWater > 0 && pnlPct <= 0) {
+    // Do not react to tiny wicks. A winner must first establish a meaningful peak.
+    if (highWater < 8) {
+      p.declineConfirmations = 0;
+      return { exit: false, holdSec, drawdown, highWaterPnlPct: highWater };
+    }
+
+    // Wider winners get more breathing room so a 100%+ runner is not sold on a
+    // normal small pullback. We only call it a real decline when price has pulled
+    // back materially from the peak AND order flow is weakening.
+    const reversalDrawdownPct = highWater >= 100 ? 12 : highWater >= 40 ? 9 : highWater >= 15 ? 7 : 5;
+    const severeDrawdownPct = reversalDrawdownPct * 1.75;
+    const sellCountPressure = sells > buys;
+    const sellVolumePressure = sellUsd > 0 && sellUsd >= buyUsd * 1.15;
+    const flowBreaking = sellCountPressure
+      || sellVolumePressure
+      || buyerAcceleration < 0.8
+      || moon < 60;
+    const reversalCandidate = drawdown >= reversalDrawdownPct && flowBreaking;
+    const severeReversal = drawdown >= severeDrawdownPct && (flowBreaking || sells >= buys);
+
+    if (severeReversal) {
+      p.declineConfirmations = 0;
       return {
         exit: true,
-        reason: 'ultra-early return to entry (break-even)',
+        reason: `ultra-early confirmed real decline (${drawdown.toFixed(1)}% from peak)`,
         holdSec,
         drawdown,
-        highWaterPnlPct: highWater
+        highWaterPnlPct: highWater,
+        reversalDrawdownPct,
+        confirmation: 'severe'
       };
     }
 
-    return { exit: false, holdSec, drawdown, highWaterPnlPct: highWater };
+    if (reversalCandidate) p.declineConfirmations = Number(p.declineConfirmations ?? 0) + 1;
+    else p.declineConfirmations = 0;
+
+    if (p.declineConfirmations >= 2) {
+      p.declineConfirmations = 0;
+      return {
+        exit: true,
+        reason: `ultra-early confirmed real decline (${drawdown.toFixed(1)}% from peak)`,
+        holdSec,
+        drawdown,
+        highWaterPnlPct: highWater,
+        reversalDrawdownPct,
+        confirmation: 'two-snapshots'
+      };
+    }
+
+    return {
+      exit: false,
+      holdSec,
+      drawdown,
+      highWaterPnlPct: highWater,
+      reversalDrawdownPct,
+      declineConfirmations: p.declineConfirmations,
+      flowBreaking
+    };
   }
 
   update(s, scores) {
