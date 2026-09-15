@@ -52,6 +52,48 @@ export function scoreToken(s) {
   entry -= Math.round(risk * 0.38);
   entry = clamp(entry);
 
+  // High-confidence quality gate for live discovery. This deliberately favors
+  // precision over recall: weak, unverified, one-sided, illiquid, or already
+  // overextended launches can still be tracked internally, but their entry score
+  // is capped below the default approved-signal threshold (82).
+  const explicitLiveEvidence = typeof s.marketDataVerified === 'boolean'
+    || typeof s.securityVerified === 'boolean';
+  const qualityGateReasons = [];
+  if (explicitLiveEvidence) {
+    const isEvm = String(s.address ?? '').startsWith('0x') || String(s.networkType ?? '') === 'evm';
+    const top10 = nz(s.top10HolderPct);
+    const insider = nz(s.insiderPct);
+    const bundler = nz(s.bundlerPct);
+    const creator = nz(s.creatorPct ?? s.devPct);
+    const uniqueBuyers = nz(s.uniqueBuyers30s);
+    const verifiedUniqueBuyers = s.uniqueBuyersVerified === true;
+    const liquidityPass = nz(s.liquidityUsd) >= 8_000
+      || (earlyBondingCurve && volume5m >= 8_000 && buyVol >= 500);
+    const activityPass = (buys >= 5 && sells >= 1 && buySell >= 1.6)
+      || (buys >= 8 && sells >= 1 && buySell >= 1.35 && volume5m >= 12_000);
+    const volumePass = volume5m >= 3_000 || buyVol >= 750;
+    const freshPass = ageSec <= 240;
+    const pricePass = priceChange5m >= -2 && priceChange5m <= 80;
+
+    if (s.marketDataVerified !== true) qualityGateReasons.push('market data not verified');
+    if (s.securityVerified !== true) qualityGateReasons.push('security not verified');
+    if (!isEvm && s.mintAuthorityDisabled !== true) qualityGateReasons.push('mint authority not verified disabled');
+    if (!isEvm && s.freezeAuthorityDisabled !== true) qualityGateReasons.push('freeze authority not verified disabled');
+    if (!liquidityPass) qualityGateReasons.push('insufficient real liquidity/curve depth');
+    if (!activityPass) qualityGateReasons.push('buy flow not confirmed by real sells');
+    if (!volumePass) qualityGateReasons.push('insufficient fresh volume');
+    if (!freshPass) qualityGateReasons.push('entry no longer early');
+    if (!pricePass) qualityGateReasons.push(priceChange5m > 80 ? 'move already overextended' : 'price momentum is negative');
+    if (verifiedUniqueBuyers && uniqueBuyers < 4) qualityGateReasons.push('too few unique buyers');
+    if (top10 > 35) qualityGateReasons.push('top-10 concentration too high');
+    if (insider > 8) qualityGateReasons.push('insider concentration too high');
+    if (bundler > 10) qualityGateReasons.push('bundler concentration too high');
+    if (creator > 6) qualityGateReasons.push('creator concentration too high');
+    if (risk > 30) qualityGateReasons.push('risk score above high-confidence limit');
+
+    if (qualityGateReasons.length) entry = Math.min(entry, 79);
+  }
+
   let moon = entry * 0.45;
   if (earlyBondingCurve && priceChange5m >= 5) moon += 6;
   if (nz(s.buyerAcceleration) >= 2) moon += 15;
@@ -70,5 +112,13 @@ export function scoreToken(s) {
   moon -= Math.round(risk * 0.28);
   moon = clamp(moon);
 
-  return { entry, moon, risk, reasons, blockers };
+  return {
+    entry,
+    moon,
+    risk,
+    reasons,
+    blockers,
+    qualityGatePassed: qualityGateReasons.length === 0,
+    qualityGateReasons
+  };
 }
