@@ -24,6 +24,32 @@ test('classifyProgramLogs identifies common pump instructions', () => {
   assert.equal(classifyProgramLogs(['Program log: something else']), 'activity');
 });
 
+test('classifyProgramLogs ignores nested CreateIdempotent while Pump.fun is buying', () => {
+  const ataProgram = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+  const logs = [
+    `Program ${PUMP_FUN_PROGRAM_ID} invoke [1]`,
+    'Program log: Instruction: Buy',
+    `${`Program ${ataProgram} invoke [2]`}`,
+    'Program log: Instruction: CreateIdempotent',
+    `Program ${ataProgram} success`,
+    `Program ${PUMP_FUN_PROGRAM_ID} success`
+  ];
+  assert.equal(classifyProgramLogs(logs, PUMP_FUN_PROGRAM_ID), 'buy');
+});
+
+test('classifyProgramLogs detects a direct Pump.fun Create even with nested instructions', () => {
+  const tokenProgram = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+  const logs = [
+    `Program ${PUMP_FUN_PROGRAM_ID} invoke [1]`,
+    'Program log: Instruction: Create',
+    `Program ${tokenProgram} invoke [2]`,
+    'Program log: Instruction: InitializeMint2',
+    `Program ${tokenProgram} success`,
+    `Program ${PUMP_FUN_PROGRAM_ID} success`
+  ];
+  assert.equal(classifyProgramLogs(logs, PUMP_FUN_PROGRAM_ID), 'create');
+});
+
 test('createHeliusWsUrl encodes api key', () => {
   assert.equal(
     createHeliusWsUrl('abc+123'),
