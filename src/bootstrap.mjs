@@ -5,6 +5,7 @@ import './telegramRawContractCopy.mjs';
 import { env } from './config/env.mjs';
 import './index.mjs';
 import { startEvmRadarWorker } from './signals/evmRadarWorker.mjs';
+import { startGlobalNetworkRadar } from './signals/globalNetworkRadar.mjs';
 import { startMomentumAlertWorker } from './signals/momentumAlertWorker.mjs';
 import { runLiveConfigSmoke } from './trading/liveConfigSmoke.mjs';
 import { startLiveAutomation } from './trading/liveAutomation.mjs';
@@ -32,4 +33,5 @@ if (!env.liveTradingEnabled && liveConfigReady) {
 
 await startMomentumAlertWorker();
 await startEvmRadarWorker();
+await startGlobalNetworkRadar();
 await startLiveAutomation();
