@@ -5,7 +5,55 @@ import { PUMP_FUN_PROGRAM_ID, resolvePumpCreateMint } from './heliusDirectCreate
 export { PUMP_FUN_PROGRAM_ID };
 
 const PUBLIC_SOLANA_WS = 'wss://api.mainnet-beta.solana.com';
-const MAX_CREATE_HYDRATION_BACKLOG = 8;
+export const DEFAULT_CREATE_HYDRATION_CONCURRENCY = 4;
+export const DEFAULT_CREATE_HYDRATION_BACKLOG = 96;
+
+const boundedInt = (value, fallback, min, max) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
+};
+
+export class BoundedTaskPool {
+  constructor({ concurrency = 4, maxQueued = 96, onDrop = () => {} } = {}) {
+    this.concurrency = boundedInt(concurrency, 4, 1, 16);
+    this.maxQueued = boundedInt(maxQueued, 96, this.concurrency, 512);
+    this.onDrop = onDrop;
+    this.active = 0;
+    this.queue = [];
+    this.dropped = 0;
+  }
+
+  get queued() { return this.queue.length; }
+  get pending() { return this.active + this.queue.length; }
+
+  submit(task, meta = null) {
+    if (typeof task !== 'function') throw new TypeError('task must be a function');
+
+    if (this.queue.length >= this.maxQueued) {
+      const dropped = this.queue.shift();
+      this.dropped += 1;
+      try { this.onDrop(dropped?.meta ?? null, this.dropped); } catch {}
+    }
+
+    this.queue.push({ task, meta });
+    this.#drain();
+    return true;
+  }
+
+  #drain() {
+    while (this.active < this.concurrency && this.queue.length) {
+      const job = this.queue.shift();
+      this.active += 1;
+      Promise.resolve()
+        .then(job.task)
+        .catch(() => undefined)
+        .finally(() => {
+          this.active = Math.max(0, this.active - 1);
+          this.#drain();
+        });
+    }
+  }
+}
 
 export function createHeliusWsUrl(apiKey) {
   if (!apiKey) throw new Error('HELIUS_API_KEY is required for WebSocket streaming');
@@ -47,7 +95,9 @@ export class HeliusProgramStream {
     logger = console,
     reconnectMinMs = 1000,
     reconnectMaxMs = 30_000,
-    staleAfterMs = 75_000
+    staleAfterMs = 75_000,
+    hydrationConcurrency = DEFAULT_CREATE_HYDRATION_CONCURRENCY,
+    hydrationBacklog = DEFAULT_CREATE_HYDRATION_BACKLOG
   }) {
     this.apiKey = apiKey;
     this.programIds = [...new Set(programIds.filter(Boolean))];
@@ -68,9 +118,19 @@ export class HeliusProgramStream {
     this.directSeen = new Set();
     this.usePublicFallback = true;
     this.currentProvider = 'solana-public';
-    this.hydrationQueue = Promise.resolve();
-    this.pendingHydrations = 0;
     this.lastBacklogWarningAt = 0;
+    this.hydrationPool = new BoundedTaskPool({
+      concurrency: hydrationConcurrency,
+      maxQueued: hydrationBacklog,
+      onDrop: (meta, dropped) => {
+        const now = Date.now();
+        if (now - this.lastBacklogWarningAt > 10_000) {
+          this.lastBacklogWarningAt = now;
+          const sig = String(meta?.signature ?? '').slice(0, 10);
+          this.logger.warn(`[direct-create] hydration backlog saturated; dropped oldest queued launch${sig ? ` sig=${sig}…` : ''}; dropped=${dropped} queued=${this.hydrationPool?.queued ?? 0}`);
+        }
+      }
+    });
   }
 
   start() {
@@ -97,7 +157,7 @@ export class HeliusProgramStream {
   #rememberSignature(signature) {
     if (!signature || this.directSeen.has(signature)) return false;
     this.directSeen.add(signature);
-    if (this.directSeen.size > 2000) {
+    if (this.directSeen.size > 4000) {
       const oldest = this.directSeen.values().next().value;
       if (oldest) this.directSeen.delete(oldest);
     }
@@ -106,7 +166,6 @@ export class HeliusProgramStream {
 
   async #hydrateDirectCreate(eventPayload) {
     if (eventPayload.kind !== 'create' || eventPayload.err || !eventPayload.signature) return eventPayload;
-    if (!this.#rememberSignature(eventPayload.signature)) return eventPayload;
 
     try {
       const mint = await resolvePumpCreateMint(this.apiKey, eventPayload.signature, {
@@ -132,7 +191,8 @@ export class HeliusProgramStream {
       enqueueDirectCreate(base);
       eventPayload.mint = mint;
       eventPayload.directCreate = true;
-      this.logger.log(`[direct-create] detected mint=${mint.slice(0, 8)}… slot=${eventPayload.slot} via=${eventPayload.provider}`);
+      const lagMs = Math.max(0, Date.now() - Number(eventPayload.observedAt ?? Date.now()));
+      this.logger.log(`[direct-create] detected mint=${mint.slice(0, 8)}… slot=${eventPayload.slot} via=${eventPayload.provider} lag=${lagMs}ms`);
 
       void fetchHeliusAssetMetadata(this.apiKey, mint)
         .then((metadata) => {
@@ -148,25 +208,21 @@ export class HeliusProgramStream {
   }
 
   #queueCreate(eventPayload) {
-    if (this.pendingHydrations >= MAX_CREATE_HYDRATION_BACKLOG) {
-      const now = Date.now();
-      if (now - this.lastBacklogWarningAt > 10_000) {
-        this.lastBacklogWarningAt = now;
-        this.logger.warn(`[direct-create] hydration backlog full (${this.pendingHydrations}); sampling new launches until RPC catches up`);
-      }
-      return;
-    }
+    if (!eventPayload?.signature || !this.#rememberSignature(eventPayload.signature)) return;
 
-    this.pendingHydrations += 1;
-    const task = this.hydrationQueue.then(async () => {
-      const hydrated = await this.#hydrateDirectCreate(eventPayload);
-      await Promise.resolve(this.onEvent(hydrated));
-    });
-    this.hydrationQueue = task
-      .catch((error) => this.logger.error('[direct-create] queued hydration failed', error?.message ?? error))
-      .finally(() => {
-        this.pendingHydrations = Math.max(0, this.pendingHydrations - 1);
-      });
+    const submittedAt = Date.now();
+    this.hydrationPool.submit(async () => {
+      const waitMs = Math.max(0, Date.now() - submittedAt);
+      if (waitMs > 3000) {
+        this.logger.warn(`[direct-create] hydration wait=${waitMs}ms queued=${this.hydrationPool.queued} active=${this.hydrationPool.active}`);
+      }
+      try {
+        const hydrated = await this.#hydrateDirectCreate(eventPayload);
+        await Promise.resolve(this.onEvent(hydrated));
+      } catch (error) {
+        this.logger.error('[direct-create] queued hydration failed', error?.message ?? error);
+      }
+    }, { signature: eventPayload.signature, observedAt: eventPayload.observedAt });
   }
 
   #connect() {
@@ -184,7 +240,7 @@ export class HeliusProgramStream {
     ws.addEventListener('open', () => {
       this.reconnectAttempt = 0;
       this.lastMessageAt = Date.now();
-      this.logger.log(`[helius-ws] connected provider=${provider}; subscribing to ${this.programIds.length} program(s)`);
+      this.logger.log(`[helius-ws] connected provider=${provider}; subscribing to ${this.programIds.length} program(s); hydration concurrency=${this.hydrationPool.concurrency} backlog=${this.hydrationPool.maxQueued}`);
 
       this.programIds.forEach((programId, index) => {
         const id = 100 + index;
