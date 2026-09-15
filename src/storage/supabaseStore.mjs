@@ -45,6 +45,14 @@ export class SupabaseStore {
     return text ? JSON.parse(text) : null;
   }
 
+  bindPaperTrade(address, id) {
+    const key = String(address ?? '').trim();
+    const tradeId = String(id ?? '').trim();
+    if (!key || !tradeId) return false;
+    this.#tradeIds.set(key, tradeId);
+    return true;
+  }
+
   async ensureToken(snapshot) {
     const address = String(snapshot.address ?? '');
     if (!address) throw new Error('Token address is required');
@@ -147,51 +155,80 @@ export class SupabaseStore {
 
   async openPaperTrade(snapshot, scores, position, tokenId) {
     if (!this.enabled || !position || !tokenId) return null;
-    const rows = await this.#request('paper_trades', {
-      method: 'POST',
-      prefer: 'return=representation',
-      body: {
-        token_id: tokenId,
-        status: 'open',
-        opened_at: iso(position.entryAt) ?? new Date().toISOString(),
-        entry_price_usd: finite(position.entryPriceUsd),
-        size_usd: finite(position.originalUsdSize ?? position.usdSize),
-        quantity: finite(position.originalQuantity ?? position.quantity),
-        peak_pnl_pct: finite(position.highWaterPnlPct) ?? 0,
-        highest_price_usd: finite(position.highWaterPriceUsd),
-        entry_score: finite(scores?.entry),
-        moon_score: finite(scores?.moon),
-        risk_score: finite(scores?.risk),
-        metadata: {
-          symbol: snapshot.symbol ?? null,
-          remaining_size_usd: finite(position.usdSize),
-          remaining_quantity: finite(position.quantity),
-          realized_pnl_usd: finite(position.realizedPnlUsd) ?? 0,
-          sold_pct: finite(position.soldPct) ?? 0
+
+    const existingRows = await this.#request(`paper_trades?select=id&token_id=eq.${encodeURIComponent(tokenId)}&status=eq.open&order=opened_at.desc&limit=1`);
+    const existingId = Array.isArray(existingRows) ? existingRows[0]?.id : null;
+    if (existingId) {
+      this.bindPaperTrade(snapshot.address, existingId);
+      position.persistenceId = existingId;
+      return existingId;
+    }
+
+    let rows;
+    try {
+      rows = await this.#request('paper_trades', {
+        method: 'POST',
+        prefer: 'return=representation',
+        body: {
+          token_id: tokenId,
+          status: 'open',
+          opened_at: iso(position.entryAt) ?? new Date().toISOString(),
+          entry_price_usd: finite(position.entryPriceUsd),
+          size_usd: finite(position.originalUsdSize ?? position.usdSize),
+          quantity: finite(position.originalQuantity ?? position.quantity),
+          peak_pnl_pct: finite(position.highWaterPnlPct) ?? 0,
+          highest_price_usd: finite(position.highWaterPriceUsd),
+          entry_score: finite(scores?.entry),
+          moon_score: finite(scores?.moon),
+          risk_score: finite(scores?.risk),
+          metadata: {
+            symbol: snapshot.symbol ?? null,
+            remaining_size_usd: finite(position.usdSize),
+            remaining_quantity: finite(position.quantity),
+            realized_pnl_usd: finite(position.realizedPnlUsd) ?? 0,
+            sold_pct: finite(position.soldPct) ?? 0,
+            manual: position.manual === true,
+            sizing: position.sizing ?? null
+          }
         }
-      }
-    });
+      });
+    } catch (error) {
+      if (!/HTTP 409/.test(String(error?.message ?? ''))) throw error;
+      const racedRows = await this.#request(`paper_trades?select=id&token_id=eq.${encodeURIComponent(tokenId)}&status=eq.open&order=opened_at.desc&limit=1`);
+      const racedId = Array.isArray(racedRows) ? racedRows[0]?.id : null;
+      if (!racedId) throw error;
+      this.bindPaperTrade(snapshot.address, racedId);
+      position.persistenceId = racedId;
+      return racedId;
+    }
+
     const id = Array.isArray(rows) ? rows[0]?.id : null;
-    if (id) this.#tradeIds.set(snapshot.address, id);
+    if (id) {
+      this.bindPaperTrade(snapshot.address, id);
+      position.persistenceId = id;
+    }
     return id;
   }
 
   async updateOpenPaperTrade(snapshot, position) {
     if (!this.enabled || !position) return null;
-    const id = this.#tradeIds.get(snapshot.address);
+    const address = String(snapshot?.address ?? position.address ?? '');
+    const id = this.#tradeIds.get(address) ?? position.persistenceId;
     if (!id) return null;
-    return this.#request(`paper_trades?id=eq.${encodeURIComponent(id)}`, {
+    return this.#request(`paper_trades?id=eq.${encodeURIComponent(id)}&status=eq.open`, {
       method: 'PATCH',
       prefer: 'return=minimal',
       body: {
         peak_pnl_pct: finite(position.highWaterPnlPct),
         highest_price_usd: finite(position.highWaterPriceUsd),
         metadata: {
-          symbol: snapshot.symbol ?? position.symbol ?? null,
+          symbol: snapshot?.symbol ?? position.symbol ?? null,
           remaining_size_usd: finite(position.usdSize),
           remaining_quantity: finite(position.quantity),
           realized_pnl_usd: finite(position.realizedPnlUsd) ?? 0,
-          sold_pct: finite(position.soldPct) ?? 0
+          sold_pct: finite(position.soldPct) ?? 0,
+          manual: position.manual === true,
+          sizing: position.sizing ?? null
         }
       }
     });
@@ -199,14 +236,15 @@ export class SupabaseStore {
 
   async closePaperTrade(snapshot, scores, position) {
     if (!this.enabled || !position) return null;
-    const id = this.#tradeIds.get(snapshot.address);
+    const address = String(snapshot?.address ?? position.address ?? '');
+    const id = this.#tradeIds.get(address) ?? position.persistenceId;
     if (!id) return null;
     const pnlUsd = finite(position.realizedPnlUsd) != null
       ? finite(position.realizedPnlUsd)
       : (finite(position.usdSize) != null && finite(position.pnlPct) != null
           ? Number(position.usdSize) * Number(position.pnlPct) / 100
           : null);
-    await this.#request(`paper_trades?id=eq.${encodeURIComponent(id)}`, {
+    await this.#request(`paper_trades?id=eq.${encodeURIComponent(id)}&status=eq.open`, {
       method: 'PATCH',
       prefer: 'return=minimal',
       body: {
@@ -220,21 +258,39 @@ export class SupabaseStore {
         pnl_usd: pnlUsd,
         peak_pnl_pct: finite(position.highWaterPnlPct),
         highest_price_usd: finite(position.highWaterPriceUsd),
-        peak_observed_at: iso(snapshot.observedAt),
+        peak_observed_at: iso(snapshot?.observedAt),
         exit_reason: position.exitReason ?? null,
         moon_score: finite(scores?.moon),
         risk_score: finite(scores?.risk),
         metadata: {
-          symbol: snapshot.symbol ?? position.symbol ?? null,
+          symbol: snapshot?.symbol ?? position.symbol ?? null,
           remaining_size_usd: 0,
           remaining_quantity: 0,
           realized_pnl_usd: pnlUsd,
-          sold_pct: 100
+          sold_pct: 100,
+          manual: position.manual === true,
+          sizing: position.sizing ?? null
         }
       }
     });
-    this.#tradeIds.delete(snapshot.address);
+    this.#tradeIds.delete(address);
+    position.persistenceId = null;
     return id;
+  }
+
+  async listOpenPaperTrades(limit = 20) {
+    if (!this.enabled) return [];
+    const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
+    const select = 'id,token_id,status,opened_at,entry_price_usd,size_usd,quantity,peak_pnl_pct,highest_price_usd,moon_score,metadata,tokens(address,symbol,name,source,listed_at)';
+    const rows = await this.#request(`paper_trades?select=${select}&status=eq.open&order=opened_at.desc&limit=${safeLimit}`);
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  async paperRealizedPnlUsd(limit = 5000) {
+    if (!this.enabled) return 0;
+    const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 5000));
+    const rows = await this.#request(`paper_trades?select=pnl_usd&status=eq.closed&pnl_usd=not.is.null&order=closed_at.desc&limit=${safeLimit}`);
+    return (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + (finite(row?.pnl_usd) ?? 0), 0);
   }
 
   async saveSignalThread({ tokenId, chatId, rootMessageId, snapshot }) {

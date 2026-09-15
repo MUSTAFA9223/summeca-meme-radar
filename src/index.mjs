@@ -435,6 +435,51 @@ if (store.enabled && telegramChatId) {
   }
 }
 
+if (store.enabled) {
+  try {
+    const [openTrades, closedRealizedPnlUsd] = await Promise.all([
+      store.listOpenPaperTrades(Math.max(10, env.maxOpenPositions * 4)),
+      store.paperRealizedPnlUsd()
+    ]);
+    trader.setRealizedPnlUsd(closedRealizedPnlUsd);
+
+    let restoredCount = 0;
+    for (const row of openTrades) {
+      if (restoredCount >= env.maxOpenPositions) break;
+      const result = trader.restoreOpenPosition(row);
+      if (!result.ok) {
+        console.warn(`[paper-trader:restore] skipped id=${row?.id ?? 'unknown'} reason=${result.reason}`);
+        continue;
+      }
+
+      const position = result.position;
+      const token = row.tokens ?? {};
+      store.bindPaperTrade(position.address, row.id);
+      const openedAt = Date.parse(String(row.opened_at ?? ''));
+      const listedAt = Date.parse(String(token.listed_at ?? ''));
+      candidates.set(position.address, {
+        ...minimalCandidate(position.address, Number.isFinite(openedAt) ? openedAt : Date.now()),
+        symbol: token.symbol ?? position.symbol ?? 'TOKEN',
+        name: token.name ?? token.symbol ?? position.symbol ?? 'Restored paper position',
+        source: token.source ?? 'restored_paper_trade',
+        listedAt: Number.isFinite(listedAt) ? listedAt : (Number.isFinite(openedAt) ? openedAt : Date.now()),
+        observedAt: Date.now(),
+        priceUsd: Number(row.entry_price_usd ?? position.entryPriceUsd ?? 0),
+        liquidityUsd: 0,
+        restoredPaperTrade: true
+      });
+      restoredCount += 1;
+    }
+
+    if (openTrades.length > restoredCount) {
+      console.warn(`[paper-trader:restore] ${openTrades.length - restoredCount} persisted open trade(s) exceed MAX_OPEN_POSITIONS or were invalid`);
+    }
+    console.log(`[paper-trader] restored=${restoredCount} closedRealizedPnlUsd=${Number(closedRealizedPnlUsd).toFixed(2)} availableUsd=${trader.availableUsd.toFixed(2)}`);
+  } catch (error) {
+    console.error('[paper-trader:restore]', error.message);
+  }
+}
+
 const ageSeconds = (s) => {
   const listedAt = Number(s?.listedAt);
   if (!Number.isFinite(listedAt) || listedAt <= 0) return 0;

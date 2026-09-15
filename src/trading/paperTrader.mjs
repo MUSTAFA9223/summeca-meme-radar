@@ -1,6 +1,16 @@
 import fs from 'node:fs';
 import { peakExitDecision } from '../core/peakHunter.mjs';
 
+const finite = (value, fallback = null) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+const positive = (value, fallback = null) => {
+  const n = finite(value, null);
+  return n != null && n > 0 ? n : fallback;
+};
+
 export class PaperTrader {
   #positions = new Map();
   #realizedPnlUsd = 0;
@@ -17,6 +27,58 @@ export class PaperTrader {
       realizedPnlUsd: this.#realizedPnlUsd,
       availableUsd: this.availableUsd
     };
+  }
+
+  setRealizedPnlUsd(value) {
+    this.#realizedPnlUsd = finite(value, 0) ?? 0;
+    return this.#realizedPnlUsd;
+  }
+
+  restoreOpenPosition(row = {}) {
+    const token = row.tokens ?? {};
+    const metadata = row.metadata ?? {};
+    const address = String(token.address ?? row.address ?? '').trim();
+    const entryPriceUsd = positive(row.entry_price_usd ?? row.entryPriceUsd);
+    const originalUsdSize = positive(row.size_usd ?? row.originalUsdSize ?? row.usdSize);
+    const originalQuantity = positive(row.quantity ?? row.originalQuantity);
+    const remainingUsdSize = finite(metadata.remaining_size_usd, originalUsdSize);
+    const remainingQuantity = finite(metadata.remaining_quantity, originalQuantity);
+
+    if (!address || !entryPriceUsd || !originalUsdSize || !originalQuantity) {
+      return { ok: false, reason: 'invalid-persisted-position' };
+    }
+    if (!(remainingUsdSize > 0) || !(remainingQuantity > 0)) {
+      return { ok: false, reason: 'persisted-position-empty' };
+    }
+    if (this.openPositions.length >= this.cfg.maxOpen) return { ok: false, reason: 'max-open-positions' };
+    if (this.getPosition(address)) return { ok: false, reason: 'position-already-open' };
+
+    const openedAtMs = Date.parse(String(row.opened_at ?? ''));
+    const realizedPnlUsd = finite(metadata.realized_pnl_usd, 0) ?? 0;
+    const position = {
+      address,
+      symbol: token.symbol ?? metadata.symbol ?? row.symbol ?? 'TOKEN',
+      entryPriceUsd,
+      entryAt: Number.isFinite(openedAtMs) ? openedAtMs : Date.now(),
+      usdSize: remainingUsdSize,
+      originalUsdSize,
+      quantity: remainingQuantity,
+      originalQuantity,
+      realizedPnlUsd,
+      soldPct: Math.max(0, Math.min(100, finite(metadata.sold_pct, 0) ?? 0)),
+      highWaterPriceUsd: positive(row.highest_price_usd, entryPriceUsd) ?? entryPriceUsd,
+      highWaterPnlPct: finite(row.peak_pnl_pct, 0) ?? 0,
+      moonScoreAtEntry: finite(row.moon_score, 0) ?? 0,
+      status: 'open',
+      manual: metadata.manual === true,
+      sizing: metadata.sizing ?? null,
+      persistenceId: row.id ?? null,
+      restored: true
+    };
+
+    this.#positions.set(address, position);
+    this.#realizedPnlUsd += realizedPnlUsd;
+    return { ok: true, position };
   }
 
   getPosition(address) {
@@ -56,7 +118,9 @@ export class PaperTrader {
       moonScoreAtEntry: scores.moon,
       status: 'open',
       manual,
-      sizing
+      sizing,
+      persistenceId: null,
+      restored: false
     };
     this.#positions.set(s.address, p);
     this.#log({ type: manual ? 'MANUAL_ENTRY' : 'ENTRY', position: p, scores });
