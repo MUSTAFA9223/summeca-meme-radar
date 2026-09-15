@@ -36,6 +36,36 @@ test('summarizeTrades counts Birdeye v3 signers as unique buyers', () => {
   assert.equal(s.uniqueBuyersVerified, true);
 });
 
+test('summarizeTrades infers legacy swap side from target-token balance change', () => {
+  const nowMs = 2_000_000_000_000;
+  const sec = (offset) => Math.floor((nowMs + offset * 1000) / 1000);
+  const mint = 'TokenMint';
+  const items = [
+    {
+      blockUnixTime: sec(-10),
+      txType: 'swap',
+      owner: 'BuyerA',
+      volumeUSD: 100,
+      quote: { address: mint, uiChangeAmount: 50 },
+      base: { address: 'SOL', uiChangeAmount: -1 }
+    },
+    {
+      blockUnixTime: sec(-8),
+      txType: 'swap',
+      owner: 'SellerB',
+      volumeUSD: 25,
+      quote: { address: mint, uiChangeAmount: -10 },
+      base: { address: 'SOL', uiChangeAmount: 0.2 }
+    }
+  ];
+  const s = summarizeTrades(items, { nowMs, windowSeconds: 30, tokenAddress: mint });
+  assert.equal(s.buys30s, 1);
+  assert.equal(s.sells30s, 1);
+  assert.equal(s.uniqueBuyers30s, 1);
+  assert.equal(s.buyVolume30sUsd, 100);
+  assert.equal(s.sellVolume30sUsd, 25);
+});
+
 test('normalizeSecurity only sets known booleans and concentration', () => {
   const s = normalizeSecurity({ data: { freezeable: true, mintable: false, isHoneypot: false, top10HolderPercent: 21.5 } });
   assert.equal(s.freezeAuthorityDisabled, false);
