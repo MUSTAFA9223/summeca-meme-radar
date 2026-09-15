@@ -262,35 +262,34 @@ export class PaperTrader {
     const observedAt = finite(s?.observedAt, Date.now()) ?? Date.now();
     const entryAt = finite(p.entryAt, observedAt) ?? observedAt;
     const holdSec = Math.max(0, (observedAt - entryAt) / 1000);
-    const buys = Math.max(0, finite(s?.buys30s, 0) ?? 0);
-    const sells = Math.max(0, finite(s?.sells30s, 0) ?? 0);
-    const ratio = buys / Math.max(1, sells);
-    const acceleration = finite(s?.buyerAcceleration, 0) ?? 0;
     const drawdown = Math.max(0, Number(p.highWaterPnlPct ?? 0) - pnlPct);
-    const momentumBreaking = ratio < 1
-      || sells > buys
-      || acceleration < 0.75
-      || Number(scores?.moon ?? 0) < 58;
+    const emergencyBlockers = Array.isArray(scores?.blockers)
+      ? scores.blockers.filter((b) => /honeypot|developer is selling|very low liquidity|freeze authority/.test(String(b)))
+      : [];
 
+    if (emergencyBlockers.length) {
+      return { exit: true, reason: `emergency-risk: ${emergencyBlockers.join(', ')}`, holdSec, drawdown };
+    }
+
+    // Keep a hard capital-protection stop only for launches that fail immediately.
+    // Once the trade has shown any profit, the fast-exit rule is intentionally
+    // break-even only: let the winner run and exit when price returns to entry.
     if (pnlPct <= -6) {
-      return { exit: true, reason: 'ultra-early stop-loss (-6%)', holdSec, drawdown };
+      return { exit: true, reason: 'ultra-early hard stop-loss (-6%)', holdSec, drawdown };
     }
-    if (pnlPct >= 25) {
-      return { exit: true, reason: 'ultra-early quick take-profit (+25%)', holdSec, drawdown };
+
+    const highWater = Number(p.highWaterPnlPct ?? 0);
+    if (highWater > 0 && pnlPct <= 0) {
+      return {
+        exit: true,
+        reason: 'ultra-early return to entry (break-even)',
+        holdSec,
+        drawdown,
+        highWaterPnlPct: highWater
+      };
     }
-    if (Number(p.highWaterPnlPct ?? 0) >= 12 && drawdown >= 5) {
-      return { exit: true, reason: 'ultra-early tight trailing exit (5%)', holdSec, drawdown };
-    }
-    if (holdSec >= 12 && Number(p.highWaterPnlPct ?? 0) >= 6 && momentumBreaking && drawdown >= 2.5) {
-      return { exit: true, reason: 'ultra-early momentum reversal', holdSec, drawdown };
-    }
-    if (holdSec >= 45 && pnlPct >= 3) {
-      return { exit: true, reason: 'ultra-early timed profit exit', holdSec, drawdown };
-    }
-    if (holdSec >= 75) {
-      return { exit: true, reason: 'ultra-early max-hold exit (75s)', holdSec, drawdown };
-    }
-    return { exit: false, holdSec, drawdown };
+
+    return { exit: false, holdSec, drawdown, highWaterPnlPct: highWater };
   }
 
   update(s, scores) {
@@ -300,19 +299,17 @@ export class PaperTrader {
     if (s.priceUsd > p.highWaterPriceUsd) p.highWaterPriceUsd = s.priceUsd;
     p.highWaterPnlPct = Math.max(p.highWaterPnlPct, pnlPct);
 
-    let d = this.#ultraEarlyExitDecision(s, p, scores, pnlPct);
-    if (!d || !d.exit) {
-      const standard = peakExitDecision({
-        snapshot: s,
-        scores,
-        pnlPct,
-        highWaterPnlPct: p.highWaterPnlPct,
-        stopLossPct: this.cfg.stopLossPct,
-        peakHunterStartPct: this.cfg.peakHunterStartPct
-      });
-      if (!d || standard.exit) d = standard;
-    }
-    if (!d.exit) return { pnlPct };
+    const d = p.strategy === 'ultra-early-momentum'
+      ? this.#ultraEarlyExitDecision(s, p, scores, pnlPct)
+      : peakExitDecision({
+          snapshot: s,
+          scores,
+          pnlPct,
+          highWaterPnlPct: p.highWaterPnlPct,
+          stopLossPct: this.cfg.stopLossPct,
+          peakHunterStartPct: this.cfg.peakHunterStartPct
+        });
+    if (!d?.exit) return { pnlPct };
 
     const remainingPnlUsd = Number(p.usdSize) * (pnlPct / 100);
     p.realizedPnlUsd = Number(p.realizedPnlUsd ?? 0) + remainingPnlUsd;
