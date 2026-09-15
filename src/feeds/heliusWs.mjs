@@ -13,6 +13,11 @@ const boundedInt = (value, fallback, min, max) => {
   return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
 };
 
+const normalizeInstructionName = (value) => String(value ?? '')
+  .trim()
+  .toLowerCase()
+  .replace(/[\s_-]+/g, '');
+
 export class BoundedTaskPool {
   constructor({ concurrency = 4, maxQueued = 96, onDrop = () => {} } = {}) {
     this.concurrency = boundedInt(concurrency, 4, 1, 16);
@@ -77,12 +82,42 @@ export function buildLogsSubscribeRequest(programId, id = 1, commitment = 'proce
   };
 }
 
-export function classifyProgramLogs(logs = []) {
-  const text = (Array.isArray(logs) ? logs : []).join('\n').toLowerCase();
-  if (text.includes('instruction: create')) return 'create';
-  if (text.includes('instruction: migrate')) return 'migrate';
-  if (text.includes('instruction: buy')) return 'buy';
-  if (text.includes('instruction: sell')) return 'sell';
+export function classifyProgramLogs(logs = [], programId = PUMP_FUN_PROGRAM_ID) {
+  const lines = Array.isArray(logs) ? logs.map((line) => String(line ?? '').trim()) : [];
+  const stack = [];
+  const directInstructions = [];
+  const fallbackInstructions = [];
+
+  for (const line of lines) {
+    const invoke = /^Program\s+(\S+)\s+invoke\s+\[(\d+)\]/i.exec(line);
+    if (invoke) {
+      const depth = Math.max(1, Number(invoke[2]) || 1);
+      stack[depth - 1] = invoke[1];
+      stack.length = depth;
+      continue;
+    }
+
+    const instruction = /^Program log:\s*Instruction:\s*(.+)$/i.exec(line);
+    if (instruction) {
+      const name = normalizeInstructionName(instruction[1]);
+      if (!name) continue;
+      fallbackInstructions.push(name);
+      if (stack.at(-1) === programId) directInstructions.push(name);
+      continue;
+    }
+
+    const completed = /^Program\s+(\S+)\s+(?:success|failed:)/i.exec(line);
+    if (completed && stack.at(-1) === completed[1]) stack.pop();
+  }
+
+  // Real RPC logs include invoke/success boundaries; use only instructions emitted
+  // while Pump.fun is the active program. Unit fixtures and older providers may omit
+  // those boundaries, so exact instruction lines remain a compatibility fallback.
+  const instructions = directInstructions.length ? directInstructions : fallbackInstructions;
+  if (instructions.some((name) => name === 'create' || name === 'createv2')) return 'create';
+  if (instructions.includes('migrate')) return 'migrate';
+  if (instructions.some((name) => name === 'buy' || name === 'buyexactsolin')) return 'buy';
+  if (instructions.some((name) => name === 'sell' || name === 'sellexactsolin')) return 'sell';
   return 'activity';
 }
 
@@ -295,7 +330,7 @@ export class HeliusProgramStream {
         slot: message?.params?.result?.context?.slot ?? 0,
         err: value.err ?? null,
         logs,
-        kind: classifyProgramLogs(logs),
+        kind: classifyProgramLogs(logs, programId ?? PUMP_FUN_PROGRAM_ID),
         observedAt: Date.now()
       };
 
