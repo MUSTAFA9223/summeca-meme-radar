@@ -6,7 +6,7 @@ const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 const SAFE_MINT_CACHE_MS = 10 * 60 * 1000;
 const UNSAFE_MINT_CACHE_MS = 20 * 1000;
 const PUBLIC_SECURITY_MIN_INTERVAL_MS = 300;
-const HELIUS_SECURITY_BACKOFF_MS = 60_000;
+const HELIUS_SECURITY_BACKOFF_MS = 180_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const extensionKey = (value) => String(value ?? '').replace(/[^a-z0-9]/gi, '').toLowerCase();
