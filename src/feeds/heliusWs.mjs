@@ -96,8 +96,8 @@ export class HeliusProgramStream {
     reconnectMinMs = 1000,
     reconnectMaxMs = 30_000,
     staleAfterMs = 75_000,
-    hydrationConcurrency = DEFAULT_CREATE_HYDRATION_CONCURRENCY,
-    hydrationBacklog = DEFAULT_CREATE_HYDRATION_BACKLOG
+    hydrationConcurrency = process.env.DIRECT_CREATE_HYDRATION_CONCURRENCY ?? DEFAULT_CREATE_HYDRATION_CONCURRENCY,
+    hydrationBacklog = process.env.DIRECT_CREATE_HYDRATION_BACKLOG ?? DEFAULT_CREATE_HYDRATION_BACKLOG
   }) {
     this.apiKey = apiKey;
     this.programIds = [...new Set(programIds.filter(Boolean))];
