@@ -41,6 +41,8 @@ export const env = {
   heliusProgramIds: csv('HELIUS_PROGRAM_IDS', '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'),
   heliusTriggerMinMs: Math.max(1200, num('HELIUS_TRIGGER_MIN_MS', 1500)),
   heliusStaleAfterMs: Math.max(30_000, num('HELIUS_STALE_AFTER_MS', 75_000)),
+  directCreateHydrationConcurrency: Math.max(1, Math.min(16, Math.floor(num('DIRECT_CREATE_HYDRATION_CONCURRENCY', 4)))),
+  directCreateHydrationBacklog: Math.max(16, Math.min(512, Math.floor(num('DIRECT_CREATE_HYDRATION_BACKLOG', 96)))),
 
   supabaseUrl: process.env.SUPABASE_URL ?? '',
   supabaseSecretKey: process.env.SUPABASE_SECRET_KEY ?? '',
