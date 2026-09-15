@@ -10,6 +10,9 @@ const requestTimestamps = [];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let lastDiscoveryWarningAt = 0;
 let discoveryDisabled = false;
+let lastFlowWarningAt = 0;
+const securityRetryAfter = new Map();
+const SECURITY_PENDING_RETRY_MS = 90_000;
 
 async function waitForRateSlot() {
   while (true) {
@@ -212,7 +215,23 @@ export function normalizeSecurity(raw) {
 }
 
 export async function fetchTokenSecurity(apiKey, address) {
-  return normalizeSecurity(await birdeyeGet(apiKey, '/defi/token_security', { address }));
+  const key = String(address ?? '').trim();
+  const retryAt = securityRetryAfter.get(key) ?? 0;
+  if (retryAt > Date.now()) return { securityProviderPending: true };
+  try {
+    const security = normalizeSecurity(await birdeyeGet(apiKey, '/defi/token_security', { address: key }));
+    securityRetryAfter.delete(key);
+    return { ...security, securityProviderVerified: true };
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    if (/\/defi\/token_security HTTP 400/i.test(message)) {
+      // Very fresh Pump.fun tokens can return 400 before Birdeye indexes them.
+      // Treat that as pending evidence rather than an error storm or a scam verdict.
+      securityRetryAfter.set(key, Date.now() + SECURITY_PENDING_RETRY_MS);
+      return { securityProviderPending: true };
+    }
+    throw error;
+  }
 }
 
 const txTimeMs = (tx) => {
@@ -222,7 +241,17 @@ const txTimeMs = (tx) => {
 };
 
 const txSide = (tx) => String(first(tx, ['txType', 'tx_type', 'side', 'type', 'swapType']) ?? '').toLowerCase();
-const txWallet = (tx) => String(first(tx, ['owner', 'wallet', 'trader', 'signer', 'sourceOwner', 'source_owner']) ?? '');
+const txWallet = (tx) => {
+  const direct = first(tx, ['owner', 'wallet', 'trader', 'signer', 'sourceOwner', 'source_owner']);
+  if (direct) return String(typeof direct === 'object' ? (direct.address ?? direct.pubkey ?? '') : direct);
+  const signers = first(tx, ['signers']);
+  if (Array.isArray(signers)) {
+    const signer = signers.find((item) => item != null);
+    if (typeof signer === 'string') return signer;
+    if (signer && typeof signer === 'object') return String(signer.address ?? signer.pubkey ?? signer.wallet ?? '');
+  }
+  return '';
+};
 const txUsd = (tx) => asNumber(first(tx, ['volumeUSD', 'volumeUsd', 'volume_usd', 'amountUsd', 'amount_usd', 'valueUsd', 'value_usd']));
 
 export function summarizeTrades(items, { nowMs = Date.now(), windowSeconds = 30 } = {}) {
@@ -263,6 +292,7 @@ export function summarizeTrades(items, { nowMs = Date.now(), windowSeconds = 30 
     buyVolume30sUsd: current.buyUsd,
     sellVolume30sUsd: current.sellUsd,
     uniqueBuyers30s: current.buyers.size,
+    uniqueBuyersVerified: true,
     buyerAcceleration,
     volumeAcceleration
   };
@@ -293,6 +323,10 @@ export async function enrichTokenSnapshot(apiKey, base, { includeSecurity = true
   const flow = results[1]?.status === 'fulfilled' ? results[1].value : {};
   const security = includeSecurity && results[2]?.status === 'fulfilled' ? results[2].value : {};
   const onchainSecurity = includeSecurity && results[3]?.status === 'fulfilled' ? results[3].value : {};
+  if (results[1]?.status === 'rejected' && Date.now() - lastFlowWarningAt >= 60_000) {
+    lastFlowWarningAt = Date.now();
+    console.warn(`[birdeye:flow] ${base.address} ${results[1].reason?.message ?? results[1].reason ?? 'request failed'}`);
+  }
   if (includeSecurity && results[2]?.status === 'rejected') {
     console.warn(`[birdeye:security] ${base.address} ${results[2].reason?.message ?? results[2].reason ?? 'request failed'}`);
   }
