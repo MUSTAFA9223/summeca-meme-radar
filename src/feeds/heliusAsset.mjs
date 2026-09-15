@@ -1,3 +1,8 @@
+const HELIUS_METADATA_MIN_INTERVAL_MS = 900;
+const HELIUS_METADATA_BACKOFF_MS = 180_000;
+let lastMetadataRequestAt = 0;
+let metadataBackoffUntil = 0;
+
 const normalizeImage = (value) => {
   const raw = String(value ?? '').trim();
   if (!raw) return null;
@@ -8,6 +13,11 @@ const normalizeImage = (value) => {
 
 export async function fetchHeliusAssetMetadata(apiKey, address) {
   if (!apiKey || !address) return {};
+  const now = Date.now();
+  if (now < metadataBackoffUntil) return {};
+  if (now - lastMetadataRequestAt < HELIUS_METADATA_MIN_INTERVAL_MS) return {};
+  lastMetadataRequestAt = now;
+
   const endpoint = `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
@@ -23,7 +33,10 @@ export async function fetchHeliusAssetMetadata(apiKey, address) {
         params: { id: address }
       })
     });
-    if (!response.ok) throw new Error(`Helius getAsset HTTP ${response.status}`);
+    if (!response.ok) {
+      if (response.status === 429) metadataBackoffUntil = Date.now() + HELIUS_METADATA_BACKOFF_MS;
+      throw new Error(`Helius getAsset HTTP ${response.status}`);
+    }
     const body = await response.json();
     if (body.error) throw new Error(`Helius getAsset ${body.error.code}: ${body.error.message}`);
     const asset = body.result ?? {};
