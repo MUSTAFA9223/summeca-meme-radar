@@ -49,6 +49,10 @@ test('BoundedTaskPool runs hydration work in parallel up to configured concurren
   }));
 
   await Promise.all(jobs);
+  const deadline = Date.now() + 1000;
+  while (pool.pending && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   assert.equal(peak, 3);
   assert.equal(completed, 9);
   assert.equal(pool.pending, 0);
