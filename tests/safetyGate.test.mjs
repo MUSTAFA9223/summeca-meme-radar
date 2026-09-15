@@ -129,6 +129,37 @@ test('WOFI-like vertical no-sell launch is ignored completely', () => {
   assert.match(result.ignoredReasons.join(' '), /vertical spike/i);
 });
 
+test('WOFI-like extreme launch is ignored even when buy count is below the old threshold', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    listedAt: Date.now() - 5 * 60 * 1000,
+    marketCapUsd: 0,
+    volume5mUsd: 176963,
+    buys30s: 7.2,
+    sells30s: 0,
+    priceChange5mPct: 45138,
+    priceChange1hPct: 45138
+  }, safeScores);
+  assert.equal(result.status, 'ignored');
+  assert.equal(result.trackingAllowed, false);
+  assert.match(result.ignoredReasons.join(' '), /vertical/i);
+});
+
+test('already-exploded heavy-buy launch is ignored before it crowds alerts', () => {
+  const result = evaluateSignalSafety({
+    ...safeSnapshot,
+    listedAt: Date.now() - 8 * 60 * 1000,
+    volume5mUsd: 19065,
+    buys30s: 31,
+    sells30s: 9,
+    priceChange5mPct: 912,
+    priceChange1hPct: 912
+  }, safeScores);
+  assert.equal(result.status, 'ignored');
+  assert.equal(result.trackingAllowed, false);
+  assert.match(result.ignoredReasons.join(' '), /already-exploded/i);
+});
+
 test('blocks non-transferable Token-2022 assets', () => {
   const result = evaluateSignalSafety({
     ...safeSnapshot,
