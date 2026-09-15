@@ -50,6 +50,14 @@ globalThis.fetch = async function deploySafeTelegramFetch(input, init = {}) {
 
   if (!isTelegramRadarAlert(payload)) return nativeFetch(input, init);
 
+  // Threaded replies are real follow-up updates for an already-published signal.
+  // They must never be swallowed by deployment startup mute, otherwise a crossed
+  // milestone is persisted but the user never receives the corresponding update.
+  // Restored threads already persist their last milestone, so allowing replies here
+  // does not replay old milestones after a restart.
+  const isThreadUpdate = Number(payload?.reply_parameters?.message_id ?? 0) > 0;
+  if (isThreadUpdate) return nativeFetch(input, init);
+
   const now = Date.now();
   cleanupSuppressed(now);
   const key = telegramAlertTokenKey(payload);
