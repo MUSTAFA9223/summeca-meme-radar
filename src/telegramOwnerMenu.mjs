@@ -241,29 +241,3 @@ globalThis.fetch = async (input, init = {}) => {
 
   return previousFetch(input, init);
 };
-
-async function pushOwnerPanelOnStartup() {
-  if (!env.telegramBotToken || !access.enabled) return;
-  const ownerId = await ownerChatId();
-  if (!ownerId) {
-    console.warn('[telegram:owner-panel] owner chat not resolved');
-    return;
-  }
-  const base = `https://api.telegram.org/bot${env.telegramBotToken}`;
-  await telegramCall(base, 'sendMessage', {
-    chat_id: ownerId,
-    text: '✅ SUMMECA Meme Radar يعمل الآن.\n\nافتح القائمة الرئيسية وستجد زر 🛠️ الأدمن مع بقية الأزرار.',
-    reply_markup: {
-      inline_keyboard: [[
-        { text: '🏠 فتح القائمة', callback_data: 'menu:home' },
-        { text: '🛠️ الأدمن', callback_data: 'admin:home' }
-      ]]
-    }
-  });
-  console.log('[telegram:owner-panel] startup controls sent');
-}
-
-const startupTimer = setTimeout(() => {
-  void pushOwnerPanelOnStartup().catch((error) => console.error('[telegram:owner-panel]', error.message));
-}, 2500);
-startupTimer.unref?.();
