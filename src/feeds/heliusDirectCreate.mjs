@@ -2,13 +2,28 @@ const PUMP_FUN_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const PUBLICNODE_SOLANA_RPC = 'https://solana-rpc.publicnode.com';
 const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
-const PUBLIC_RPC_MIN_INTERVAL_MS = 350;
 const HELIUS_BACKOFF_MS = 180_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-let publicRpcTail = Promise.resolve();
-let publicRpcNextAt = 0;
+const publicRpcLanes = [
+  {
+    endpoint: PUBLICNODE_SOLANA_RPC,
+    provider: 'PublicNode Solana RPC',
+    minIntervalMs: 300,
+    tail: Promise.resolve(),
+    nextAt: 0
+  },
+  {
+    endpoint: PUBLIC_SOLANA_RPC,
+    provider: 'Public Solana RPC',
+    minIntervalMs: 350,
+    tail: Promise.resolve(),
+    nextAt: 0
+  }
+];
+let publicRpcCursor = 0;
 let heliusRateLimitedUntil = 0;
+let lastFallbackWarningAt = 0;
 
 const pubkey = (value) => {
   if (typeof value === 'string') return value;
@@ -62,25 +77,29 @@ async function rpcAt(endpoint, method, params, timeoutMs = 6000, provider = 'Sol
   }
 }
 
-function queuedPublicRpc(endpoint, method, params, timeoutMs, provider) {
-  const task = publicRpcTail.then(async () => {
-    const waitMs = Math.max(0, publicRpcNextAt - Date.now());
+function queuedLaneRpc(lane, method, params, timeoutMs) {
+  const task = lane.tail.then(async () => {
+    const waitMs = Math.max(0, lane.nextAt - Date.now());
     if (waitMs) await sleep(waitMs);
-    publicRpcNextAt = Date.now() + PUBLIC_RPC_MIN_INTERVAL_MS;
-    return rpcAt(endpoint, method, params, timeoutMs, provider);
+    lane.nextAt = Date.now() + lane.minIntervalMs;
+    return rpcAt(lane.endpoint, method, params, timeoutMs, lane.provider);
   });
-  publicRpcTail = task.catch(() => undefined);
+  lane.tail = task.catch(() => undefined);
   return task;
 }
 
+const isTransientRpcError = (error) => /HTTP 429|HTTP 5\d\d|fetch failed|aborted|timeout/i.test(String(error?.message ?? error));
+
 async function publicReadRpc(method, params, timeoutMs = 6000) {
+  const start = publicRpcCursor++ % publicRpcLanes.length;
+  const primary = publicRpcLanes[start];
+  const fallback = publicRpcLanes[(start + 1) % publicRpcLanes.length];
+
   try {
-    return await queuedPublicRpc(PUBLICNODE_SOLANA_RPC, method, params, timeoutMs, 'PublicNode Solana RPC');
+    return await queuedLaneRpc(primary, method, params, timeoutMs);
   } catch (error) {
-    const message = String(error?.message ?? error);
-    const transient = /HTTP 429|HTTP 5\d\d|fetch failed|aborted|timeout/i.test(message);
-    if (!transient) throw error;
-    return queuedPublicRpc(PUBLIC_SOLANA_RPC, method, params, timeoutMs, 'Public Solana RPC');
+    if (!isTransientRpcError(error)) throw error;
+    return queuedLaneRpc(fallback, method, params, timeoutMs);
   }
 }
 
@@ -93,18 +112,21 @@ async function rpc(apiKey, method, params, timeoutMs = 6000) {
   try {
     return await rpcAt(helius, method, params, timeoutMs, 'Helius');
   } catch (error) {
+    if (!isTransientRpcError(error)) throw error;
     const message = String(error?.message ?? error);
-    const transient = /HTTP 429|HTTP 5\d\d|fetch failed|aborted|timeout/i.test(message);
-    if (!transient) throw error;
     if (/HTTP 429/i.test(message)) heliusRateLimitedUntil = Date.now() + HELIUS_BACKOFF_MS;
-    console.warn(`[direct-create:rpc-fallback] ${message}; using throttled read-only RPC fallback`);
+    const now = Date.now();
+    if (now - lastFallbackWarningAt > 10_000) {
+      lastFallbackWarningAt = now;
+      console.warn(`[direct-create:rpc-fallback] ${message}; using dual throttled read-only RPC lanes`);
+    }
     return publicReadRpc(method, params, timeoutMs);
   }
 }
 
 export async function resolvePumpCreateMint(apiKey, signature, {
   retries = 3,
-  retryDelayMs = 500,
+  retryDelayMs = 350,
   programId = PUMP_FUN_PROGRAM_ID
 } = {}) {
   const sig = String(signature ?? '').trim();
@@ -116,8 +138,8 @@ export async function resolvePumpCreateMint(apiKey, signature, {
       const transaction = await rpc(apiKey, 'getTransaction', [sig, {
         encoding: 'jsonParsed',
         commitment: 'confirmed',
-        // Solana RPC nodes now return v1 transactions for some fresh launches.
-        // Accept v0 and v1 so fallback providers do not reject otherwise valid creates.
+        // Fresh Pump.fun creates can be versioned. Accept v0 and v1 so fallback
+        // providers do not reject otherwise valid transactions.
         maxSupportedTransactionVersion: 1
       }]);
       if (transaction) {
