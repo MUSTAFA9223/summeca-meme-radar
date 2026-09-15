@@ -161,6 +161,15 @@ class WatchlistAlertWorker {
     const s = normalizeMomentumSnapshot(snapshot);
     if (!SOLANA_ADDRESS.test(s.address)) return;
     const safety = persistedSafety(snapshot);
+
+    // Ignored means invisible. Do not send a warning, momentum alert, or any
+    // follow-up for oversized/exploded/suspicious launch patterns.
+    if (safety.status === 'ignored') {
+      this.state.delete(s.address);
+      console.log(`[watchlist-alerts] HIDDEN mint=${s.address.slice(0, 8)}… reasons=${safety.ignoredReasons.slice(0, 3).join('; ')}`);
+      return;
+    }
+
     const rising = isRisingMomentum(snapshot);
     const score = momentumScore(snapshot);
     const quality = entryQuality(snapshot);
