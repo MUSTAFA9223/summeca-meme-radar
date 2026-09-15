@@ -1,3 +1,5 @@
+import { ignoredLaunchPattern } from './launchPattern.mjs';
+
 const text = (value) => String(value ?? '').toLowerCase();
 
 const securityCritical = (blocker) => /honeypot|freeze authority active|mint authority active|developer is selling|top-10 concentration|insider concentration|bundler concentration|non-transferable|transfer fee|fake token|token-2022 risky|permanent delegate|transfer hook|default account state|pausable|confidential/.test(text(blocker));
@@ -7,43 +9,6 @@ const isDexVenue = (source) => {
   if (/pumpfun|pump_fun|bonding/.test(value)) return false;
   return /pumpswap|pump_amm|raydium|meteora|orca/.test(value)
     || (value.includes('dexscreener') && !value.includes('pump'));
-};
-
-const num = (value, fallback = 0) => {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-};
-
-const ignoredLaunchPattern = (snapshot = {}) => {
-  const raw = snapshot.raw ?? {};
-  const listedAtRaw = snapshot.listedAt ?? snapshot.listed_at ?? snapshot.tokens?.listed_at ?? raw.listedAt;
-  const listedAt = typeof listedAtRaw === 'number' ? listedAtRaw : Date.parse(listedAtRaw ?? '') || 0;
-  const ageSec = listedAt > 0 ? Math.max(0, (Date.now() - listedAt) / 1000) : null;
-  const fresh = ageSec != null && ageSec <= 15 * 60;
-  const buys = num(snapshot.buys30s ?? snapshot.buys_30s);
-  const sells = num(snapshot.sells30s ?? snapshot.sells_30s);
-  const ratio = buys / Math.max(1, sells);
-  const marketCap = num(snapshot.marketCapUsd ?? snapshot.market_cap_usd);
-  const liquidity = num(snapshot.liquidityUsd ?? snapshot.liquidity_usd);
-  const price5m = num(snapshot.priceChange5mPct ?? raw.priceChange5mPct);
-  const price1h = num(snapshot.priceChange1hPct ?? raw.priceChange1hPct);
-  const top10 = num(snapshot.top10HolderPct ?? snapshot.top10_holder_pct);
-  const insider = num(snapshot.insiderPct ?? snapshot.insider_pct);
-  const bundler = num(snapshot.bundlerPct ?? snapshot.bundler_pct);
-  const creator = num(snapshot.creatorPct ?? snapshot.creator_pct ?? snapshot.devPct);
-  const peakChange = Math.max(price5m, price1h);
-  const dominantBuyFlow = buys >= 8 && (sells < 1 || ratio >= 8);
-  const oversized = marketCap >= 1_000_000;
-  const stretchedValuation = liquidity > 0 && marketCap / liquidity >= 25;
-  const extremeVertical = peakChange >= 1000;
-  const knownConcentration = top10 > 40 || insider > 10 || bundler > 12 || creator > 8;
-  const freshVerticalDominance = fresh && dominantBuyFlow && oversized && extremeVertical;
-  const freshStretchedDominance = fresh && dominantBuyFlow && oversized && stretchedValuation && peakChange >= 300;
-  const reasons = [];
-  if (knownConcentration) reasons.push('concentrated insider/holder launch');
-  if (freshVerticalDominance) reasons.push(`fresh vertical spike ${peakChange.toFixed(0)}% with extreme buy dominance`);
-  if (freshStretchedDominance) reasons.push('fresh stretched valuation with extreme buy dominance');
-  return { ignored: reasons.length > 0, reasons };
 };
 
 export function evaluateSignalSafety(snapshot = {}, scores = {}) {
@@ -62,7 +27,7 @@ export function evaluateSignalSafety(snapshot = {}, scores = {}) {
   const bundler = Number(snapshot.bundlerPct ?? 0);
   const creator = Number(snapshot.creatorPct ?? snapshot.devPct ?? 0);
 
-  // Entry remains fail-closed, but incomplete evidence is now distinct from a
+  // Entry remains fail-closed, but incomplete evidence is distinct from a
   // confirmed danger. Pending safety must not silence momentum/performance tracking.
   if (!(Number.isFinite(price) && price > 0)) pendingReasons.push('price unavailable');
   if (snapshot.marketDataVerified !== true) pendingReasons.push('market data not verified');
