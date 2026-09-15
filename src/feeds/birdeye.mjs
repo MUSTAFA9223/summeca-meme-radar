@@ -12,7 +12,9 @@ let lastDiscoveryWarningAt = 0;
 let discoveryDisabled = false;
 let lastFlowWarningAt = 0;
 const securityRetryAfter = new Map();
+const v3FlowRetryAfter = new Map();
 const SECURITY_PENDING_RETRY_MS = 90_000;
+const V3_FLOW_RETRY_MS = 5 * 60_000;
 
 async function waitForRateSlot() {
   while (true) {
@@ -240,7 +242,28 @@ const txTimeMs = (tx) => {
   return value > 1e12 ? value : value * 1000;
 };
 
-const txSide = (tx) => String(first(tx, ['txType', 'tx_type', 'side', 'type', 'swapType']) ?? '').toLowerCase();
+const txTokenChange = (tx, tokenAddress) => {
+  const target = String(tokenAddress ?? '');
+  if (!target) return null;
+  for (const leg of [tx?.base, tx?.quote]) {
+    if (String(leg?.address ?? '') !== target) continue;
+    const change = first(leg, ['uiChangeAmount', 'ui_change_amount', 'changeAmount', 'change_amount']);
+    const value = Number(change);
+    if (Number.isFinite(value) && value !== 0) return value;
+  }
+  return null;
+};
+
+const txSide = (tx, tokenAddress = '') => {
+  const explicit = String(first(tx, ['txType', 'tx_type', 'side', 'type', 'swapType']) ?? '').toLowerCase();
+  if (explicit.includes('buy') || explicit.includes('sell')) return explicit;
+  // Legacy Birdeye token trades often label the action as `swap`. For that
+  // response, the owner's target-token balance delta identifies the side.
+  const change = txTokenChange(tx, tokenAddress);
+  if (change != null) return change > 0 ? 'buy' : 'sell';
+  return explicit;
+};
+
 const txWallet = (tx) => {
   const direct = first(tx, ['owner', 'wallet', 'trader', 'signer', 'sourceOwner', 'source_owner']);
   if (direct) return String(typeof direct === 'object' ? (direct.address ?? direct.pubkey ?? '') : direct);
@@ -254,7 +277,7 @@ const txWallet = (tx) => {
 };
 const txUsd = (tx) => asNumber(first(tx, ['volumeUSD', 'volumeUsd', 'volume_usd', 'amountUsd', 'amount_usd', 'valueUsd', 'value_usd']));
 
-export function summarizeTrades(items, { nowMs = Date.now(), windowSeconds = 30 } = {}) {
+export function summarizeTrades(items, { nowMs = Date.now(), windowSeconds = 30, tokenAddress = '' } = {}) {
   const windowMs = windowSeconds * 1000;
   const currentStart = nowMs - windowMs;
   const previousStart = nowMs - windowMs * 2;
@@ -264,7 +287,7 @@ export function summarizeTrades(items, { nowMs = Date.now(), windowSeconds = 30 
   for (const tx of Array.isArray(items) ? items : []) {
     const time = txTimeMs(tx);
     if (!time || time < previousStart || time > nowMs + 5000) continue;
-    const side = txSide(tx);
+    const side = txSide(tx, tokenAddress);
     const usd = txUsd(tx);
     const wallet = txWallet(tx);
     const bucket = time >= currentStart ? current : previous;
@@ -298,18 +321,49 @@ export function summarizeTrades(items, { nowMs = Date.now(), windowSeconds = 30 
   };
 }
 
-export async function fetchRecentTradeSummary(apiKey, address, { nowMs = Date.now(), windowSeconds = 30 } = {}) {
-  const afterTime = Math.floor((nowMs - windowSeconds * 2 * 1000) / 1000);
-  const body = await birdeyeGet(apiKey, '/defi/v3/token/txs', {
+async function fetchLegacyTradeSummary(apiKey, address, options) {
+  const body = await birdeyeGet(apiKey, '/defi/txs/token', {
     address,
+    offset: 0,
     limit: 100,
-    tx_type: 'all',
-    sort_by: 'block_unix_time',
-    sort_type: 'desc',
-    after_time: afterTime
+    tx_type: 'swap',
+    sort_type: 'desc'
   });
   const items = body?.data?.items ?? body?.data?.txs ?? body?.data ?? [];
-  return summarizeTrades(items, { nowMs, windowSeconds });
+  return summarizeTrades(items, { ...options, tokenAddress: address });
+}
+
+export async function fetchRecentTradeSummary(apiKey, address, { nowMs = Date.now(), windowSeconds = 30 } = {}) {
+  const key = String(address ?? '').trim();
+  const options = { nowMs, windowSeconds };
+  const v3RetryAt = v3FlowRetryAfter.get(key) ?? 0;
+
+  if (Date.now() >= v3RetryAt) {
+    const afterTime = Math.floor((nowMs - windowSeconds * 2 * 1000) / 1000);
+    try {
+      const body = await birdeyeGet(apiKey, '/defi/v3/token/txs', {
+        address: key,
+        offset: 0,
+        limit: 100,
+        sort_by: 'block_unix_time',
+        sort_type: 'desc',
+        tx_type: 'all',
+        after_time: afterTime
+      });
+      const items = body?.data?.items ?? body?.data?.txs ?? body?.data ?? [];
+      v3FlowRetryAfter.delete(key);
+      return summarizeTrades(items, { ...options, tokenAddress: key });
+    } catch (error) {
+      const message = String(error?.message ?? error);
+      if (!/\/defi\/v3\/token\/txs HTTP 400/i.test(message)) throw error;
+      // Some fresh Pump.fun tokens are not immediately accepted by the V3 feed.
+      // Legacy token swaps expose owner + token balance deltas and are sufficient
+      // to recover real 30s buyer wallets while V3 indexing catches up.
+      v3FlowRetryAfter.set(key, Date.now() + V3_FLOW_RETRY_MS);
+    }
+  }
+
+  return fetchLegacyTradeSummary(apiKey, key, options);
 }
 
 export async function enrichTokenSnapshot(apiKey, base, { includeSecurity = true } = {}) {
