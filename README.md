@@ -1,17 +1,34 @@
 # SUMMECA Meme Radar
 
-Early-momentum Solana meme-token research bot. **v0.1 is paper-trading only.** It does not hold keys and cannot send live trades.
+Private, real-time meme-token momentum radar focused on very early Solana launches, safety-gated tracking, Telegram alerts, paper trading, and optional locked-by-default live execution.
 
-## What v0.1 does
+## Current release
 
-- Monitors fresh Solana meme listings (Birdeye when configured; demo feed otherwise).
-- Computes **Early Entry**, **Moon Potential**, and **Risk** scores.
-- Blocks obvious critical-risk candidates.
-- Simulates entries and adaptive Peak-Hunter exits.
-- Logs simulated trades to `paper-trades.jsonl`.
-- Can send Telegram alerts.
+Version **0.15.1** includes:
 
-## Run
+- Pump.fun direct-create detection through Solana/Helius WebSocket wakeups.
+- Birdeye enrichment with DexScreener/GeckoTerminal and public Solana RPC fallbacks.
+- Early Entry, Moon Potential, Risk, and momentum scoring.
+- Four-state safety model: `SAFE`, `UNKNOWN`, `DANGEROUS`, and `IGNORED`.
+- Continued performance tracking while safety evidence is still pending.
+- Suppression of already-exploded, one-way WOFI-style launches.
+- Persistent Supabase snapshots, signals, paper trades, and Telegram signal threads.
+- Private Telegram access with one-time activation codes, expirations, revocation, and owner-only admin controls.
+- Paper trading and Peak Hunter exits.
+- Optional Privy + Jupiter/PumpPortal live automation that is **disabled by default** and remains fail-closed behind strict safety checks.
+
+## Safety model
+
+Incomplete evidence is not treated as confirmed danger:
+
+- `SAFE`: eligible for normal entry logic.
+- `UNKNOWN`: no real-money entry; momentum and performance can continue to be monitored.
+- `DANGEROUS`: confirmed critical risk; execution is blocked.
+- `IGNORED`: noisy/late/vertical launch patterns are removed from alerts and tracking.
+
+Live execution should stay disabled until provider reliability, wallet configuration, and database permissions have been validated in the target environment.
+
+## Run locally
 
 ```bash
 npm install
@@ -20,21 +37,13 @@ npm run check
 npm run dev
 ```
 
-Add your own `BIRDEYE_API_KEY` and optional Telegram credentials to `.env`. Never commit `.env`.
+Never commit `.env`, wallet authorization material, Telegram bot tokens, Supabase service-role keys, or provider API keys.
 
-## Safety architecture
+## Production
 
-Live execution is deliberately locked in this release. The next milestone is realtime enrichment (1s/15s trades, holder/risk data), replay/backtesting, and measurable precision/recall. Only after those metrics are acceptable should a **separate, capped trading wallet** and a live execution adapter be considered.
+- Runtime: Railway
+- Database: Supabase
+- CI: GitHub Actions (`npm run check` plus live smoke tests on `main`)
+- Node.js: 22+
 
-## Scoring philosophy
-
-The bot does not claim to predict a +5000% token. It detects early demand acceleration, keeps risk independent from momentum, and lets exceptional runners stay open while momentum remains healthy.
-
-## Next milestones
-
-1. Birdeye WebSocket enrichment: new listings, MEME_STATS, token transactions.
-2. Helius low-latency Solana stream as a second source and failover.
-3. Persistent SQLite/Postgres event store and historical replay.
-4. Backtest entry/exit thresholds over failed, +2x, +5x, +10x, +50x cohorts.
-5. Telegram controls and mobile dashboard.
-6. Optional live execution only after paper-trading validation and hard risk caps.
+See `docs/ARCHITECTURE.md` and the files under `supabase/migrations/` for the current architecture and reproducible database schema.
