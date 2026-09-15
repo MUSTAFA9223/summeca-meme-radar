@@ -77,8 +77,11 @@ export function scoreToken(s) {
 
     if (s.marketDataVerified !== true) qualityGateReasons.push('market data not verified');
     if (s.securityVerified !== true) qualityGateReasons.push('security not verified');
+    if (!isEvm && s.onchainSecurityVerified === false) qualityGateReasons.push('on-chain mint security not verified');
     if (!isEvm && s.mintAuthorityDisabled !== true) qualityGateReasons.push('mint authority not verified disabled');
     if (!isEvm && s.freezeAuthorityDisabled !== true) qualityGateReasons.push('freeze authority not verified disabled');
+    if (s.isToken2022 === true && s.token2022ExtensionsVerified !== true) qualityGateReasons.push('Token-2022 extensions not verified');
+    if (Array.isArray(s.token2022UnsafeExtensions) && s.token2022UnsafeExtensions.length) qualityGateReasons.push('unsafe Token-2022 extension');
     if (!liquidityPass) qualityGateReasons.push('insufficient real liquidity/curve depth');
     if (!activityPass) qualityGateReasons.push('buy flow not confirmed by real sells');
     if (!volumePass) qualityGateReasons.push('insufficient fresh volume');
