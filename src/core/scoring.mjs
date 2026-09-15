@@ -62,8 +62,11 @@ export function scoreToken(s) {
   if (priceChange5m >= 25) moon += 8;
   if (volume5m >= 20_000) moon += 6;
   if (nz(s.top10HolderPct) > 0 && nz(s.top10HolderPct) <= 25) moon += 8;
-  if (nz(s.insiderPct) <= 5) moon += 5;
-  if (nz(s.devPct) <= 3 && !s.devSelling) moon += 5;
+  // Missing holder/creator fields normalize to zero. Do not award a safety bonus
+  // for missing evidence; only reward an actually observed low percentage.
+  if (nz(s.insiderPct) > 0 && nz(s.insiderPct) <= 5) moon += 5;
+  const creatorPct = nz(s.creatorPct ?? s.devPct);
+  if (creatorPct > 0 && creatorPct <= 3 && !s.devSelling) moon += 5;
   moon -= Math.round(risk * 0.28);
   moon = clamp(moon);
 
