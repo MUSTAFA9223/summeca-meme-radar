@@ -42,7 +42,7 @@ async function consume(update, base, ownerId) {
   const callback = update?.callback_query;
   const callbackChat = String(callback?.message?.chat?.id ?? '');
   const data = String(callback?.data ?? '');
-  if (callback && callbackChat === ownerId && (data.startsWith('p4:') || data.startsWith('p5:'))) {
+  if (callback && callbackChat === ownerId && (data.startsWith('p4:') || data.startsWith('p5:') || data.startsWith('p6:'))) {
     await telegramCall(base, 'answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
     const result = await terminal.handle(data).catch((error) => ({ handled: true, text: `❌ Terminal extension: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
     if (result?.handled) await sendResult(base, ownerId, result).catch(() => {});
@@ -53,6 +53,16 @@ async function consume(update, base, ownerId) {
   const text = String(message?.text ?? '').trim();
   if (message && chatId === ownerId && /^\/leaderboard(?:@\w+)?\b/i.test(text)) {
     const result = await terminal.handle('p4:lb').catch(() => null);
+    if (result?.handled) await sendResult(base, ownerId, result).catch(() => {});
+    return true;
+  }
+  if (message && chatId === ownerId && /^\/audit(?:@\w+)?\b/i.test(text)) {
+    const result = await terminal.handle('p6:a').catch(() => null);
+    if (result?.handled) await sendResult(base, ownerId, result).catch(() => {});
+    return true;
+  }
+  if (message && chatId === ownerId && /^\/livecheck(?:@\w+)?\b/i.test(text)) {
+    const result = await terminal.handle('p6:r').catch(() => null);
     if (result?.handled) await sendResult(base, ownerId, result).catch(() => {});
     return true;
   }
@@ -83,9 +93,14 @@ function appendCommands(init) {
   try {
     const body = JSON.parse(init.body);
     if (!Array.isArray(body?.commands)) return init;
-    if (!body.commands.some((c) => c?.command === 'leaderboard')) {
-      body.commands.splice(Math.max(0, body.commands.length - 3), 0, { command: 'leaderboard', description: 'Smart-Wallet Performance Leaderboard' });
-    }
+    const ensure = (command, description) => {
+      if (!body.commands.some((c) => c?.command === command)) {
+        body.commands.splice(Math.max(0, body.commands.length - 3), 0, { command, description });
+      }
+    };
+    ensure('leaderboard', 'Smart-Wallet Performance Leaderboard');
+    ensure('audit', 'Manual execution audit');
+    ensure('livecheck', 'Read-only live configuration check');
     return { ...init, body: JSON.stringify(body) };
   } catch { return init; }
 }
@@ -102,4 +117,4 @@ globalThis.fetch = async (input, init = {}) => {
   return previousFetch(input, init);
 };
 
-console.log('SUMMECA EXTENSION TELEGRAM ROUTER: p4+p5 callbacks + /leaderboard on shared getUpdates stream');
+console.log('SUMMECA EXTENSION TELEGRAM ROUTER: p4+p5+p6 callbacks + /leaderboard /audit /livecheck on shared getUpdates stream');
