@@ -20,6 +20,7 @@ const boolEnv = (name, fallback = true) => {
   const raw = String(process.env[name] ?? (fallback ? 'true' : 'false')).trim().toLowerCase();
   return !['false', '0', 'off', 'no'].includes(raw);
 };
+const numEnv = (name, fallback, min, max) => Math.max(min, Math.min(max, finite(process.env[name], fallback)));
 
 class SolanaTelegramSink {
   constructor() {
@@ -99,11 +100,128 @@ function normalizeMarket(pair, mint) {
   };
 }
 
+class SolanaProfileRpc {
+  constructor() {
+    const custom = String(process.env.SOLANA_PROFILE_RPC_URL ?? '').trim();
+    this.endpoints = [custom, 'https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'].filter(Boolean);
+    this.index = 0;
+    this.id = 0;
+    this.tail = Promise.resolve();
+    this.nextAt = 0;
+  }
+
+  call(method, params = []) {
+    const task = this.tail.then(async () => {
+      let lastError = null;
+      for (let attempt = 0; attempt < Math.min(4, this.endpoints.length + 1); attempt += 1) {
+        const waitMs = Math.max(0, this.nextAt - Date.now());
+        if (waitMs) await sleep(waitMs);
+        this.nextAt = Date.now() + 450;
+        const endpoint = this.endpoints[(this.index + attempt) % this.endpoints.length];
+        try {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 4_500);
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            signal: controller.signal,
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params })
+          }).finally(() => clearTimeout(timer));
+          if (response.status === 429) {
+            lastError = new Error(`${method} HTTP 429`);
+            await sleep(Math.min(4_000, 750 * (attempt + 1)));
+            continue;
+          }
+          if (!response.ok) throw new Error(`${method} HTTP ${response.status}`);
+          const body = await response.json();
+          if (body?.error) throw new Error(`${method} ${body.error.code}: ${body.error.message}`);
+          this.index = (this.index + attempt) % this.endpoints.length;
+          return body?.result;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError || new Error(`${method} failed`);
+    });
+    this.tail = task.catch(() => undefined);
+    return task;
+  }
+}
+
+const profileRpc = new SolanaProfileRpc();
+
+async function fetchHolderProfile(mint) {
+  const [supplyResult, largestResult] = await Promise.all([
+    profileRpc.call('getTokenSupply', [mint, { commitment: 'processed' }]),
+    profileRpc.call('getTokenLargestAccounts', [mint, { commitment: 'processed' }])
+  ]);
+  const supply = finite(supplyResult?.value?.amount);
+  if (!(supply > 0)) return null;
+  const balances = (Array.isArray(largestResult?.value) ? largestResult.value : [])
+    .map((row) => finite(row?.amount))
+    .filter((amount) => amount > 0)
+    .sort((a, b) => b - a);
+  if (!balances.length) return null;
+
+  const shares = balances.map((amount) => amount / supply * 100);
+  // Pump.fun bonding curve/vault is commonly the dominant token account at launch.
+  // Exclude only a clearly dominant first account; all remaining accounts are treated
+  // as user/holder concentration for the quality gate.
+  const curveExcluded = shares[0] >= 20;
+  const userShares = curveExcluded ? shares.slice(1) : shares;
+  const observedAccounts = userShares.filter((pct) => pct > 0).length;
+  const topUserPct = userShares[0] || 0;
+  const top5UsersPct = userShares.slice(0, 5).reduce((sum, pct) => sum + pct, 0);
+  const top10UsersPct = userShares.slice(0, 10).reduce((sum, pct) => sum + pct, 0);
+  const meaningfulWallets = userShares.filter((pct) => pct >= 0.35 && pct <= 8).length;
+  const pass = observedAccounts >= 4
+    && topUserPct <= 12
+    && top5UsersPct <= 30
+    && top10UsersPct <= 45
+    && meaningfulWallets >= 2;
+
+  return {
+    pass,
+    curveExcluded,
+    curveSharePct: curveExcluded ? shares[0] : 0,
+    observedAccounts,
+    topUserPct,
+    top5UsersPct,
+    top10UsersPct,
+    meaningfulWallets
+  };
+}
+
+function qualityScore(state, market, profile) {
+  const ageSec = (Date.now() - state.createdAt) / 1000;
+  const ratio = market.buys5m / Math.max(1, market.sells5m);
+  let score = 0;
+  if (state.initialBuy) score += 15;
+  if (ageSec <= 60) score += 12;
+  else if (ageSec <= 180) score += 7;
+  if (market.marketCapUsd > 0 && market.marketCapUsd <= 1_200_000) score += 10;
+  else if (market.marketCapUsd > 0 && market.marketCapUsd <= 1_800_000) score += 5;
+  if (market.buys5m >= 5) score += 10;
+  if (market.buys5m >= 10) score += 5;
+  if (market.sells5m >= 1) score += 5;
+  if (ratio >= 1.4) score += 10;
+  if (ratio >= 2) score += 5;
+  if (market.volume5mUsd >= 400) score += 8;
+  if (market.volume5mUsd >= 1_500) score += 5;
+  if (market.priceChange5mPct <= 35) score += 5;
+  if (profile?.pass) score += 20;
+  if (profile?.meaningfulWallets >= 3) score += 5;
+  return Math.min(100, score);
+}
+
 export class SolanaUltraEarlyWorker {
   constructor() {
     this.enabled = boolEnv('SOLANA_ULTRA_ENABLED', true);
     this.rawLaunchAlerts = boolEnv('SOLANA_RAW_LAUNCH_ALERTS', false);
-    this.marketPollMs = Math.max(1_000, Math.min(5_000, finite(process.env.SOLANA_ULTRA_MARKET_POLL_MS, 1_500)));
+    this.marketPollMs = numEnv('SOLANA_ULTRA_MARKET_POLL_MS', 1_500, 1_000, 5_000);
+    this.minScore = numEnv('SOLANA_QUALIFIED_MIN_SCORE', 72, 50, 95);
+    this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
+    this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
     this.ws = null;
     this.active = false;
     this.reconnectAttempt = 0;
@@ -130,10 +248,11 @@ export class SolanaUltraEarlyWorker {
       signature,
       initialBuy: Boolean(initialBuy),
       lastMarketAt: 0,
+      lastProfileAt: 0,
+      profile: null,
       rootMessageId: 0,
       launchSent: false,
-      marketLiveSent: false,
-      earlySent: false,
+      qualifiedSent: false,
       topSent: false
     };
     if (initialBuy) state.initialBuy = true;
@@ -145,23 +264,69 @@ export class SolanaUltraEarlyWorker {
     return state;
   }
 
-  async sendLaunch(mint, state) {
-    if (state.launchSent) return;
+  async sendRawLaunch(mint, state) {
+    if (state.launchSent || !this.rawLaunchAlerts) return;
     state.launchSent = true;
     const age = Math.max(0, Math.round((Date.now() - state.createdAt) / 1000));
     const message = await sink.send([
-      '🚨⚡ SUMMECA NEW LAUNCH — SOLANA / PUMP.FUN',
+      '🚨 SUMMECA RAW LAUNCH — SOLANA / PUMP.FUN',
       '',
-      '🟣 تم اكتشاف إنشاء العقد على السلسلة الآن — قبل انتظار السيولة أو DEX.',
-      `⏱️ العمر عند التنبيه: ~${age}s`,
-      `🟢 شراء أولي داخل معاملة الإنشاء: ${state.initialBuy ? 'نعم' : 'غير مؤكد'}`,
-      `🔗 TX: ${state.signature}`,
-      '',
-      '⚠️ هذا تنبيه إطلاق مبكر جدًا، وليس توصية شراء أو ضمان صعود.',
+      `⏱️ العمر: ~${age}s`,
+      `🟢 شراء أولي: ${state.initialBuy ? 'نعم' : 'غير مؤكد'}`,
+      '⚠️ RAW = رصد خام قبل فلتر الجودة.',
       `CA: ${mint}`
     ].join('\n'), mint);
     state.rootMessageId = Number(message?.message_id ?? 0);
-    console.log(`[solana:ultra-launch] mint=${short(mint)} initialBuy=${state.initialBuy ? 'yes' : 'no'} age=${age}s`);
+  }
+
+  async sendQualified(mint, state, market, profile, score) {
+    if (state.qualifiedSent) return;
+    state.qualifiedSent = true;
+    const age = Math.max(1, Math.round((Date.now() - state.createdAt) / 1000));
+    const ratio = market.buys5m / Math.max(1, market.sells5m);
+    const message = await sink.send([
+      '✅⚡ SUMMECA QUALIFIED LAUNCH — SOLANA',
+      '',
+      `$${market.symbol} • Pump.fun`,
+      `🎯 Quality Score: ${score}/100`,
+      `⏱️ العمر: ${age}s`,
+      `🟢 شراء أولي داخل الإنشاء: ${state.initialBuy ? 'نعم' : 'لا'}`,
+      `💧 السيولة: $${money(market.liquidityUsd)} | MC: $${money(market.marketCapUsd)}`,
+      `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | Ratio ${ratio.toFixed(2)}x`,
+      `Vol: $${money(market.volume5mUsd)}`,
+      `👥 حسابات حيازة بارزة مرصودة: ${profile.observedAccounts}`,
+      `🐋 محافظ بحيازة مؤثرة: ${profile.meaningfulWallets}`,
+      `🔝 أكبر حامل خارج حساب المنحنى: ${profile.topUserPct.toFixed(1)}%`,
+      `Top 5 خارج المنحنى: ${profile.top5UsersPct.toFixed(1)}%`,
+      '🛡️ توزيع الحيازة: PASSED',
+      '',
+      '⚠️ اجتياز الفلتر لا يضمن استمرار الصعود.',
+      `CA: ${mint}`
+    ].join('\n'), mint, { marketUrl: market.url, replyTo: state.rootMessageId });
+    if (!state.rootMessageId) state.rootMessageId = Number(message?.message_id ?? 0);
+    console.log(`[solana:qualified] mint=${short(mint)} score=${score} holders=${profile.observedAccounts} top=${profile.topUserPct.toFixed(1)}% age=${age}s`);
+  }
+
+  async sendTop(mint, state, market, profile, score) {
+    if (state.topSent) return;
+    state.topSent = true;
+    const age = Math.max(1, Math.round((Date.now() - state.createdAt) / 1000));
+    const ratio = market.buys5m / Math.max(1, market.sells5m);
+    await sink.send([
+      '💎🔥 SUMMECA TOP-TIER — SOLANA',
+      '',
+      `$${market.symbol} • Pump.fun`,
+      `🎯 Quality Score: ${score}/100`,
+      `⏱️ العمر: ${age}s`,
+      `💧 السيولة: $${money(market.liquidityUsd)} | MC: $${money(market.marketCapUsd)}`,
+      `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | Ratio ${ratio.toFixed(2)}x`,
+      `Vol: $${money(market.volume5mUsd)}`,
+      `🐋 حيازات مؤثرة: ${profile.meaningfulWallets} | Top holder: ${profile.topUserPct.toFixed(1)}%`,
+      '✅ شراء أولي + نشاط سوق + توزيع حيازة + ضغط شراء قوي',
+      '',
+      '⚠️ TOP-TIER = أقوى شروط الرادار، وليس ضمان ربح.',
+      `CA: ${mint}`
+    ].join('\n'), mint, { marketUrl: market.url, replyTo: state.rootMessageId });
   }
 
   async resolveCreate(signature, logs) {
@@ -173,8 +338,8 @@ export class SolanaUltraEarlyWorker {
       const mint = await resolvePumpCreateMint(env.heliusApiKey, signature, { retries: 2, retryDelayMs: 180 });
       if (!mint) return;
       const state = this.rememberMint(mint, signature, initialBuy);
-      console.log(`[solana:ultra-new] mint=${short(mint)} sig=${short(signature)} initialBuy=${initialBuy ? 'yes' : 'no'}`);
-      if (state && (initialBuy || this.rawLaunchAlerts)) await this.sendLaunch(mint, state);
+      console.log(`[solana:ultra-new] mint=${short(mint)} sig=${short(signature)} initialBuy=${initialBuy ? 'yes' : 'no'} notify=filtered`);
+      if (state) await this.sendRawLaunch(mint, state);
     } catch (error) {
       console.warn('[solana:ultra-resolve]', error.message);
     }
@@ -192,7 +357,7 @@ export class SolanaUltraEarlyWorker {
         method: 'logsSubscribe',
         params: [{ mentions: [PUMP_FUN_PROGRAM_ID] }, { commitment: 'processed' }]
       }));
-      console.log(`SUMMECA SOLANA ULTRA: processed Pump.fun stream connected poll=${this.marketPollMs}ms`);
+      console.log(`SUMMECA SOLANA ULTRA: filtered Pump.fun stream connected poll=${this.marketPollMs}ms score>=${this.minScore}`);
     });
     ws.addEventListener('message', (event) => {
       let message;
@@ -212,70 +377,56 @@ export class SolanaUltraEarlyWorker {
     });
   }
 
+  async profileFor(mint, state) {
+    const now = Date.now();
+    if (state.profile && now - state.lastProfileAt < this.profileRefreshMs) return state.profile;
+    state.lastProfileAt = now;
+    try {
+      state.profile = await fetchHolderProfile(mint);
+    } catch (error) {
+      console.warn(`[solana:holder-profile] mint=${short(mint)} ${error.message}`);
+    }
+    return state.profile;
+  }
+
   async handleMarket(mint, state, market) {
     const ageMs = Date.now() - state.createdAt;
+    if (ageMs > 8 * 60_000) return;
     const ratio = market.buys5m / Math.max(1, market.sells5m);
 
-    if (!state.marketLiveSent && market.priceUsd > 0 && market.buys5m >= 1 && ageMs <= 5 * 60_000) {
-      if (!state.launchSent) await this.sendLaunch(mint, state);
-      state.marketLiveSent = true;
-      await sink.send([
-        '⚡📈 SUMMECA MARKET LIVE — SOLANA',
-        '',
-        `$${market.symbol} • Pump.fun`,
-        `⏱️ بعد الإنشاء: ${Math.max(1, Math.round(ageMs / 1000))}s`,
-        `💵 السعر: $${market.priceUsd || 0}`,
-        `MC: $${money(market.marketCapUsd)} | Liquidity: $${money(market.liquidityUsd)}`,
-        `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | Vol $${money(market.volume5mUsd)}`,
-        '',
-        '🟡 السوق ظهر الآن؛ ما زلنا في مرحلة مبكرة جدًا.',
-        `CA: ${mint}`
-      ].join('\n'), mint, { marketUrl: market.url, replyTo: state.rootMessageId });
-    }
-
-    const earlyOk = ageMs <= 4 * 60_000
-      && market.marketCapUsd > 0 && market.marketCapUsd <= 2_000_000
-      && market.buys5m >= 3
+    // Keep every launch under silent observation. Only spend holder-RPC budget on a
+    // plausible early candidate, then notify only if the distribution also passes.
+    const plausible = state.initialBuy
+      && ageMs <= 4 * 60_000
+      && market.marketCapUsd > 0
+      && market.marketCapUsd <= 1_800_000
+      && market.buys5m >= 4
       && market.volume5mUsd >= 250
-      && ratio >= 1.2;
-    if (!state.earlySent && earlyOk) {
-      state.earlySent = true;
-      await sink.send([
-        '👀⚡ SUMMECA EARLY WATCH — SOLANA',
-        '',
-        `$${market.symbol} • Pump.fun`,
-        `⏱️ العمر: ${Math.max(1, Math.round(ageMs / 1000))}s`,
-        `💧 السيولة: $${money(market.liquidityUsd)} | MC: $${money(market.marketCapUsd)}`,
-        `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | Ratio ${ratio.toFixed(2)}x`,
-        `Vol: $${money(market.volume5mUsd)}`,
-        '',
-        '⚠️ رصد مبكر؛ لا يعني أن السعر سيواصل الصعود.',
-        `CA: ${mint}`
-      ].join('\n'), mint, { marketUrl: market.url, replyTo: state.rootMessageId });
+      && ratio >= 1.2
+      && market.priceChange5mPct <= 55;
+    if (!plausible) return;
+
+    const profile = await this.profileFor(mint, state);
+    if (!profile?.pass) return;
+    const score = qualityScore(state, market, profile);
+
+    const qualified = score >= this.minScore
+      && market.buys5m >= 5
+      && market.volume5mUsd >= 400
+      && ratio >= 1.3;
+    if (qualified && !state.qualifiedSent) {
+      await this.sendQualified(mint, state, market, profile, score);
     }
 
-    const topOk = ageMs <= 7 * 60_000
-      && market.marketCapUsd > 0 && market.marketCapUsd <= 1_500_000
-      && market.buys5m >= 8
+    const top = state.qualifiedSent
+      && score >= this.topScore
+      && market.marketCapUsd <= 1_200_000
+      && market.buys5m >= 10
       && market.sells5m >= 1
       && market.volume5mUsd >= 1_500
-      && ratio >= 1.6;
-    if (!state.topSent && topOk) {
-      state.topSent = true;
-      await sink.send([
-        '💎🔥 SUMMECA TOP-TIER — SOLANA',
-        '',
-        `$${market.symbol} • Pump.fun`,
-        `⏱️ العمر: ${Math.max(1, Math.round(ageMs / 1000))}s`,
-        `💧 السيولة: $${money(market.liquidityUsd)} | MC: $${money(market.marketCapUsd)}`,
-        `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | Ratio ${ratio.toFixed(2)}x`,
-        `Vol: $${money(market.volume5mUsd)}`,
-        '✅ عقد حديث + نشاط شراء/بيع فعلي + فلتر Market Cap مبكر',
-        '',
-        '⚠️ TOP-TIER = شروط الرادار فقط، وليس ضمان ربح.',
-        `CA: ${mint}`
-      ].join('\n'), mint, { marketUrl: market.url, replyTo: state.rootMessageId });
-    }
+      && ratio >= 1.7
+      && market.priceChange5mPct <= 40;
+    if (top && !state.topSent) await this.sendTop(mint, state, market, profile, score);
   }
 
   async marketCycle() {
