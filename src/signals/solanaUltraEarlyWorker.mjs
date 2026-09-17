@@ -39,7 +39,15 @@ class SolanaTelegramSink {
   keyboard(mint, marketUrl = '') {
     const token = String(mint ?? '');
     const rows = [
-      [{ text: '📋 نسخ العقد / Copy CA', copy_text: { text: token } }],
+      [
+        { text: '🔎 تحليل / Analyze', callback_data: `term:a:sol:${token}` },
+        { text: '📋 نسخ العقد / CA', copy_text: { text: token } }
+      ],
+      [
+        { text: '🟢 Buy', callback_data: `term:b:sol:${token}` },
+        { text: '🔴 Sell', callback_data: `term:s:sol:${token}` },
+        { text: '📊 Positions', callback_data: 'term:p' }
+      ],
       [
         { text: '🚀 Pump.fun', url: `https://pump.fun/coin/${encodeURIComponent(token)}` },
         { text: '🟢 GMGN', url: `https://gmgn.ai/sol/token/${encodeURIComponent(token)}` }
@@ -164,9 +172,6 @@ async function fetchHolderProfile(mint) {
   if (!balances.length) return null;
 
   const shares = balances.map((amount) => amount / supply * 100);
-  // Pump.fun bonding curve/vault is commonly the dominant token account at launch.
-  // Exclude only a clearly dominant first account; all remaining accounts are treated
-  // as user/holder concentration for the quality gate.
   const curveExcluded = shares[0] >= 20;
   const userShares = curveExcluded ? shares.slice(1) : shares;
   const observedAccounts = userShares.filter((pct) => pct > 0).length;
@@ -394,8 +399,6 @@ export class SolanaUltraEarlyWorker {
     if (ageMs > 8 * 60_000) return;
     const ratio = market.buys5m / Math.max(1, market.sells5m);
 
-    // Keep every launch under silent observation. Only spend holder-RPC budget on a
-    // plausible early candidate, then notify only if the distribution also passes.
     const plausible = state.initialBuy
       && ageMs <= 4 * 60_000
       && market.marketCapUsd > 0
