@@ -62,6 +62,21 @@ export class HardeningStore {
     return Array.isArray(rows) ? rows[0] ?? null : null;
   }
 
+  async findActiveIntent(network, tokenAddress, side, sinceIso) {
+    const path = [
+      'execution_audit?select=*',
+      `network=eq.${encodeURIComponent(network)}`,
+      `token_address=eq.${encodeURIComponent(tokenAddress)}`,
+      `side=eq.${encodeURIComponent(side)}`,
+      'status=in.(prepared,awaiting_confirm,confirmed,broadcasting)',
+      `created_at=gte.${encodeURIComponent(sinceIso)}`,
+      'order=created_at.desc',
+      'limit=1'
+    ].join('&');
+    const rows = await this.request(path);
+    return Array.isArray(rows) ? rows[0] ?? null : null;
+  }
+
   async transitionAudit(requestId, expectedStatus, nextStatus, patch = {}) {
     const rows = await this.request(`execution_audit?request_id=eq.${encodeURIComponent(requestId)}&status=eq.${encodeURIComponent(expectedStatus)}`, {
       method: 'PATCH',
