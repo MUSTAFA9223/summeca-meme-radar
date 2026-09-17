@@ -10,11 +10,13 @@ const [
   { startTrenchesWorker },
   { startSafePrelaunchWorker },
   { startMultiChainWorker },
+  { startBnbLeanWorker },
   { startLeanTelegramController }
 ] = await Promise.all([
   import('./signals/trenchesWorker.mjs'),
   import('./signals/prelaunchSafeWorker.mjs'),
   import('./signals/multiChainWorker.mjs'),
+  import('./signals/bnbLeanWorker.mjs'),
   import('./bot/leanTelegramController.mjs')
 ]);
 
@@ -27,4 +29,5 @@ if (!env.trenchesEnabled) {
 await startTrenchesWorker();
 await startSafePrelaunchWorker();
 await startMultiChainWorker();
+await startBnbLeanWorker();
 await startLeanTelegramController();
