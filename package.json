@@ -1,14 +1,14 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.20.1",
+  "version": "0.20.2",
   "private": true,
   "type": "module",
-  "description": "Lean Arc on-chain top-tier smart-wallet and pre-launch token radar with clustered wallet confirmation, anti-spoof payer proof, adaptive RPC rate limiting, DEX validation, and moonshot performance tracking.",
+  "description": "Lean Arc on-chain top-tier smart-wallet and pre-launch token radar with clustered wallet confirmation, anti-spoof payer proof, adaptive RPC rate limiting, restored Telegram controls, DEX validation, and moonshot performance tracking.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/bootstrap.mjs && node --check src/infra/arcRpcGuard.mjs && node --check src/config/env.mjs && node --check src/signals/trenchesWorker.mjs && node --check src/signals/prelaunchWorker.mjs && node --check src/signals/prelaunchSafeWorker.mjs && node --check src/notifiers/telegram.mjs"
+    "check": "node --check src/bootstrap.mjs && node --check src/infra/arcRpcGuard.mjs && node --check src/config/env.mjs && node --check src/signals/trenchesWorker.mjs && node --check src/signals/prelaunchWorker.mjs && node --check src/signals/prelaunchSafeWorker.mjs && node --check src/bot/leanTelegramController.mjs && node --check src/telegramOwnerMenu.mjs && node --check src/notifiers/telegram.mjs"
   },
   "engines": { "node": ">=22" }
 }
