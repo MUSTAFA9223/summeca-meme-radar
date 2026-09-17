@@ -36,9 +36,22 @@ if (!env.trenchesEnabled) {
   console.log('[source-mode] MULTICHAIN LEAN — Arc + Solana Ultra-Early + BNB Chain + Robinhood Chain; legacy scanners/executors are not loaded');
 }
 
-await startTrenchesWorker();
-await startSafePrelaunchWorker();
-await startMultiChainWorker();
-await startBnbLeanWorker();
-await startSolanaUltraEarlyWorker();
-await startLeanTelegramController();
+async function startSafely(name, starter) {
+  try {
+    await starter();
+    console.log(`[bootstrap] ${name} started`);
+  } catch (error) {
+    console.error(`[bootstrap] ${name} start failed: ${String(error?.message ?? error)}`);
+  }
+}
+
+// Start all engines in parallel. A rate-limited provider on one network must never
+// delay Telegram controls or the other chains.
+await Promise.allSettled([
+  startSafely('arc-trenches', startTrenchesWorker),
+  startSafely('arc-prelaunch', startSafePrelaunchWorker),
+  startSafely('multichain', startMultiChainWorker),
+  startSafely('bnb', startBnbLeanWorker),
+  startSafely('solana-ultra', startSolanaUltraEarlyWorker),
+  startSafely('telegram-controller', startLeanTelegramController)
+]);
