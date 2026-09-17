@@ -93,7 +93,15 @@ class BnbLeanWorker {
     const chatId = await this.chat();
     if (!chatId || !env.telegramBotToken) return;
     const rows = [
-      [{ text: '📋 نسخ العقد / Copy CA', copy_text: { text: token } }],
+      [
+        { text: '🔎 تحليل / Analyze', callback_data: `term:a:bsc:${token}` },
+        { text: '📋 نسخ العقد / CA', copy_text: { text: token } }
+      ],
+      [
+        { text: '🟢 Buy', callback_data: `term:b:bsc:${token}` },
+        { text: '🔴 Sell', callback_data: `term:s:bsc:${token}` },
+        { text: '📊 Positions', callback_data: 'term:p' }
+      ],
       [{ text: '🟢 GMGN BSC', url: `https://gmgn.ai/bsc/token/${encodeURIComponent(token)}` }]
     ];
     if (m?.url) rows.push([{ text: '📊 فتح DEX', url: m.url }]);
