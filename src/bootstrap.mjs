@@ -5,6 +5,7 @@ import { installTelegramTerminalGuard } from './infra/telegramTerminalGuard.mjs'
 import { installAdvancedTerminal } from './bot/advancedTerminal.mjs';
 import { installPhase3Terminal } from './bot/phase3Terminal.mjs';
 import { installPhase3Compat } from './bot/phase3Compat.mjs';
+import { installPhase4SafetyLeaderboard } from './bot/phase4SafetyLeaderboard.mjs';
 
 installArcRpcGuard();
 installDexScreenerGuard();
@@ -12,8 +13,10 @@ installTelegramTerminalGuard();
 installAdvancedTerminal();
 installPhase3Terminal();
 installPhase3Compat();
+installPhase4SafetyLeaderboard();
 
-// Keep the owner/admin Telegram layer, but do not load any legacy scanners.
+// Shared Telegram wrappers only. They do not create additional long-pollers.
+await import('./bot/phase4TelegramRouter.mjs');
 await import('./telegramOwnerMenu.mjs');
 
 const [
