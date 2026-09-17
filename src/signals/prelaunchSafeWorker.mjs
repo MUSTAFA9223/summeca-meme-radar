@@ -53,9 +53,16 @@ export class SafePrelaunchWorker extends PrelaunchWorker {
     this.topTierMaxPrice5mPct = Math.max(0, finite(process.env.PRELAUNCH_TOP_TIER_MAX_PRICE_5M_PCT, 20));
     this.topTierMinBuys5m = Math.max(0, finite(process.env.PRELAUNCH_TOP_TIER_MIN_BUYS_5M, 2));
     this.topTierMinSells5m = Math.max(0, finite(process.env.PRELAUNCH_TOP_TIER_MIN_SELLS_5M, 1));
+
+    this.watchEnabled = String(process.env.PRELAUNCH_WATCH_ENABLED ?? 'true').toLowerCase() !== 'false';
+    this.watchMaxAgeSec = Math.max(30, finite(process.env.PRELAUNCH_WATCH_MAX_AGE_SEC, 300));
+    this.watchMaxMarketCapUsd = Math.max(0, finite(process.env.PRELAUNCH_WATCH_MAX_MARKET_CAP_USD, 3_000_000));
+    this.watchMaxPrice5mPct = Math.max(0, finite(process.env.PRELAUNCH_WATCH_MAX_PRICE_5M_PCT, 35));
+
     this.topTierClusters = new Map();
     this.topTierSeen = new Set();
     this.topTierAlerted = new Set();
+    this.watchAlerted = new Set();
   }
 
   payerEvidence(wallet, tx, receipt, boughtToken) {
@@ -98,6 +105,49 @@ export class SafePrelaunchWorker extends PrelaunchWorker {
     return true;
   }
 
+  watchMarketPasses(market) {
+    if (!market) return true;
+    if (this.watchMaxMarketCapUsd > 0 && market.marketCapUsd > this.watchMaxMarketCapUsd) return false;
+    if (market.priceChange5mPct > this.watchMaxPrice5mPct) return false;
+    return true;
+  }
+
+  async notifyWatch({ token, meta, info, evidence, market, ageSec, txHash }) {
+    if (!this.watchEnabled || this.watchAlerted.has(token) || ageSec > this.watchMaxAgeSec) return;
+    if (!this.watchMarketPasses(market)) return;
+
+    this.watchAlerted.add(token);
+    const preDex = !market || market.liquidityUsd <= 0;
+    await this.notify([
+      preDex ? '👀⚡ SUMMECA EARLY WATCH — PRE-DEX' : '👀 SUMMECA EARLY WATCH',
+      '',
+      `$${market?.symbol || meta.symbol} • ARC`,
+      `🧠 أول شراء موثّق: ${info.label}`,
+      `⏱️ عمر العقد: ${ageSec}s`,
+      `💵 الدفع: ${finite(evidence.paidUsd) > 0 ? `$${money(evidence.paidUsd)}` : 'تم إثبات خروج قيمة من المحفظة'}`,
+      market
+        ? `💧 السيولة: $${money(market.liquidityUsd)} | MC: $${money(market.marketCapUsd)}`
+        : '🟡 ما زال قبل ظهور سوق DEX مؤكد',
+      market ? `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | حركة ${market.priceChange5mPct.toFixed(1)}%` : '',
+      '',
+      '👀 WATCH فقط: فرصة مبكرة قيد المراقبة وليست إشارة CONFIRMED.',
+      `CA: ${token}`,
+      `TX: ${txHash}`
+    ].filter(Boolean).join('\n'));
+
+    if (market?.priceUsd > 0 && !this.tracked.has(token)) {
+      this.tracked.set(token, {
+        symbol: market.symbol || meta.symbol,
+        entryPrice: market.priceUsd,
+        lastMilestone: 0,
+        wallet: info.label,
+        startedAt: Date.now(),
+        lastCheckAt: 0
+      });
+    }
+    console.log(`[prelaunch:early-watch] ${meta.symbol} wallet=${info.label} age=${ageSec}s`);
+  }
+
   async processIncomingTransfers(fromBlock, toBlock) {
     if (!this.walletTopics.length) return;
     const logs = await this.rpc.logs(fromBlock, toBlock, this.walletTopics);
@@ -125,6 +175,17 @@ export class SafePrelaunchWorker extends PrelaunchWorker {
       const ageSec = Math.max(0, Math.round((Date.now() - meta.createdAt) / 1000));
       if (ageSec > this.topTierMaxAgeSec) continue;
 
+      const market = await dexSnapshot(token).catch(() => null);
+      await this.notifyWatch({
+        token,
+        meta,
+        info,
+        evidence,
+        market,
+        ageSec,
+        txHash: log.transactionHash
+      });
+
       const cluster = this.addTopTierEvent(token, {
         wallet,
         label: info.label,
@@ -143,7 +204,6 @@ export class SafePrelaunchWorker extends PrelaunchWorker {
       }
       if (this.topTierAlerted.has(token)) continue;
 
-      const market = await dexSnapshot(token).catch(() => null);
       if (!this.marketPasses(market)) {
         console.log(`[prelaunch:top-tier-drop] ${meta.symbol} market-filter`);
         continue;
