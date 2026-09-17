@@ -56,8 +56,8 @@ export const env = {
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
   telegramLanguage: language('TELEGRAM_LANGUAGE', 'ar'),
 
-  // Smart-money discovery intentionally stays independent from the live-trading
-  // switch. It can produce alerts/signals while real-money execution remains locked.
+  // Birdeye Smart Money layer. It can be disabled independently when an account
+  // exhausts provider compute units; the on-chain whale layer below keeps running.
   smartMoneyEnabled: (process.env.SMART_MONEY_ENABLED ?? 'true') !== 'false',
   smartMoneyWalletPollMs: Math.max(2_500, num('SMART_MONEY_WALLET_POLL_MS', 5_000)),
   smartMoneyDiscoveryPollMs: Math.max(15_000, num('SMART_MONEY_DISCOVERY_POLL_MS', 60_000)),
@@ -81,6 +81,21 @@ export const env = {
   smartMoneyWalletScoreCacheMs: Math.max(60_000, num('SMART_MONEY_WALLET_SCORE_CACHE_MS', 1_800_000)),
   smartMoneySignalCooldownMs: Math.max(60_000, num('SMART_MONEY_SIGNAL_COOLDOWN_MS', 900_000)),
   smartMoneyMaxRiskScore: Math.max(5, Math.min(60, num('SMART_MONEY_MAX_RISK_SCORE', 30))),
+
+  // Provider-independent whale confirmation layer. It streams full transactions
+  // only for recent Pump.fun candidates already discovered by SUMMECA.
+  onchainWhaleEnabled: (process.env.ONCHAIN_WHALE_ENABLED ?? 'true') !== 'false',
+  onchainWhaleRefreshMs: Math.max(5_000, num('ONCHAIN_WHALE_REFRESH_MS', 15_000)),
+  onchainWhaleCandidateAgeMs: Math.max(60_000, num('ONCHAIN_WHALE_CANDIDATE_AGE_MS', 600_000)),
+  onchainWhaleMaxCandidates: Math.max(5, Math.min(100, Math.floor(num('ONCHAIN_WHALE_MAX_CANDIDATES', 40)))),
+  onchainWhaleMinBuySol: Math.max(0.05, Math.min(100, num('ONCHAIN_WHALE_MIN_BUY_SOL', 0.75))),
+  onchainWhaleMinWallets: Math.max(2, Math.min(8, Math.floor(num('ONCHAIN_WHALE_MIN_WALLETS', 2)))),
+  onchainWhaleMinClusterSol: Math.max(0.1, Math.min(500, num('ONCHAIN_WHALE_MIN_CLUSTER_SOL', 2.0))),
+  onchainWhaleMegaBuySol: Math.max(0.5, Math.min(500, num('ONCHAIN_WHALE_MEGA_BUY_SOL', 5.0))),
+  onchainWhaleClusterWindowMs: Math.max(15_000, num('ONCHAIN_WHALE_CLUSTER_WINDOW_MS', 90_000)),
+  onchainWhaleSignalCooldownMs: Math.max(60_000, num('ONCHAIN_WHALE_SIGNAL_COOLDOWN_MS', 900_000)),
+  onchainWhaleStaleAfterMs: Math.max(60_000, num('ONCHAIN_WHALE_STALE_AFTER_MS', 120_000)),
+  onchainWhaleMaxRiskScore: Math.max(5, Math.min(60, num('ONCHAIN_WHALE_MAX_RISK_SCORE', 30))),
 
   liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? 'false') === 'true',
   privyAppId: process.env.PRIVY_APP_ID ?? '',
@@ -117,6 +132,9 @@ if (env.smartMoneyEliteWalletWinRate < env.smartMoneyMinWalletWinRate) {
 }
 if (env.smartMoneyEliteWalletScore < env.smartMoneyMinWalletScore) {
   throw new Error('SMART_MONEY_ELITE_WALLET_SCORE must be >= SMART_MONEY_MIN_WALLET_SCORE');
+}
+if (env.onchainWhaleMegaBuySol < env.onchainWhaleMinBuySol) {
+  throw new Error('ONCHAIN_WHALE_MEGA_BUY_SOL must be >= ONCHAIN_WHALE_MIN_BUY_SOL');
 }
 
 if (env.liveTradingEnabled) {
