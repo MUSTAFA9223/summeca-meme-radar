@@ -1,3 +1,5 @@
+import { env } from '../config/env.mjs';
+import { telegramApi } from '../notifiers/telegram.mjs';
 import { PrelaunchWorker } from './prelaunchWorker.mjs';
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -18,6 +20,16 @@ const money = (value) => {
   if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
   return n.toFixed(n >= 100 ? 0 : 2);
 };
+
+function arcKeyboard(address, dexUrl = '') {
+  const token = low(address);
+  if (!token) return undefined;
+  const rows = [
+    [{ text: '📋 نسخ العقد / Copy CA', copy_text: { text: token } }]
+  ];
+  if (dexUrl) rows.push([{ text: '📊 فتح DEX', url: dexUrl }]);
+  return { inline_keyboard: rows };
+}
 
 async function dexSnapshot(address) {
   const response = await fetch(`${DEX_API}/${address}`, { headers: { accept: 'application/json' } });
@@ -63,6 +75,17 @@ export class SafePrelaunchWorker extends PrelaunchWorker {
     this.topTierSeen = new Set();
     this.topTierAlerted = new Set();
     this.watchAlerted = new Set();
+  }
+
+  async sendTokenAlert(text, token, dexUrl = '') {
+    if (!env.telegramBotToken) return;
+    const chatId = await this.resolveChatId();
+    if (!chatId) return;
+    await telegramApi(env.telegramBotToken, 'sendMessage', {
+      chat_id: chatId,
+      text,
+      reply_markup: arcKeyboard(token, dexUrl)
+    }).catch((error) => console.warn('[prelaunch:telegram]', error.message));
   }
 
   payerEvidence(wallet, tx, receipt, boughtToken) {
@@ -118,7 +141,7 @@ export class SafePrelaunchWorker extends PrelaunchWorker {
 
     this.watchAlerted.add(token);
     const preDex = !market || market.liquidityUsd <= 0;
-    await this.notify([
+    const text = [
       preDex ? '👀⚡ SUMMECA EARLY WATCH — PRE-DEX' : '👀 SUMMECA EARLY WATCH',
       '',
       `$${market?.symbol || meta.symbol} • ARC`,
@@ -133,7 +156,8 @@ export class SafePrelaunchWorker extends PrelaunchWorker {
       '👀 WATCH فقط: فرصة مبكرة قيد المراقبة وليست إشارة CONFIRMED.',
       `CA: ${token}`,
       `TX: ${txHash}`
-    ].filter(Boolean).join('\n'));
+    ].filter(Boolean).join('\n');
+    await this.sendTokenAlert(text, token, market?.dexUrl || '');
 
     if (market?.priceUsd > 0 && !this.tracked.has(token)) {
       this.tracked.set(token, {
@@ -232,7 +256,7 @@ export class SafePrelaunchWorker extends PrelaunchWorker {
         `CA: ${token}`,
         `TX: ${log.transactionHash}`
       ].filter(Boolean).join('\n');
-      await this.notify(text);
+      await this.sendTokenAlert(text, token, market?.dexUrl || '');
 
       if (market?.priceUsd > 0) {
         this.tracked.set(token, {
