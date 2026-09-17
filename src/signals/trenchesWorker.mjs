@@ -28,7 +28,14 @@ const usd18 = (value) => Number(hexBigInt(value)) / 1e18;
 function arcKeyboard(address, dexUrl = '') {
   const token = low(address);
   if (!token) return undefined;
-  const rows = [[{ text: '📋 نسخ العقد / Copy CA', copy_text: { text: token } }]];
+  const encoded = encodeURIComponent(token);
+  const rows = [
+    [{ text: '📋 نسخ العقد / Copy CA', copy_text: { text: token } }],
+    [
+      { text: '🟢 GMGN', url: `https://gmgn.ai/arc/token/${encoded}` },
+      { text: '🔥 FOMO', url: `https://fomo.family/tokens/arc/${encoded}` }
+    ]
+  ];
   if (dexUrl) rows.push([{ text: '📊 فتح DEX', url: dexUrl }]);
   return { inline_keyboard: rows };
 }
