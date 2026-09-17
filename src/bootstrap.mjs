@@ -8,6 +8,7 @@ import { installPhase3Terminal } from './bot/phase3Terminal.mjs';
 import { installPhase3Compat } from './bot/phase3Compat.mjs';
 import { installPhase4SafetyLeaderboard } from './bot/phase4SafetyLeaderboard.mjs';
 import { installPhase4PerformanceOverlay } from './bot/phase4PerformanceOverlay.mjs';
+import { installPhase5RiskQuote } from './bot/phase5RiskQuote.mjs';
 
 installArcRpcGuard();
 installDexScreenerGuard();
@@ -18,6 +19,7 @@ installPhase3Terminal();
 installPhase3Compat();
 installPhase4SafetyLeaderboard();
 installPhase4PerformanceOverlay();
+installPhase5RiskQuote();
 
 // Shared Telegram wrappers only. They do not create additional long-pollers.
 await import('./bot/phase4TelegramRouter.mjs');
