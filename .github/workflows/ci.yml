@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  production-check:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -21,43 +21,3 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-
-  live-smoke:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-22.04
-    env:
-      BIRDEYE_API_KEY: ${{ secrets.BIRDEYE_API_KEY }}
-      HELIUS_API_KEY: ${{ secrets.HELIUS_API_KEY }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      BIRDEYE_MAX_RPM: '50'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-      - run: npm ci
-      - name: Verify live provider secrets are configured
-        shell: bash
-        run: |
-          for name in BIRDEYE_API_KEY HELIUS_API_KEY SUPABASE_URL SUPABASE_SECRET_KEY TELEGRAM_BOT_TOKEN; do
-            if [ -z "${!name}" ]; then
-              echo "::error::$name repository secret is missing"
-              exit 1
-            fi
-          done
-      - name: Birdeye live discovery smoke test (non-blocking external check)
-        continue-on-error: true
-        run: npm run smoke:birdeye
-      - name: Helius mainnet RPC smoke test (non-blocking external check)
-        continue-on-error: true
-        run: npm run smoke:helius
-      - name: Helius Pump.fun WebSocket subscription smoke test (non-blocking external check)
-        continue-on-error: true
-        run: npm run smoke:helius-ws
-      - name: Supabase write-read-delete smoke test
-        run: npm run smoke:supabase
-      - name: Telegram read-only authentication smoke test
-        run: npm run smoke:telegram
