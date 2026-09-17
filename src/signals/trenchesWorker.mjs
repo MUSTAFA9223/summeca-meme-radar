@@ -2,7 +2,7 @@ import { env } from '../config/env.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
-const ARC_SYSTEM_EMITTER = '0xffffffffffffffffffffffffffffffffffffffe'.toLowerCase();
+const ARC_SYSTEM_EMITTER = '0xfffffffffffffffffffffffffffffffffffffffe';
 const ARC_NATIVE_USDC = '0x3600000000000000000000000000000000000000';
 const ZERO = '0x0000000000000000000000000000000000000000';
 const EVM = /^0x[0-9a-f]{40}$/;
@@ -215,7 +215,7 @@ export class TrenchesWorker {
 
   payerEvidence(wallet, tx, receipt, boughtToken) {
     if (low(tx?.from) === wallet) {
-      return { verified: true, paidUsd: low(tx?.from) === wallet ? usd18(tx?.value) : 0, mode: 'tx-from' };
+      return { verified: true, paidUsd: usd18(tx?.value), mode: 'tx-from' };
     }
     let paidUsd = 0;
     let verified = false;
