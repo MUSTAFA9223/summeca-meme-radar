@@ -17,12 +17,9 @@ function detectAddress(text, network) {
   return EVM.test(address) ? address : '';
 }
 
-function hasTerminalActions(rows) {
+function hasPrefix(rows, prefix) {
   return (Array.isArray(rows) ? rows : []).some((row) =>
-    (Array.isArray(row) ? row : []).some((button) => {
-      const data = String(button?.callback_data ?? '');
-      return data.startsWith('term:') || data.startsWith('adv:');
-    })
+    (Array.isArray(row) ? row : []).some((button) => String(button?.callback_data ?? '').startsWith(prefix))
   );
 }
 
@@ -31,22 +28,25 @@ function isSmartWalletAlert(text) {
   return /🧠\s*(?:المحفظة|wallet)|smart\s*wallet|محفظة.*متتبعة|tracked\s*wallet/i.test(value);
 }
 
-function terminalRows(network, address, text) {
-  const rows = [
+function basicRows(network, address) {
+  return [
     [
       { text: '🔎 تحليل', callback_data: `term:a:${network}:${address}` },
       { text: '🟢 Buy', callback_data: `term:b:${network}:${address}` },
       { text: '🔴 Sell', callback_data: `term:s:${network}:${address}` }
     ],
-    [
-      { text: '🎯 TP/SL', callback_data: `adv:r:${network}:${address}` },
-      { text: '⚙️ Presets', callback_data: 'adv:pre' },
-      { text: '👛 Wallet', callback_data: 'adv:w' }
-    ],
     [{ text: '📊 Positions', callback_data: 'term:p' }]
   ];
+}
+
+function advancedRows(network, address, text) {
+  const rows = [[
+    { text: '🎯 TP/SL', callback_data: `adv:r:${network}:${address}` },
+    { text: '⚙️ Presets', callback_data: 'adv:pre' },
+    { text: '👛 Wallet', callback_data: 'adv:w' }
+  ]];
   if (isSmartWalletAlert(text)) {
-    rows.splice(2, 0, [{ text: '🧠 Copy Preview / Confirm', callback_data: `adv:cp:${network}:${address}` }]);
+    rows.push([{ text: '🧠 Copy Preview / Confirm', callback_data: `adv:cp:${network}:${address}` }]);
   }
   return rows;
 }
@@ -76,8 +76,11 @@ export function installTelegramTerminalGuard() {
         ? body.reply_markup
         : {};
       const rows = Array.isArray(markup.inline_keyboard) ? markup.inline_keyboard : [];
-      if (!hasTerminalActions(rows)) {
-        body.reply_markup = { ...markup, inline_keyboard: [...rows, ...terminalRows(network, address, text)] };
+      const extra = [];
+      if (!hasPrefix(rows, 'term:')) extra.push(...basicRows(network, address));
+      if (!hasPrefix(rows, 'adv:')) extra.push(...advancedRows(network, address, text));
+      if (extra.length) {
+        body.reply_markup = { ...markup, inline_keyboard: [...rows, ...extra] };
         init = { ...init, body: JSON.stringify(body) };
       }
     } catch {
@@ -86,5 +89,5 @@ export function installTelegramTerminalGuard() {
     return originalFetch(input, init);
   };
 
-  console.log('TELEGRAM TERMINAL GUARD: Analyse/Buy/Sell + TP/SL/Presets/Wallet + smart-wallet Copy Preview');
+  console.log('TELEGRAM TERMINAL GUARD: Basic + Advanced actions merged without duplicates');
 }
