@@ -62,12 +62,19 @@ export class LeanTelegramController {
     return this.#send(result.text, result.keyboard);
   }
 
+  async #runTerminalAction(data) {
+    const result = await this.terminal.handle(data);
+    if (result?.handled) return this.#sendTerminal(result);
+    return null;
+  }
+
   mainKeyboard() {
     return [
       [{ text: '📊 الحالة', callback_data: 'menu:status' }, { text: '🌐 الشبكات', callback_data: 'menu:networks' }],
       [{ text: '👀 EARLY WATCH', callback_data: 'menu:trending' }, { text: '💎 TOP-TIER', callback_data: 'menu:signals' }],
       [{ text: '🧠 CONFIRMED', callback_data: 'menu:watchlist' }, { text: '🆕 PRE-LAUNCH', callback_data: 'menu:newcoins' }],
       [{ text: '💱 Trading', callback_data: 'menu:trading' }, { text: '📊 Positions', callback_data: 'term:p' }],
+      [{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '🧠 Copy Dashboard', callback_data: 'p3:c' }],
       [{ text: '👛 المحافظ', callback_data: 'menu:wallet' }, { text: '🛡️ الحماية', callback_data: 'menu:safety' }],
       [{ text: '⚙️ الإعدادات', callback_data: 'menu:settings' }, { text: '❓ المساعدة', callback_data: 'menu:help' }]
     ];
@@ -75,36 +82,37 @@ export class LeanTelegramController {
 
   async showMainMenu() {
     return this.#send(this.#pick(
-      '🤖 SUMMECA Trading Radar\n\n🌐 Arc + Solana + BNB Chain + Robinhood Chain\n⚡ رصد مبكر + فلترة جودة + Smart Wallet\n🔎 تحليل العقد من داخل تيليجرام\n💱 Buy/Sell Preview مع تأكيد نهائي\n📊 Positions للاختبار في Paper Mode\n\n🔒 التداول الحقيقي من Terminal الآمن غير منفذ حاليًا.',
-      '🤖 SUMMECA Trading Radar\n\n🌐 Arc + Solana + BNB Chain + Robinhood Chain\n⚡ Early detection + quality filters + Smart Wallet\n🔎 In-Telegram token analysis\n💱 Buy/Sell preview with final confirmation\n📊 Paper Positions for safe testing\n\n🔒 Live execution from the safe Terminal is currently disabled.'
+      '🤖 SUMMECA Trading Radar\n\n🌐 Arc + Solana + BNB Chain + Robinhood Chain\n⚡ رصد مبكر + فلترة جودة + Smart Wallet\n🔎 تحليل العقد من داخل تيليجرام\n💱 Buy/Sell Preview مع تأكيد نهائي\n🎯 Limit + DCA + Sniper Check\n📊 Positions وTP/SL/Trailing في Paper Mode\n\n🔒 التداول الحقيقي من Terminal الآمن غير منفذ حاليًا.',
+      '🤖 SUMMECA Trading Radar\n\n🌐 Arc + Solana + BNB Chain + Robinhood Chain\n⚡ Early detection + quality filters + Smart Wallet\n🔎 In-Telegram token analysis\n💱 Buy/Sell preview with final confirmation\n🎯 Limit + DCA + Sniper Check\n📊 Positions and TP/SL/Trailing in Paper Mode\n\n🔒 Live execution from the safe Terminal is currently disabled.'
     ), this.mainKeyboard());
   }
 
   async #showStatus() {
     const wallets = this.walletLabels.length;
     return this.#send(this.#pick(
-      `📊 حالة البوت\n\n🟢 الخدمة: تعمل\n🌐 الشبكات: 4\n✅ Arc — PRE-LAUNCH + Smart Wallet\n✅ Solana — Pump.fun Ultra-Early + Quality Filter\n✅ BNB Chain — Smart Wallet + block scan\n✅ Robinhood Chain — Smart Wallet + Early Market\n👛 محافظ EVM الأساسية: ${wallets}\n🛡️ Anti-spoof: مفعّل\n🚦 Rate-limit guards: مفعّلة\n💱 Trading Terminal: مفعّل للعرض والتحليل وPaper\n🔒 Live execution: ${env.liveTradingEnabled ? 'المحرك مهيأ لكن Terminal الآمن لا ينفذ معاملات' : 'مقفل'}`,
-      `📊 Bot status\n\n🟢 Service: running\n🌐 Networks: 4\n✅ Arc — PRE-LAUNCH + Smart Wallet\n✅ Solana — Pump.fun Ultra-Early + Quality Filter\n✅ BNB Chain — Smart Wallet + block scan\n✅ Robinhood Chain — Smart Wallet + Early Market\n👛 Base EVM wallets: ${wallets}\n🛡️ Anti-spoof: enabled\n🚦 Rate-limit guards: enabled\n💱 Trading Terminal: analysis + preview + Paper enabled\n🔒 Live execution: ${env.liveTradingEnabled ? 'engine configured, but safe Terminal does not broadcast transactions' : 'locked'}`
-    ), [[{ text: '📊 Positions', callback_data: 'term:p' }, { text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
+      `📊 حالة البوت\n\n🟢 الخدمة: تعمل\n🌐 الشبكات: 4\n✅ Arc — PRE-LAUNCH + Smart Wallet\n✅ Solana — Pump.fun Ultra-Early + Quality Filter\n✅ BNB Chain — Smart Wallet + block scan\n✅ Robinhood Chain — Smart Wallet + Early Market\n👛 محافظ EVM الأساسية: ${wallets}\n🛡️ Anti-spoof: مفعّل\n🚦 Rate-limit guards: مفعّلة\n💱 Trading Terminal: تحليل + Paper + Limit/DCA/Sniper\n🔒 Live execution: ${env.liveTradingEnabled ? 'المحرك مهيأ لكن Terminal الآمن لا ينفذ معاملات' : 'مقفل'}`,
+      `📊 Bot status\n\n🟢 Service: running\n🌐 Networks: 4\n✅ Arc — PRE-LAUNCH + Smart Wallet\n✅ Solana — Pump.fun Ultra-Early + Quality Filter\n✅ BNB Chain — Smart Wallet + block scan\n✅ Robinhood Chain — Smart Wallet + Early Market\n👛 Base EVM wallets: ${wallets}\n🛡️ Anti-spoof: enabled\n🚦 Rate-limit guards: enabled\n💱 Trading Terminal: analysis + Paper + Limit/DCA/Sniper\n🔒 Live execution: ${env.liveTradingEnabled ? 'engine configured, but safe Terminal does not broadcast transactions' : 'locked'}`
+    ), [[{ text: '📊 Positions', callback_data: 'term:p' }, { text: '📋 Orders', callback_data: 'p3:o' }], [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showTrading() {
     return this.#send(this.#pick(
-      '💱 SUMMECA Trading Terminal\n\nمن أي إشارة عملة ستجد:\n🔎 تحليل — السعر والسيولة وMC وBuy/Sell وتركيز أكبر حسابات Solana\n🟢 Buy — معاينة ثم اختيار مبلغ ثم تأكيد Paper\n🔴 Sell — إدارة Paper Position\n📊 Positions — الربح/الخسارة الحالية للمراكز التجريبية\n\nلن يتم توقيع أو إرسال أي صفقة حقيقية من هذه الواجهة.',
-      '💱 SUMMECA Trading Terminal\n\nEvery token alert can provide:\n🔎 Analysis — price, liquidity, MC, Buy/Sell and Solana top-account concentration\n🟢 Buy — preview, amount selection, then Paper confirmation\n🔴 Sell — manage a Paper Position\n📊 Positions — current PnL for simulated positions\n\nNo real transaction is signed or broadcast from this interface.'
+      '💱 SUMMECA Trading Terminal\n\nمن أي إشارة عملة ستجد:\n🔎 تحليل — السعر والسيولة وMC وBuy/Sell وتركيز أكبر حسابات Solana\n🟢 Buy / 🔴 Sell — Paper Preview + تأكيد\n🎯 TP/SL/Trailing — إدارة المخاطر التجريبية\n🎯 Limit / 📆 DCA — أوامر Paper تتم مراقبتها آليًا\n⚡ Sniper — فحص Pass/Fail ثم تأكيد يدوي\n🧠 Copy Dashboard — المحافظ المتتبعة ووضع النسخ الآمن\n\nلن يتم توقيع أو إرسال أي صفقة حقيقية من هذه الواجهة.',
+      '💱 SUMMECA Trading Terminal\n\nEvery token alert can provide:\n🔎 Analysis — price, liquidity, MC, Buy/Sell and Solana top-account concentration\n🟢 Buy / 🔴 Sell — Paper preview + confirmation\n🎯 TP/SL/Trailing — Paper risk management\n🎯 Limit / 📆 DCA — monitored Paper orders\n⚡ Sniper — Pass/Fail check then manual confirmation\n🧠 Copy Dashboard — tracked wallets and safe copy mode\n\nNo real transaction is signed or broadcast from this interface.'
     ), [
-      [{ text: '📊 Positions', callback_data: 'term:p' }],
+      [{ text: '📊 Positions', callback_data: 'term:p' }, { text: '📋 Orders', callback_data: 'p3:o' }],
+      [{ text: '🧠 Copy Dashboard', callback_data: 'p3:c' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
     ]);
   }
 
   async #showSettings() {
     return this.#send(this.#pick(
-      `⚙️ الإعدادات\n\nاللغة الحالية: ${this.language}\nالرادار يعمل دائمًا في الخلفية حتى لا تضيع الفرص.\nTrading Terminal يستخدم Paper Mode للاختبار الآن.`,
-      `⚙️ Settings\n\nCurrent language: ${this.language}\nThe radar remains active in the background so opportunities are not missed.\nTrading Terminal currently uses Paper Mode for testing.`
+      `⚙️ الإعدادات\n\nاللغة الحالية: ${this.language}\nالرادار يعمل دائمًا في الخلفية حتى لا تضيع الفرص.\nTrading Terminal يستخدم Paper/Safe Mode للاختبار الآن.`,
+      `⚙️ Settings\n\nCurrent language: ${this.language}\nThe radar remains active in the background so opportunities are not missed.\nTrading Terminal currently uses Paper/Safe Mode for testing.`
     ), [
       [{ text: '🌐 اللغة', callback_data: 'settings:language' }],
-      [{ text: '📊 Positions', callback_data: 'term:p' }],
+      [{ text: '⚙️ Buy Presets', callback_data: 'adv:pre' }, { text: '📋 Orders', callback_data: 'p3:o' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
     ]);
   }
@@ -130,7 +138,7 @@ export class LeanTelegramController {
     return this.#send(this.#pick(
       `👛 Smart Money\n\nمحافظ EVM المتتبعة: ${this.walletLabels.length}\n${names.join('\n') || 'لا توجد محافظ مهيأة.'}\n\nArc وBNB وRobinhood تستخدم Anti-spoof.\nSolana تعتمد حاليًا Pump.fun Ultra-Early + تحليل السوق والحيازة، ولن نسمي حسابًا Smart Wallet دون سجل مثبت.`,
       `👛 Smart Money\n\nTracked EVM wallets: ${this.walletLabels.length}\n${names.join('\n') || 'No wallets configured.'}\n\nArc, BNB and Robinhood use anti-spoof checks.\nSolana currently uses Pump.fun Ultra-Early + market/holder analysis; no account is labeled Smart Wallet without evidence.`
-    ), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
+    ), [[{ text: '🧠 Copy Dashboard', callback_data: 'p3:c' }, { text: '👛 Wallet', callback_data: 'adv:w' }], [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showInfo(data) {
@@ -160,8 +168,8 @@ export class LeanTelegramController {
         '🛡️ Safety\n\nAnti-spoof + liquidity + Buy/Sell + market cap + late-entry protection + Solana concentration checks + rate-limit guards.\n\nFilters reduce risk but do not guarantee profit.'
       ],
       'menu:help': [
-        '❓ المساعدة\n\n/start أو /menu — القائمة\n/status — حالة البوت\n/trade — Trading Terminal\n/positions — Paper Positions\n/settings — الإعدادات\n/admin — لوحة المالك\n\nافتح أي إشارة واستخدم Analyse / Buy / Sell مباشرة.',
-        '❓ Help\n\n/start or /menu — main menu\n/status — bot status\n/trade — Trading Terminal\n/positions — Paper Positions\n/settings — settings\n/admin — owner panel\n\nOpen any alert and use Analyse / Buy / Sell directly.'
+        '❓ المساعدة\n\n/start أو /menu — القائمة\n/status — حالة البوت\n/trade — Trading Terminal\n/positions — Paper Positions\n/orders — Limit/DCA Orders\n/copy — Smart-Wallet Copy Dashboard\n/settings — الإعدادات\n/admin — لوحة المالك\n\nافتح أي إشارة واستخدم Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper مباشرة.',
+        '❓ Help\n\n/start or /menu — main menu\n/status — bot status\n/trade — Trading Terminal\n/positions — Paper Positions\n/orders — Limit/DCA Orders\n/copy — Smart-Wallet Copy Dashboard\n/settings — settings\n/admin — owner panel\n\nOpen any alert and use Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper directly.'
       ]
     };
     const pair = map[data] || map['menu:help'];
@@ -177,6 +185,8 @@ export class LeanTelegramController {
     if (/^\/help(?:@\w+)?\b/i.test(text)) return this.#showInfo('menu:help');
     if (/^\/trade(?:@\w+)?\b/i.test(text)) return this.#showTrading();
     if (/^\/positions(?:@\w+)?\b/i.test(text)) return this.#sendTerminal(await this.terminal.positions());
+    if (/^\/orders(?:@\w+)?\b/i.test(text)) return this.#runTerminalAction('p3:o');
+    if (/^\/copy(?:@\w+)?\b/i.test(text)) return this.#runTerminalAction('p3:c');
   }
 
   async #handleCallback(callback) {
@@ -185,7 +195,7 @@ export class LeanTelegramController {
     const data = String(callback?.data ?? '');
     await telegramApi(env.telegramBotToken, 'answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
 
-    if (data.startsWith('term:')) {
+    if (data.startsWith('term:') || data.startsWith('adv:') || data.startsWith('p3:')) {
       const result = await this.terminal.handle(data);
       if (result?.handled) return this.#sendTerminal(result);
     }
@@ -257,6 +267,8 @@ export class LeanTelegramController {
         { command: 'status', description: 'حالة البوت' },
         { command: 'trade', description: 'Trading Terminal' },
         { command: 'positions', description: 'Paper Positions' },
+        { command: 'orders', description: 'Limit / DCA Orders' },
+        { command: 'copy', description: 'Smart-Wallet Copy Dashboard' },
         { command: 'settings', description: 'الإعدادات' },
         { command: 'help', description: 'المساعدة' },
         { command: 'admin', description: 'لوحة المالك' }
@@ -264,7 +276,7 @@ export class LeanTelegramController {
     }).catch((error) => console.warn('[telegram:set-commands]', error.message));
 
     this.stopped = false;
-    console.log(`[telegram:lean-controller] active chat=${String(this.chatId).slice(0, 4)}… language=${this.language} terminal=on liveBroadcast=off`);
+    console.log(`[telegram:lean-controller] active chat=${String(this.chatId).slice(0, 4)}… language=${this.language} terminal=on callbacks=term+adv+p3 liveBroadcast=off`);
     void this.#loop();
     return true;
   }
