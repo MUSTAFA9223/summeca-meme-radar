@@ -7,6 +7,7 @@ import './index.mjs';
 import { startEvmRadarWorker } from './signals/evmRadarWorker.mjs';
 import { startMomentumAlertWorker } from './signals/momentumAlertWorker.mjs';
 import { startSmartMoneyWorker } from './signals/smartMoneyWorker.mjs';
+import { startTrenchesWorker } from './signals/trenchesWorker.mjs';
 import { runLiveConfigSmoke } from './trading/liveConfigSmoke.mjs';
 import { startLiveAutomation } from './trading/liveAutomation.mjs';
 
@@ -31,8 +32,18 @@ if (!env.liveTradingEnabled && liveConfigReady) {
   console.log('[live-config-smoke] SKIPPED — secure live configuration is incomplete');
 }
 
-await startMomentumAlertWorker();
-await startEvmRadarWorker();
-console.log('[global-radar] generic safety-pending alerts disabled in high-confidence mode; networks without contract-security verification stay silent');
-await startSmartMoneyWorker();
+if (env.trenchesEnabled) {
+  // Trenches-first production mode: old momentum, generic EVM discovery and
+  // Birdeye Smart Money sources stay dormant. index.mjs is still loaded for
+  // Telegram controls/paper portfolio, while scanner_paused disables its old
+  // Solana discovery loop in production settings.
+  console.log('[source-mode] TRENCHES-FIRST — legacy signal workers disabled');
+  await startTrenchesWorker();
+} else {
+  await startMomentumAlertWorker();
+  await startEvmRadarWorker();
+  console.log('[global-radar] generic safety-pending alerts disabled in high-confidence mode; networks without contract-security verification stay silent');
+  await startSmartMoneyWorker();
+}
+
 await startLiveAutomation();
