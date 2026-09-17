@@ -30,6 +30,11 @@ const language = (name, fallback = 'ar') => {
   return ['ar', 'en', 'bilingual'].includes(value) ? value : fallback;
 };
 
+const oneOf = (name, allowed, fallback) => {
+  const value = String(process.env[name] ?? fallback).trim().toLowerCase();
+  return allowed.includes(value) ? value : fallback;
+};
+
 export const env = {
   birdeyeApiKey: process.env.BIRDEYE_API_KEY ?? '',
   birdeyePollMs: Math.max(5000, num('BIRDEYE_POLL_MS', 10000)),
@@ -50,6 +55,32 @@ export const env = {
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN ?? '',
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
   telegramLanguage: language('TELEGRAM_LANGUAGE', 'ar'),
+
+  // Smart-money discovery intentionally stays independent from the live-trading
+  // switch. It can produce alerts/signals while real-money execution remains locked.
+  smartMoneyEnabled: (process.env.SMART_MONEY_ENABLED ?? 'true') !== 'false',
+  smartMoneyWalletPollMs: Math.max(2_500, num('SMART_MONEY_WALLET_POLL_MS', 5_000)),
+  smartMoneyDiscoveryPollMs: Math.max(15_000, num('SMART_MONEY_DISCOVERY_POLL_MS', 60_000)),
+  smartMoneyInterval: oneOf('SMART_MONEY_INTERVAL', ['1d', '7d', '30d'], '1d'),
+  smartMoneyTraderStyle: oneOf('SMART_MONEY_TRADER_STYLE', ['all', 'risk_averse', 'risk_balancers', 'trenchers'], 'trenchers'),
+  smartMoneyMaxCandidates: Math.max(1, Math.min(20, Math.floor(num('SMART_MONEY_MAX_CANDIDATES', 5)))),
+  smartMoneyTopTradersPerToken: Math.max(1, Math.min(10, Math.floor(num('SMART_MONEY_TOP_TRADERS_PER_TOKEN', 3)))),
+  smartMoneyMaxWallets: Math.max(1, Math.min(12, Math.floor(num('SMART_MONEY_MAX_WALLETS', 6)))),
+  smartMoneyMinNetFlowUsd: Math.max(0, num('SMART_MONEY_MIN_NET_FLOW_USD', 5_000)),
+  smartMoneyMinTraders: Math.max(1, Math.min(20, Math.floor(num('SMART_MONEY_MIN_TRADERS', 3)))),
+  smartMoneyMinBuySellRatio: Math.max(1, Math.min(10, num('SMART_MONEY_MIN_BUY_SELL_RATIO', 1.25))),
+  smartMoneyMaxMarketCapUsd: Math.max(0, num('SMART_MONEY_MAX_MARKET_CAP_USD', 3_000_000)),
+  smartMoneyMinWalletWinRate: Math.max(0.1, Math.min(1, num('SMART_MONEY_MIN_WALLET_WIN_RATE', 0.55))),
+  smartMoneyMinWalletRealizedPnlUsd: Math.max(0, num('SMART_MONEY_MIN_WALLET_REALIZED_PNL_USD', 1_000)),
+  smartMoneyMinWalletScore: Math.max(1, Math.min(100, num('SMART_MONEY_MIN_WALLET_SCORE', 60))),
+  smartMoneyEliteWalletScore: Math.max(1, Math.min(100, num('SMART_MONEY_ELITE_WALLET_SCORE', 82))),
+  smartMoneyEliteWalletWinRate: Math.max(0.1, Math.min(1, num('SMART_MONEY_ELITE_WALLET_WIN_RATE', 0.65))),
+  smartMoneyMinConfirmingWallets: Math.max(1, Math.min(6, Math.floor(num('SMART_MONEY_MIN_CONFIRMING_WALLETS', 2)))),
+  smartMoneyClusterWindowMs: Math.max(30_000, num('SMART_MONEY_CLUSTER_WINDOW_MS', 120_000)),
+  smartMoneyCandidateTtlMs: Math.max(60_000, num('SMART_MONEY_CANDIDATE_TTL_MS', 600_000)),
+  smartMoneyWalletScoreCacheMs: Math.max(60_000, num('SMART_MONEY_WALLET_SCORE_CACHE_MS', 1_800_000)),
+  smartMoneySignalCooldownMs: Math.max(60_000, num('SMART_MONEY_SIGNAL_COOLDOWN_MS', 900_000)),
+  smartMoneyMaxRiskScore: Math.max(5, Math.min(60, num('SMART_MONEY_MAX_RISK_SCORE', 30))),
 
   liveTradingEnabled: (process.env.LIVE_TRADING_ENABLED ?? 'false') === 'true',
   privyAppId: process.env.PRIVY_APP_ID ?? '',
@@ -80,6 +111,13 @@ export const env = {
   paperStopLossPct: num('PAPER_STOP_LOSS_PCT', 10),
   peakHunterStartPct: num('PEAK_HUNTER_START_PCT', 200)
 };
+
+if (env.smartMoneyEliteWalletWinRate < env.smartMoneyMinWalletWinRate) {
+  throw new Error('SMART_MONEY_ELITE_WALLET_WIN_RATE must be >= SMART_MONEY_MIN_WALLET_WIN_RATE');
+}
+if (env.smartMoneyEliteWalletScore < env.smartMoneyMinWalletScore) {
+  throw new Error('SMART_MONEY_ELITE_WALLET_SCORE must be >= SMART_MONEY_MIN_WALLET_SCORE');
+}
 
 if (env.liveTradingEnabled) {
   const required = {

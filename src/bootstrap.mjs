@@ -6,6 +6,7 @@ import { env } from './config/env.mjs';
 import './index.mjs';
 import { startEvmRadarWorker } from './signals/evmRadarWorker.mjs';
 import { startMomentumAlertWorker } from './signals/momentumAlertWorker.mjs';
+import { startSmartMoneyWorker } from './signals/smartMoneyWorker.mjs';
 import { runLiveConfigSmoke } from './trading/liveConfigSmoke.mjs';
 import { startLiveAutomation } from './trading/liveAutomation.mjs';
 
@@ -33,4 +34,5 @@ if (!env.liveTradingEnabled && liveConfigReady) {
 await startMomentumAlertWorker();
 await startEvmRadarWorker();
 console.log('[global-radar] generic safety-pending alerts disabled in high-confidence mode; networks without contract-security verification stay silent');
+await startSmartMoneyWorker();
 await startLiveAutomation();
