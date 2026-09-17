@@ -6,18 +6,25 @@ installArcRpcGuard();
 // Keep the owner/admin Telegram layer, but do not load any legacy scanners.
 await import('./telegramOwnerMenu.mjs');
 
-const [{ startTrenchesWorker }, { startSafePrelaunchWorker }, { startLeanTelegramController }] = await Promise.all([
+const [
+  { startTrenchesWorker },
+  { startSafePrelaunchWorker },
+  { startMultiChainWorker },
+  { startLeanTelegramController }
+] = await Promise.all([
   import('./signals/trenchesWorker.mjs'),
   import('./signals/prelaunchSafeWorker.mjs'),
+  import('./signals/multiChainWorker.mjs'),
   import('./bot/leanTelegramController.mjs')
 ]);
 
 if (!env.trenchesEnabled) {
-  console.warn('[source-mode] TRENCHES is disabled — no legacy scanners are started in the lean production build');
+  console.warn('[source-mode] ARC TRENCHES is disabled');
 } else {
-  console.log('[source-mode] ARC ON-CHAIN TRENCHES — wallet-driven + pre-launch contract radar; legacy scanners/executors are not loaded');
+  console.log('[source-mode] MULTICHAIN LEAN — Arc + Solana + BNB Chain + Robinhood Chain; legacy scanners/executors are not loaded');
 }
 
 await startTrenchesWorker();
 await startSafePrelaunchWorker();
+await startMultiChainWorker();
 await startLeanTelegramController();
