@@ -16,6 +16,42 @@ async function saveOrders(instance, rows) {
   if (instance?.settings?.enabled) await instance.settings.set(ORDERS_KEY, JSON.stringify(rows.slice(0, 80))).catch(() => {});
 }
 
+function orderToken(id) {
+  let hash = 2166136261;
+  for (const char of String(id ?? '')) {
+    hash ^= char.charCodeAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+async function cancelOrderByToken(instance, token) {
+  const orders = await loadOrders(instance);
+  const order = orders.find((row) => row.status === 'open' && orderToken(row.id) === String(token));
+  if (!order) {
+    return { text: 'ℹ️ الأمر غير موجود أو تم إغلاقه.', keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }]] };
+  }
+  order.status = 'cancelled';
+  order.cancelledAt = new Date().toISOString();
+  await saveOrders(instance, orders);
+  return {
+    text: `✅ تم إلغاء Paper ${String(order.type || 'order').toUpperCase()} لـ $${order.symbol || 'TOKEN'}.`,
+    keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '📊 Positions', callback_data: 'term:p' }]]
+  };
+}
+
+function compactOrderCallbacks(result) {
+  if (!Array.isArray(result?.keyboard)) return result;
+  result.keyboard = result.keyboard.map((row) => (Array.isArray(row) ? row.map((button) => {
+    const data = String(button?.callback_data ?? '');
+    if (!data.startsWith('p3:oc:')) return button;
+    let id = data.slice('p3:oc:'.length);
+    try { id = decodeURIComponent(id); } catch {}
+    return { ...button, callback_data: `p3:cx:${orderToken(id)}` };
+  }) : row));
+  return result;
+}
+
 async function createDcaCompat(instance, totalUsd, installments, intervalMin, network, address) {
   const key = normalizeTerminalNetwork(network);
   const total = Math.max(1, Math.min(5_000, finite(totalUsd)));
@@ -53,6 +89,16 @@ export function installPhase3Compat() {
   const previousHandle = TradingTerminal.prototype.handle;
   TradingTerminal.prototype.handle = async function(data) {
     const value = String(data ?? '');
+
+    if (value === 'p3:o') {
+      const result = await previousHandle.call(this, data);
+      return compactOrderCallbacks(result);
+    }
+
+    if (value.startsWith('p3:cx:')) {
+      return { handled: true, ...(await cancelOrderByToken(this, value.slice('p3:cx:'.length))) };
+    }
+
     if (value.startsWith('p3:dc:')) {
       const parts = value.split(':');
       if (parts.length >= 7) {
@@ -76,5 +122,5 @@ export function installPhase3Compat() {
     return result;
   };
 
-  console.log('SUMMECA PHASE 3 COMPAT: DCA callbacks + Orders/Copy navigation fixed');
+  console.log('SUMMECA PHASE 3 COMPAT: DCA callbacks + compact Order cancel + Orders/Copy navigation fixed');
 }
