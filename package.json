@@ -1,14 +1,14 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.23.0",
+  "version": "0.23.1",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with filtered Pump.fun launch detection, holder-concentration quality gates, smart-wallet confirmation, Banana-style Telegram analysis/Paper trading terminal, and adaptive RPC limiting.",
+  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with filtered Pump.fun launch detection, holder-concentration quality gates, smart-wallet confirmation, unified Banana-style Telegram analysis/Paper trading terminal, and adaptive RPC limiting.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/bootstrap.mjs && node --check src/infra/arcRpcGuard.mjs && node --check src/config/env.mjs && node --check src/signals/trenchesWorker.mjs && node --check src/signals/prelaunchWorker.mjs && node --check src/signals/prelaunchSafeWorker.mjs && node --check src/signals/multiChainWorker.mjs && node --check src/signals/bnbLeanWorker.mjs && node --check src/signals/solanaUltraEarlyWorker.mjs && node --check src/bot/tradingTerminal.mjs && node --check src/bot/leanTelegramController.mjs && node --check src/telegramOwnerMenu.mjs && node --check src/notifiers/telegram.mjs"
+    "check": "node --check src/bootstrap.mjs && node --check src/infra/arcRpcGuard.mjs && node --check src/infra/telegramTerminalGuard.mjs && node --check src/config/env.mjs && node --check src/signals/trenchesWorker.mjs && node --check src/signals/prelaunchWorker.mjs && node --check src/signals/prelaunchSafeWorker.mjs && node --check src/signals/multiChainWorker.mjs && node --check src/signals/bnbLeanWorker.mjs && node --check src/signals/solanaUltraEarlyWorker.mjs && node --check src/bot/tradingTerminal.mjs && node --check src/bot/leanTelegramController.mjs && node --check src/telegramOwnerMenu.mjs && node --check src/notifiers/telegram.mjs"
   },
   "engines": { "node": ">=22" }
 }
