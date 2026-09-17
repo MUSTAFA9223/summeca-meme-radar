@@ -5,6 +5,14 @@ const MAX_REPLAY_BLOCKS = Math.max(25, Math.min(2_000, Number(process.env.RUNTIM
 const SAVE_MS = Math.max(5_000, Math.min(60_000, Number(process.env.RUNTIME_CHECKPOINT_MS || 15_000)));
 const PENDING_MAX_AGE_MS = Math.max(60_000, Math.min(60 * 60_000, Number(process.env.RUNTIME_PENDING_MAX_AGE_MS || 15 * 60_000)));
 
+const hasOwnState = (worker) => Boolean(
+  worker && typeof worker === 'object' && (
+    (Number.isFinite(Number(worker.lastBlock)) && Number(worker.lastBlock) > 0) ||
+    worker.seenSignatures instanceof Set ||
+    worker.pending instanceof Map
+  )
+);
+
 function primitivePendingState(state) {
   if (!state || typeof state !== 'object') return null;
   const safe = {};
@@ -68,7 +76,7 @@ function restoreWorker(worker, value, name) {
 }
 
 async function attachSingle(name, worker) {
-  if (!worker || typeof worker !== 'object' || !store.enabled) return;
+  if (!hasOwnState(worker) || !store.enabled) return;
   const checkpointKey = `worker:${name}`;
   try {
     const row = await store.loadCheckpoint(checkpointKey);
