@@ -1,9 +1,9 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with ultra-early Pump.fun launch detection, smart-wallet confirmation, anti-spoof checks, Telegram controls, and adaptive RPC limiting.",
+  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with filtered Pump.fun launch detection, holder-concentration quality gates, smart-wallet confirmation, anti-spoof checks, Telegram controls, and adaptive RPC limiting.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
