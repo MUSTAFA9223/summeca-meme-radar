@@ -1,6 +1,6 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.19.0",
+  "version": "0.19.1",
   "private": true,
   "type": "module",
   "description": "Lean Arc on-chain smart-wallet and pre-launch token radar with anti-spoof payer proof, early Telegram alerts, DEX validation, and moonshot performance tracking.",
@@ -8,7 +8,7 @@
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/bootstrap.mjs && node --check src/config/env.mjs && node --check src/signals/trenchesWorker.mjs && node --check src/signals/prelaunchWorker.mjs && node --check src/notifiers/telegram.mjs"
+    "check": "node --check src/bootstrap.mjs && node --check src/config/env.mjs && node --check src/signals/trenchesWorker.mjs && node --check src/signals/prelaunchWorker.mjs && node --check src/signals/prelaunchSafeWorker.mjs && node --check src/notifiers/telegram.mjs"
   },
   "engines": { "node": ">=22" }
 }
