@@ -1,7 +1,9 @@
 import { env } from './config/env.mjs';
 import { installArcRpcGuard } from './infra/arcRpcGuard.mjs';
+import { installTelegramTerminalGuard } from './infra/telegramTerminalGuard.mjs';
 
 installArcRpcGuard();
+installTelegramTerminalGuard();
 
 // Keep the owner/admin Telegram layer, but do not load any legacy scanners.
 await import('./telegramOwnerMenu.mjs');
