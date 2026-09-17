@@ -3,9 +3,13 @@ import { installArcRpcGuard } from './infra/arcRpcGuard.mjs';
 
 installArcRpcGuard();
 
-const [{ startTrenchesWorker }, { startSafePrelaunchWorker }] = await Promise.all([
+// Keep the owner/admin Telegram layer, but do not load any legacy scanners.
+await import('./telegramOwnerMenu.mjs');
+
+const [{ startTrenchesWorker }, { startSafePrelaunchWorker }, { startLeanTelegramController }] = await Promise.all([
   import('./signals/trenchesWorker.mjs'),
-  import('./signals/prelaunchSafeWorker.mjs')
+  import('./signals/prelaunchSafeWorker.mjs'),
+  import('./bot/leanTelegramController.mjs')
 ]);
 
 if (!env.trenchesEnabled) {
@@ -16,3 +20,4 @@ if (!env.trenchesEnabled) {
 
 await startTrenchesWorker();
 await startSafePrelaunchWorker();
+await startLeanTelegramController();
