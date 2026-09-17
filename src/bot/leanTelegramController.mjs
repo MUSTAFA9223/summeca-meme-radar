@@ -57,33 +57,33 @@ export class LeanTelegramController {
 
   mainKeyboard() {
     return [
-      [{ text: '📊 الحالة', callback_data: 'menu:status' }, { text: '👀 EARLY WATCH', callback_data: 'menu:trending' }],
-      [{ text: '💎 TOP-TIER', callback_data: 'menu:signals' }, { text: '🧠 CONFIRMED', callback_data: 'menu:watchlist' }],
-      [{ text: '🆕 PRE-LAUNCH', callback_data: 'menu:newcoins' }, { text: '👛 المحافظ', callback_data: 'menu:wallet' }],
-      [{ text: '⚙️ الإعدادات', callback_data: 'menu:settings' }, { text: '🛡️ الحماية', callback_data: 'menu:safety' }],
-      [{ text: '❓ المساعدة', callback_data: 'menu:help' }]
+      [{ text: '📊 الحالة', callback_data: 'menu:status' }, { text: '🌐 الشبكات', callback_data: 'menu:networks' }],
+      [{ text: '👀 EARLY WATCH', callback_data: 'menu:trending' }, { text: '💎 TOP-TIER', callback_data: 'menu:signals' }],
+      [{ text: '🧠 CONFIRMED', callback_data: 'menu:watchlist' }, { text: '🆕 PRE-LAUNCH', callback_data: 'menu:newcoins' }],
+      [{ text: '👛 المحافظ', callback_data: 'menu:wallet' }, { text: '🛡️ الحماية', callback_data: 'menu:safety' }],
+      [{ text: '⚙️ الإعدادات', callback_data: 'menu:settings' }, { text: '❓ المساعدة', callback_data: 'menu:help' }]
     ];
   }
 
   async showMainMenu() {
     return this.#send(this.#pick(
-      '🤖 SUMMECA Meme Radar\n\nالمحرك الحالي: ARC ON-CHAIN TRENCHES\n👀 EARLY WATCH = أول دخول موثّق\n💎 TOP-TIER = تجمع محافظ قوي مبكر\n🧠 CONFIRMED = تأكيد السيولة/البيع/الأمان\n\nاختر من القائمة:',
-      '🤖 SUMMECA Meme Radar\n\nCurrent engine: ARC ON-CHAIN TRENCHES\n👀 EARLY WATCH = first verified smart-wallet entry\n💎 TOP-TIER = strong early wallet cluster\n🧠 CONFIRMED = liquidity/sell/safety confirmation\n\nChoose an option:'
+      '🤖 SUMMECA Meme Radar\n\n🌐 المحرك: MULTICHAIN LEAN\n⛓️ Arc + Solana + BNB Chain + Robinhood Chain\n👀 EARLY WATCH = رصد البداية\n💎 TOP-TIER = شروط أقوى مبكرًا\n🧠 CONFIRMED = تأكيد السيولة/البيع/الأمان حيث تتوفر بيانات التأكيد\n\nاختر من القائمة:',
+      '🤖 SUMMECA Meme Radar\n\n🌐 Engine: MULTICHAIN LEAN\n⛓️ Arc + Solana + BNB Chain + Robinhood Chain\n👀 EARLY WATCH = detect the start\n💎 TOP-TIER = stronger early conditions\n🧠 CONFIRMED = liquidity/sell/safety confirmation where confirmation data is available\n\nChoose an option:'
     ), this.mainKeyboard());
   }
 
   async #showStatus() {
     const wallets = this.walletLabels.length;
     return this.#send(this.#pick(
-      `📊 حالة البوت\n\n🟢 الخدمة: تعمل\n⛓️ الشبكة: Arc\n🧠 المصدر: On-chain wallet driven\n👛 المحافظ المتتبعة: ${wallets}\n👀 PRE-LAUNCH: يعمل\n💎 TOP-TIER: يعمل\n✅ CONFIRMED: يعمل\n🛡️ Anti-spoof: مفعّل\n🚦 RPC Guard: مفعّل\n⚡ الشراء الحقيقي التلقائي: غير مفعّل`,
-      `📊 Bot status\n\n🟢 Service: running\n⛓️ Network: Arc\n🧠 Source: on-chain wallet driven\n👛 Tracked wallets: ${wallets}\n👀 PRE-LAUNCH: active\n💎 TOP-TIER: active\n✅ CONFIRMED: active\n🛡️ Anti-spoof: enabled\n🚦 RPC Guard: enabled\n⚡ Automatic live buying: disabled`
+      `📊 حالة البوت\n\n🟢 الخدمة: تعمل\n🌐 الشبكات: 4\n✅ Arc — On-chain + PRE-LAUNCH + Smart Wallet\n✅ Solana — Pump.fun launch stream + DEX market confirmation\n✅ BNB Chain — Smart Wallet + Early Market\n✅ Robinhood Chain — Smart Wallet + Early Market\n👛 محافظ EVM الأساسية: ${wallets}\n🛡️ Anti-spoof: مفعّل للمحافظ\n🚦 Rate-limit guards: مفعّلة\n⚡ الشراء الحقيقي التلقائي: غير مفعّل`,
+      `📊 Bot status\n\n🟢 Service: running\n🌐 Networks: 4\n✅ Arc — on-chain + PRE-LAUNCH + Smart Wallet\n✅ Solana — Pump.fun launch stream + DEX market confirmation\n✅ BNB Chain — Smart Wallet + Early Market\n✅ Robinhood Chain — Smart Wallet + Early Market\n👛 Base EVM wallets: ${wallets}\n🛡️ Anti-spoof: enabled for wallet signals\n🚦 Rate-limit guards: enabled\n⚡ Automatic live buying: disabled`
     ), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showSettings() {
     return this.#send(this.#pick(
-      `⚙️ الإعدادات\n\nاللغة الحالية: ${this.language}\n\nتم حذف مفاتيح تشغيل/إيقاف الماسحات القديمة حتى لا توقف الرصد الجديد بالخطأ.`,
-      `⚙️ Settings\n\nCurrent language: ${this.language}\n\nLegacy scanner on/off controls were removed so they cannot accidentally stop the new radar.`
+      `⚙️ الإعدادات\n\nاللغة الحالية: ${this.language}\n\nالمحركات القديمة الثقيلة غير محمّلة. الشبكات الأربع تعمل عبر النسخة الخفيفة الجديدة.`,
+      `⚙️ Settings\n\nCurrent language: ${this.language}\n\nLegacy heavy scanners are not loaded. The four networks run through the new lean build.`
     ), [
       [{ text: '🌐 اللغة', callback_data: 'settings:language' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
@@ -109,36 +109,40 @@ export class LeanTelegramController {
   async #showWallets() {
     const names = this.walletLabels.slice(0, 12).map((label, i) => `${i + 1}. ${label}`);
     return this.#send(this.#pick(
-      `👛 محافظ Smart Money\n\nعدد المحافظ المتتبعة: ${this.walletLabels.length}\n${names.join('\n') || 'لا توجد محافظ مهيأة.'}\n\nالبوت لا يعتبر التحويل وحده شراءً؛ يلزم إثبات خروج قيمة من المحفظة.`,
-      `👛 Smart Money wallets\n\nTracked wallets: ${this.walletLabels.length}\n${names.join('\n') || 'No wallets configured.'}\n\nA transfer alone is not counted as a buy; payer evidence is required.`
+      `👛 محافظ Smart Money\n\nمحافظ EVM الأساسية: ${this.walletLabels.length}\n${names.join('\n') || 'لا توجد محافظ مهيأة.'}\n\nتُراقب على Arc وBNB وRobinhood مع Anti-spoof.\nSolana تستخدم حاليًا رصد Pump.fun المباشر + تأكيد السوق؛ ولن نسمي أي حركة فيها Smart Wallet قبل إضافة/إثبات محافظ Solana مستقلة.`,
+      `👛 Smart Money wallets\n\nBase EVM wallets: ${this.walletLabels.length}\n${names.join('\n') || 'No wallets configured.'}\n\nThey are monitored on Arc, BNB and Robinhood with anti-spoof checks.\nSolana currently uses direct Pump.fun launch detection + market confirmation; it is not labeled Smart Wallet until separate Solana wallets are verified.`
     ), [[{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showInfo(data) {
     const map = {
+      'menu:networks': [
+        '🌐 الشبكات\n\n🔷 Arc: عقود جديدة + محافظ + PRE-DEX + CONFIRMED\n🟣 Solana: إنشاء Pump.fun لحظيًا + فحص DexScreener مجمّع + EARLY/TOP-TIER\n🟡 BNB Chain: محافظ EVM + Anti-spoof + أسواق جديدة\n🟢 Robinhood Chain: محافظ EVM + Anti-spoof + أسواق جديدة\n\nكل إشارة تكتب اسم الشبكة بوضوح.',
+        '🌐 Networks\n\n🔷 Arc: new contracts + wallets + PRE-DEX + CONFIRMED\n🟣 Solana: live Pump.fun creates + batched DexScreener validation + EARLY/TOP-TIER\n🟡 BNB Chain: EVM wallets + anti-spoof + new markets\n🟢 Robinhood Chain: EVM wallets + anti-spoof + new markets\n\nEvery alert clearly labels its network.'
+      ],
       'menu:trending': [
-        '👀 EARLY WATCH\n\nيصل من أول شراء موثّق لمحفظة متتبعة في عقد جديد، حتى لا نفوّت البداية. وهو WATCH وليس تأكيد شراء.',
-        '👀 EARLY WATCH\n\nSent from the first verified tracked-wallet buy into a new contract so the start is not missed. It is a watch alert, not a confirmed entry.'
+        '👀 EARLY WATCH\n\nيصل عند ظهور دليل مبكر مناسب للشبكة: شراء محفظة موثّق في شبكات EVM، أو إطلاق Solana جديد بدأ يحقق نشاط سوق حقيقي.',
+        '👀 EARLY WATCH\n\nSent when a network-appropriate early signal appears: verified wallet participation on EVM networks, or a fresh Solana launch with real market activity.'
       ],
       'menu:signals': [
-        '💎 TOP-TIER\n\nترتفع العملة إلى هذا المستوى عند تجمع محافظ قوية مبكرًا أو وجود دخول كبير موثّق مع فلاتر السوق.',
-        '💎 TOP-TIER\n\nA token reaches this level after a strong early wallet cluster or a large verified entry plus market filters.'
+        '💎 TOP-TIER\n\nيتطلب شروطًا أقوى مثل تجمع محافظ أو سيولة/شراء/بيع أقوى مع بقاء العملة مبكرة.',
+        '💎 TOP-TIER\n\nRequires stronger evidence such as a wallet cluster or stronger liquidity/buy/sell activity while the token is still early.'
       ],
       'menu:watchlist': [
-        '🧠 CONFIRMED\n\nأقوى مستوى لدينا: تحقق من المحافظ + السيولة + البيع الحقيقي + عدم التأخر + فحوص الأمان.',
-        '🧠 CONFIRMED\n\nOur strongest level: wallet confirmation + liquidity + real sells + early-entry check + safety checks.'
+        '🧠 CONFIRMED\n\nأقوى تأكيد عندما تتوفر بيانات كافية: محافظ + سيولة + بيع حقيقي + منع الدخول المتأخر + فحوص الأمان.',
+        '🧠 CONFIRMED\n\nStrongest confirmation where enough data exists: wallets + liquidity + real sells + late-entry checks + safety filters.'
       ],
       'menu:newcoins': [
-        '🆕 PRE-LAUNCH\n\nيراقب العقود الجديدة على Arc قبل ظهورها على DEX عندما يكون ذلك ممكنًا، ثم يربطها بدخول المحافظ المتتبعة.',
-        '🆕 PRE-LAUNCH\n\nWatches new Arc contracts before DEX appearance when possible, then links them to tracked-wallet activity.'
+        '🆕 PRE-LAUNCH / NEW LAUNCH\n\nArc يرصد العقود قبل DEX عندما يمكن ذلك. Solana يلتقط إنشاءات Pump.fun مباشرة. BNB وRobinhood يراقبان الأسواق الجديدة إضافة إلى نشاط المحافظ.',
+        '🆕 PRE-LAUNCH / NEW LAUNCH\n\nArc watches contracts before DEX appearance when possible. Solana catches Pump.fun creates directly. BNB and Robinhood watch new markets plus wallet activity.'
       ],
       'menu:safety': [
-        '🛡️ الحماية\n\nAnti-spoof + إثبات الدفع + سيولة + بيع حقيقي + Market Cap + منع الدخول المتأخر + RPC rate-limit guard.',
-        '🛡️ Safety\n\nAnti-spoof + payer proof + liquidity + real sells + market-cap checks + late-entry block + RPC rate-limit guard.'
+        '🛡️ الحماية\n\nAnti-spoof للمحافظ + إثبات مشاركة الدافع + سيولة + بيع حقيقي + Market Cap + منع الدخول المتأخر + Rate-limit guards.\n\nلا يوجد فلتر يضمن الربح.',
+        '🛡️ Safety\n\nWallet anti-spoof + payer participation proof + liquidity + real sells + market cap + late-entry protection + rate-limit guards.\n\nNo filter guarantees profit.'
       ],
       'menu:help': [
-        '❓ المساعدة\n\n/start أو /menu — القائمة\n/status — حالة البوت\n/settings — الإعدادات\n/help — المساعدة\n/admin — لوحة المالك\n\nفي الإشارات: 📋 نسخ CA، 🟢 GMGN، 🔥 FOMO، و📊 DEX عند توفره.',
-        '❓ Help\n\n/start or /menu — main menu\n/status — bot status\n/settings — settings\n/help — help\n/admin — owner panel\n\nSignal buttons include 📋 Copy CA, 🟢 GMGN, 🔥 FOMO, and 📊 DEX when available.'
+        '❓ المساعدة\n\n/start أو /menu — القائمة\n/status — حالة البوت والشبكات\n/settings — الإعدادات\n/help — المساعدة\n/admin — لوحة المالك\n\nالإشارات تعرض الشبكة وCA قابلًا للنسخ وروابط السوق المناسبة عند توفرها.',
+        '❓ Help\n\n/start or /menu — main menu\n/status — bot/network status\n/settings — settings\n/help — help\n/admin — owner panel\n\nAlerts show the network, copyable CA, and appropriate market links when available.'
       ],
       'menu:trades': [
         '🧪 الصفقات التجريبية القديمة ليست جزءًا من النسخة الخفيفة الحالية. الرادار يركز الآن على الإشارات والمتابعة فقط.',
@@ -170,7 +174,7 @@ export class LeanTelegramController {
     if (data === 'settings:language') return this.#showLanguage();
     if (data === 'menu:wallet') return this.#showWallets();
     if (data.startsWith('lang:')) return this.#setLanguage(data.slice(5));
-    if (['menu:trending', 'menu:signals', 'menu:watchlist', 'menu:newcoins', 'menu:safety', 'menu:help', 'menu:trades'].includes(data)) {
+    if (['menu:networks', 'menu:trending', 'menu:signals', 'menu:watchlist', 'menu:newcoins', 'menu:safety', 'menu:help', 'menu:trades'].includes(data)) {
       return this.#showInfo(data);
     }
 
