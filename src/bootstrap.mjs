@@ -1,6 +1,12 @@
 import { env } from './config/env.mjs';
-import { startSafePrelaunchWorker } from './signals/prelaunchSafeWorker.mjs';
-import { startTrenchesWorker } from './signals/trenchesWorker.mjs';
+import { installArcRpcGuard } from './infra/arcRpcGuard.mjs';
+
+installArcRpcGuard();
+
+const [{ startTrenchesWorker }, { startSafePrelaunchWorker }] = await Promise.all([
+  import('./signals/trenchesWorker.mjs'),
+  import('./signals/prelaunchSafeWorker.mjs')
+]);
 
 if (!env.trenchesEnabled) {
   console.warn('[source-mode] TRENCHES is disabled — no legacy scanners are started in the lean production build');
