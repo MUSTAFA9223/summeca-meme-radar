@@ -6,6 +6,7 @@ import { installAdvancedTerminal } from './bot/advancedTerminal.mjs';
 import { installPhase3Terminal } from './bot/phase3Terminal.mjs';
 import { installPhase3Compat } from './bot/phase3Compat.mjs';
 import { installPhase4SafetyLeaderboard } from './bot/phase4SafetyLeaderboard.mjs';
+import { installPhase4PerformanceOverlay } from './bot/phase4PerformanceOverlay.mjs';
 
 installArcRpcGuard();
 installDexScreenerGuard();
@@ -14,6 +15,7 @@ installAdvancedTerminal();
 installPhase3Terminal();
 installPhase3Compat();
 installPhase4SafetyLeaderboard();
+installPhase4PerformanceOverlay();
 
 // Shared Telegram wrappers only. They do not create additional long-pollers.
 await import('./bot/phase4TelegramRouter.mjs');
@@ -25,6 +27,7 @@ const [
   { startMultiChainWorker },
   { startBnbLeanWorker },
   { startSolanaUltraEarlyWorker },
+  { startWalletPerformanceWorker },
   { startLeanTelegramController }
 ] = await Promise.all([
   import('./signals/trenchesWorker.mjs'),
@@ -32,6 +35,7 @@ const [
   import('./signals/multiChainWorker.mjs'),
   import('./signals/bnbLeanWorker.mjs'),
   import('./signals/solanaUltraEarlyWorker.mjs'),
+  import('./signals/walletPerformanceWorker.mjs'),
   import('./bot/leanTelegramController.mjs')
 ]);
 
@@ -58,5 +62,6 @@ await Promise.allSettled([
   startSafely('multichain', startMultiChainWorker),
   startSafely('bnb', startBnbLeanWorker),
   startSafely('solana-ultra', startSolanaUltraEarlyWorker),
+  startSafely('wallet-performance', startWalletPerformanceWorker),
   startSafely('telegram-controller', startLeanTelegramController)
 ]);
