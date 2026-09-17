@@ -45,10 +45,22 @@ function advancedRows(network, address, text) {
     { text: '⚙️ Presets', callback_data: 'adv:pre' },
     { text: '👛 Wallet', callback_data: 'adv:w' }
   ]];
-  if (isSmartWalletAlert(text)) {
-    rows.push([{ text: '🧠 Copy Preview / Confirm', callback_data: `adv:cp:${network}:${address}` }]);
-  }
+  if (isSmartWalletAlert(text)) rows.push([{ text: '🧠 Copy Preview / Confirm', callback_data: `adv:cp:${network}:${address}` }]);
   return rows;
+}
+
+function phase3Rows(network, address) {
+  return [
+    [
+      { text: '🎯 Limit', callback_data: `p3:l:${network}:${address}` },
+      { text: '📆 DCA', callback_data: `p3:d:${network}:${address}` },
+      { text: '⚡ Sniper', callback_data: `p3:s:${network}:${address}` }
+    ],
+    [
+      { text: '🧠 Copy Dashboard', callback_data: 'p3:c' },
+      { text: '📋 Orders', callback_data: 'p3:o' }
+    ]
+  ];
 }
 
 let installed = false;
@@ -60,9 +72,7 @@ export function installTelegramTerminalGuard() {
 
   globalThis.fetch = async (input, init = {}) => {
     const url = typeof input === 'string' ? input : String(input?.url ?? input ?? '');
-    if (!/https:\/\/api\.telegram\.org\/bot[^/]+\/(sendMessage|sendPhoto)$/i.test(url)) {
-      return originalFetch(input, init);
-    }
+    if (!/https:\/\/api\.telegram\.org\/bot[^/]+\/(sendMessage|sendPhoto)$/i.test(url)) return originalFetch(input, init);
 
     try {
       if (typeof init?.body !== 'string') return originalFetch(input, init);
@@ -72,13 +82,12 @@ export function installTelegramTerminalGuard() {
       const address = detectAddress(text, network);
       if (!network || !address) return originalFetch(input, init);
 
-      const markup = body.reply_markup && typeof body.reply_markup === 'object'
-        ? body.reply_markup
-        : {};
+      const markup = body.reply_markup && typeof body.reply_markup === 'object' ? body.reply_markup : {};
       const rows = Array.isArray(markup.inline_keyboard) ? markup.inline_keyboard : [];
       const extra = [];
       if (!hasPrefix(rows, 'term:')) extra.push(...basicRows(network, address));
       if (!hasPrefix(rows, 'adv:')) extra.push(...advancedRows(network, address, text));
+      if (!hasPrefix(rows, 'p3:')) extra.push(...phase3Rows(network, address));
       if (extra.length) {
         body.reply_markup = { ...markup, inline_keyboard: [...rows, ...extra] };
         init = { ...init, body: JSON.stringify(body) };
@@ -89,5 +98,5 @@ export function installTelegramTerminalGuard() {
     return originalFetch(input, init);
   };
 
-  console.log('TELEGRAM TERMINAL GUARD: Basic + Advanced actions merged without duplicates');
+  console.log('TELEGRAM TERMINAL GUARD: Basic + Advanced + Limit/DCA/Sniper/Copy actions merged without duplicates');
 }
