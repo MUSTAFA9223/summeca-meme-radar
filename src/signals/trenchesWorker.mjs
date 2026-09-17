@@ -25,6 +25,14 @@ const hexBigInt = (value) => {
 };
 const usd18 = (value) => Number(hexBigInt(value)) / 1e18;
 
+function arcKeyboard(address, dexUrl = '') {
+  const token = low(address);
+  if (!token) return undefined;
+  const rows = [[{ text: '📋 نسخ العقد / Copy CA', copy_text: { text: token } }]];
+  if (dexUrl) rows.push([{ text: '📊 فتح DEX', url: dexUrl }]);
+  return { inline_keyboard: rows };
+}
+
 function parseWallets() {
   return String(process.env.TRENCHES_WALLETS ?? '')
     .split(',')
@@ -281,7 +289,11 @@ export class TrenchesWorker {
       candidate.dexUrl ? `DEX: ${candidate.dexUrl}` : ''
     ].filter(Boolean).join('\n');
     const text = this.language === 'en' ? en : this.language === 'bilingual' ? `${ar}\n\n────────────\n\n${en}` : ar;
-    await telegramApi(env.telegramBotToken, 'sendMessage', { chat_id: this.chatId, text });
+    await telegramApi(env.telegramBotToken, 'sendMessage', {
+      chat_id: this.chatId,
+      text,
+      reply_markup: arcKeyboard(candidate.address, candidate.dexUrl)
+    });
   }
 
   async evaluate(token, events) {
