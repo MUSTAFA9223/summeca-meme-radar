@@ -1,11 +1,13 @@
 import { env } from './config/env.mjs';
 import { installArcRpcGuard } from './infra/arcRpcGuard.mjs';
+import { installDexScreenerGuard } from './infra/dexScreenerGuard.mjs';
 import { installTelegramTerminalGuard } from './infra/telegramTerminalGuard.mjs';
 import { installAdvancedTerminal } from './bot/advancedTerminal.mjs';
 import { installPhase3Terminal } from './bot/phase3Terminal.mjs';
 import { installPhase3Compat } from './bot/phase3Compat.mjs';
 
 installArcRpcGuard();
+installDexScreenerGuard();
 installTelegramTerminalGuard();
 installAdvancedTerminal();
 installPhase3Terminal();
