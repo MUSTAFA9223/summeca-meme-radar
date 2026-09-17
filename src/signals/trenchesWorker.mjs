@@ -1,320 +1,72 @@
 import { env } from '../config/env.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 
-const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
+const ARC_SYSTEM_EMITTER = '0xffffffffffffffffffffffffffffffffffffffe'.toLowerCase();
+const ARC_NATIVE_USDC = '0x3600000000000000000000000000000000000000';
+const ZERO = '0x0000000000000000000000000000000000000000';
+const EVM = /^0x[0-9a-f]{40}$/;
 const DEX_API = 'https://api.dexscreener.com/latest/dex/tokens';
-const GOPLUS = 'https://api.gopluslabs.io/api/v1/token_security';
-const CHAIN_IDS = new Map([
-  ['ethereum', '1'],
-  ['eth', '1'],
-  ['bsc', '56'],
-  ['bnb', '56'],
-  ['base', '8453'],
-  ['monad', '143'],
-  ['robinhood', '4663'],
-  ['robinhoodchain', '4663'],
-  ['arc', '5042']
-]);
+const GOPLUS = 'https://api.gopluslabs.io/api/v1/token_security/5042';
 
-const finite = (value, fallback = 0) => {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : fallback;
-};
-
+const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+const low = (value) => String(value ?? '').trim().toLowerCase();
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
-const lower = (value) => String(value ?? '').trim().toLowerCase();
+const money = (value) => {
+  const n = finite(value);
+  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return n.toFixed(n >= 100 ? 0 : 2);
+};
+const padTopicAddress = (address) => `0x${'0'.repeat(24)}${low(address).slice(2)}`;
+const topicAddress = (topic) => topic && topic.length >= 42 ? `0x${topic.slice(-40)}`.toLowerCase() : '';
+const hexBigInt = (value) => {
+  try { return BigInt(value || '0x0'); } catch { return 0n; }
+};
+const usd18 = (value) => Number(hexBigInt(value)) / 1e18;
 
-function decodeHtml(value) {
-  return String(value ?? '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;/gi, "'")
-    .replace(/&#x2F;/gi, '/')
-    .replace(/&#x3D;/gi, '=')
-    .replace(/&#x27;/gi, "'")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)));
+function parseWallets() {
+  return String(process.env.TRENCHES_WALLETS ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry, index) => {
+      const [left, right] = entry.includes('|') ? entry.split('|', 2) : entry.includes('=') ? entry.split('=', 2) : [entry, ''];
+      const address = EVM.test(low(left)) ? low(left) : EVM.test(low(right)) ? low(right) : '';
+      const label = address === low(left) ? String(right || `wallet-${index + 1}`).trim() : String(left || `wallet-${index + 1}`).trim();
+      return address ? { address, label } : null;
+    })
+    .filter(Boolean);
 }
 
-function textOnly(html) {
-  return decodeHtml(String(html ?? ''))
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function parseCompactNumber(value) {
-  const raw = String(value ?? '').trim().replace(/[,~$]/g, '').replace(/^\+/, '');
-  if (!raw || raw === '—' || raw === '-') return 0;
-  const match = raw.match(/(-?\d+(?:\.\d+)?)\s*([KMBT])?/i);
-  if (!match) return 0;
-  const n = Number(match[1]);
-  const suffix = String(match[2] ?? '').toUpperCase();
-  const multiplier = suffix === 'T' ? 1e12 : suffix === 'B' ? 1e9 : suffix === 'M' ? 1e6 : suffix === 'K' ? 1e3 : 1;
-  return Number.isFinite(n) ? n * multiplier : 0;
-}
-
-function parsePercent(value) {
-  const match = String(value ?? '').replace(/,/g, '').match(/[-+]?\d+(?:\.\d+)?/);
-  return match ? Number(match[0]) : 0;
-}
-
-function extractCells(rowHtml) {
-  return [...String(rowHtml ?? '').matchAll(/<t[dh]\b[^>]*>([\s\S]*?)<\/t[dh]>/gi)]
-    .map((match) => textOnly(match[1]));
-}
-
-function extractDexReference(rowHtml) {
-  const html = decodeHtml(rowHtml);
-  const match = html.match(/https?:\/\/dexscreener\.com\/([^/"'\s?#]+)\/(0x[0-9a-fA-F]{40})/i);
-  if (!match) return null;
-  return {
-    chain: lower(match[1]),
-    address: match[2].toLowerCase(),
-    url: `https://dexscreener.com/${match[1]}/${match[2]}`
-  };
-}
-
-function addressFromCells(cells) {
-  for (const value of [...cells].reverse()) {
-    const match = String(value ?? '').match(/0x[0-9a-fA-F]{40}/);
-    if (match) return match[0].toLowerCase();
-  }
-  return '';
-}
-
-function normalizeTableCluster(rowHtml, sourceUrl) {
-  const cells = extractCells(rowHtml);
-  if (cells.length < 10) return null;
-  const dex = extractDexReference(rowHtml);
-  const address = dex?.address || addressFromCells(cells);
-  if (!EVM_ADDRESS.test(address)) return null;
-
-  // CircleTrenches-style aggregate table:
-  // TOKEN | WALLETS THAT BOUGHT | STILL HOLDING | SPENT | TOOK OUT |
-  // NET INTO IT | FIRST IN | PRICE SINCE FIRST BUY | 24H | MCAP |
-  // POOL LIQUIDITY | DEX | CA
-  const walletsBought = Math.max(0, Math.round(parseCompactNumber(cells[1])));
-  const stillHolding = Math.max(0, Math.round(parseCompactNumber(cells[2])));
-  const netInflowUsd = parseCompactNumber(cells[5]);
-  if (walletsBought <= 0 || !Number.isFinite(netInflowUsd)) return null;
-
-  return {
-    sourceUrl,
-    source: 'circletrenches',
-    chain: dex?.chain || 'unknown',
-    address,
-    symbol: cells[0] || 'TOKEN',
-    walletsBought,
-    stillHolding,
-    spentUsd: parseCompactNumber(cells[3]),
-    tookOutUsd: parseCompactNumber(cells[4]),
-    netInflowUsd,
-    firstIn: cells[6] || '',
-    priceSinceFirstBuyPct: parsePercent(cells[7]),
-    price24hPct: parsePercent(cells[8]),
-    marketCapUsd: parseCompactNumber(cells[9]),
-    liquidityUsd: parseCompactNumber(cells[10]),
-    dexUrl: dex?.url || '',
-    observedAt: Date.now()
-  };
-}
-
-function firstField(object, names, fallback = undefined) {
-  for (const name of names) {
-    const value = object?.[name];
-    if (value !== undefined && value !== null) return value;
-  }
-  return fallback;
-}
-
-function normalizeEmbeddedObject(object, sourceUrl) {
-  if (!object || typeof object !== 'object' || Array.isArray(object)) return null;
-  const address = String(firstField(object, ['address', 'tokenAddress', 'token_address', 'contractAddress', 'contract_address', 'ca'], '')).trim().toLowerCase();
-  if (!EVM_ADDRESS.test(address)) return null;
-
-  const walletsBought = Math.round(parseCompactNumber(firstField(object, ['walletsBought', 'wallets_bought', 'walletCount', 'wallet_count', 'buyers', 'smartWallets'], 0)));
-  const stillHolding = Math.round(parseCompactNumber(firstField(object, ['stillHolding', 'still_holding', 'holders', 'holdingWallets', 'holding_wallets'], 0)));
-  const netInflowUsd = parseCompactNumber(firstField(object, ['netInflowUsd', 'net_inflow_usd', 'netIntoIt', 'net_into_it', 'netFlowUsd', 'net_flow_usd'], 0));
-  if (walletsBought <= 0 || netInflowUsd === 0) return null;
-
-  const chain = lower(firstField(object, ['chain', 'network', 'chainId', 'networkId'], 'unknown'));
-  return {
-    sourceUrl,
-    source: 'circletrenches-embedded',
-    chain,
-    address,
-    symbol: String(firstField(object, ['symbol', 'ticker', 'tokenSymbol', 'token_symbol', 'name'], 'TOKEN')).trim() || 'TOKEN',
-    walletsBought,
-    stillHolding,
-    spentUsd: parseCompactNumber(firstField(object, ['spentUsd', 'spent_usd', 'spent'], 0)),
-    tookOutUsd: parseCompactNumber(firstField(object, ['tookOutUsd', 'took_out_usd', 'tookOut', 'took_out'], 0)),
-    netInflowUsd,
-    firstIn: String(firstField(object, ['firstIn', 'first_in', 'firstBuyer', 'first_buyer'], '')),
-    priceSinceFirstBuyPct: parsePercent(firstField(object, ['priceSinceFirstBuyPct', 'price_since_first_buy_pct', 'priceSinceFirstBuy', 'price_since_first_buy'], 0)),
-    price24hPct: parsePercent(firstField(object, ['price24hPct', 'price_24h_pct', 'change24h', 'change_24h'], 0)),
-    marketCapUsd: parseCompactNumber(firstField(object, ['marketCapUsd', 'market_cap_usd', 'marketCap', 'market_cap', 'mcap'], 0)),
-    liquidityUsd: parseCompactNumber(firstField(object, ['liquidityUsd', 'liquidity_usd', 'liquidity', 'poolLiquidity'], 0)),
-    dexUrl: String(firstField(object, ['dexUrl', 'dex_url', 'dexscreener'], '')),
-    observedAt: Date.now()
-  };
-}
-
-function embeddedJsonClusters(html, sourceUrl) {
-  const out = [];
-  const scripts = [...String(html ?? '').matchAll(/<script\b[^>]*type=["']application\/json["'][^>]*>([\s\S]*?)<\/script>/gi)];
-  const seenObjects = new Set();
-  const visit = (value, depth = 0) => {
-    if (depth > 14 || value == null) return;
-    if (Array.isArray(value)) {
-      for (const item of value.slice(0, 500)) visit(item, depth + 1);
-      return;
-    }
-    if (typeof value !== 'object') return;
-    if (seenObjects.has(value)) return;
-    seenObjects.add(value);
-    const normalized = normalizeEmbeddedObject(value, sourceUrl);
-    if (normalized) out.push(normalized);
-    for (const child of Object.values(value).slice(0, 200)) visit(child, depth + 1);
-  };
-
-  for (const script of scripts) {
-    try { visit(JSON.parse(decodeHtml(script[1]))); } catch {}
-  }
-  return out;
-}
-
-export function parseTrenchesHtml(html, sourceUrl = 'https://circletrenches.com/') {
-  const clusters = [];
-  for (const match of String(html ?? '').matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
-    const normalized = normalizeTableCluster(match[0], sourceUrl);
-    if (normalized) clusters.push(normalized);
-  }
-  clusters.push(...embeddedJsonClusters(html, sourceUrl));
-
-  const deduped = new Map();
-  for (const cluster of clusters) {
-    const key = `${lower(cluster.chain)}:${lower(cluster.address)}`;
-    const existing = deduped.get(key);
-    if (!existing || cluster.walletsBought > existing.walletsBought || cluster.netInflowUsd > existing.netInflowUsd) {
-      deduped.set(key, cluster);
-    }
-  }
-  return [...deduped.values()];
-}
-
-async function fetchText(url, timeoutMs = 8_000) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        accept: 'text/html,application/xhtml+xml',
-        'user-agent': 'SUMMECA-Trenches-Radar/1.0 (+https://summeca.com)'
-      }
+class RpcClient {
+  constructor(url) { this.url = String(url ?? '').trim(); this.id = 0; }
+  async call(method, params = []) {
+    const response = await fetch(this.url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params })
     });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.text();
-  } finally {
-    clearTimeout(timer);
+    if (!response.ok) throw new Error(`Arc RPC ${method} HTTP ${response.status}`);
+    const body = await response.json();
+    if (body?.error) throw new Error(`Arc RPC ${method} ${body.error.code}: ${body.error.message}`);
+    return body?.result;
   }
-}
-
-async function fetchDexSnapshot(cluster) {
-  const response = await fetch(`${DEX_API}/${encodeURIComponent(cluster.address)}`, {
-    headers: { accept: 'application/json' }
-  });
-  if (!response.ok) throw new Error(`DexScreener HTTP ${response.status}`);
-  const payload = await response.json();
-  const pairs = Array.isArray(payload?.pairs) ? payload.pairs : [];
-  const chain = lower(cluster.chain);
-  const candidates = pairs.filter((pair) => {
-    if (!chain || chain === 'unknown') return true;
-    const pairChain = lower(pair?.chainId);
-    return pairChain === chain || pairChain.includes(chain) || chain.includes(pairChain);
-  });
-  const pair = (candidates.length ? candidates : pairs)
-    .sort((a, b) => finite(b?.liquidity?.usd) - finite(a?.liquidity?.usd))[0];
-  if (!pair) return cluster;
-  const token = lower(pair?.baseToken?.address) === lower(cluster.address) ? pair.baseToken : pair.quoteToken;
-  return {
-    ...cluster,
-    chain: lower(pair.chainId) || cluster.chain,
-    symbol: token?.symbol || cluster.symbol,
-    name: token?.name || cluster.symbol,
-    priceUsd: finite(pair?.priceUsd),
-    marketCapUsd: finite(pair?.marketCap, finite(pair?.fdv, cluster.marketCapUsd)),
-    liquidityUsd: finite(pair?.liquidity?.usd, cluster.liquidityUsd),
-    volume5mUsd: finite(pair?.volume?.m5),
-    buys5m: finite(pair?.txns?.m5?.buys),
-    sells5m: finite(pair?.txns?.m5?.sells),
-    priceChange5mPct: finite(pair?.priceChange?.m5),
-    price24hPct: finite(pair?.priceChange?.h24, cluster.price24hPct),
-    dexUrl: pair?.url || cluster.dexUrl,
-    dexPairAddress: pair?.pairAddress || '',
-    observedAt: Date.now()
-  };
-}
-
-async function goPlusSafety(cluster) {
-  const chainId = CHAIN_IDS.get(lower(cluster.chain));
-  if (!chainId) return { verified: false, blocked: false, reasons: ['security-provider-chain-unsupported'] };
-  const params = new URLSearchParams({ contract_addresses: cluster.address });
-  const response = await fetch(`${GOPLUS}/${chainId}?${params}`, { headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`GoPlus HTTP ${response.status}`);
-  const payload = await response.json();
-  const data = payload?.result?.[lower(cluster.address)] ?? payload?.result?.[cluster.address] ?? null;
-  if (!data) return { verified: false, blocked: false, reasons: ['security-data-unavailable'] };
-
-  const reasons = [];
-  const flag = (name) => String(data?.[name] ?? '') === '1';
-  if (flag('is_honeypot')) reasons.push('honeypot');
-  if (flag('cannot_sell_all')) reasons.push('cannot-sell-all');
-  if (flag('is_blacklisted')) reasons.push('blacklist-risk');
-  if (flag('hidden_owner')) reasons.push('hidden-owner');
-  if (flag('selfdestruct')) reasons.push('selfdestruct-enabled');
-  const buyTax = finite(data?.buy_tax);
-  const sellTax = finite(data?.sell_tax);
-  if (buyTax > 0.2) reasons.push(`buy-tax-${Math.round(buyTax * 100)}pct`);
-  if (sellTax > 0.2) reasons.push(`sell-tax-${Math.round(sellTax * 100)}pct`);
-  return { verified: true, blocked: reasons.length > 0, reasons, buyTax, sellTax };
-}
-
-function trenchesScore(cluster, safety) {
-  const holdingRatio = cluster.walletsBought > 0 ? clamp(cluster.stillHolding / cluster.walletsBought, 0, 1.5) : 0;
-  const walletScore = Math.min(28, cluster.walletsBought * 4);
-  const holdingScore = Math.min(22, holdingRatio * 22);
-  const flowScore = Math.min(24, Math.log10(Math.max(1, cluster.netInflowUsd)) * 5);
-  const liquidityScore = Math.min(14, Math.log10(Math.max(1, cluster.liquidityUsd)) * 2.8);
-  const earlyScore = cluster.priceSinceFirstBuyPct <= 10 ? 12 : cluster.priceSinceFirstBuyPct <= 25 ? 8 : 4;
-  const safetyPenalty = safety.blocked ? 100 : safety.verified ? 0 : 5;
-  return clamp(Math.round(walletScore + holdingScore + flowScore + liquidityScore + earlyScore - safetyPenalty), 0, 100);
-}
-
-function eligible(cluster) {
-  if (!EVM_ADDRESS.test(cluster.address)) return false;
-  if (cluster.walletsBought < env.trenchesMinWallets) return false;
-  if (cluster.stillHolding < env.trenchesMinStillHolding) return false;
-  if (cluster.netInflowUsd < env.trenchesMinNetInflowUsd) return false;
-  if (env.trenchesMaxMarketCapUsd > 0 && cluster.marketCapUsd > env.trenchesMaxMarketCapUsd) return false;
-  if (cluster.liquidityUsd < env.trenchesMinLiquidityUsd) return false;
-  if (cluster.priceSinceFirstBuyPct > env.trenchesMaxPriceSinceFirstBuyPct) return false;
-  return true;
-}
-
-class TrenchesStore {
-  constructor(url, key) {
-    this.url = String(url ?? '').replace(/\/$/, '');
-    this.key = String(key ?? '');
+  async blockNumber() { return Number.parseInt(String(await this.call('eth_blockNumber') ?? '0x0'), 16); }
+  async logs(fromBlock, toBlock, walletTopics) {
+    return this.call('eth_getLogs', [{
+      fromBlock: `0x${fromBlock.toString(16)}`,
+      toBlock: `0x${toBlock.toString(16)}`,
+      topics: [TRANSFER_TOPIC, null, walletTopics]
+    }]);
   }
+  tx(hash) { return this.call('eth_getTransactionByHash', [hash]); }
+  receipt(hash) { return this.call('eth_getTransactionReceipt', [hash]); }
+}
 
+class Store {
+  constructor(url, key) { this.url = String(url ?? '').replace(/\/$/, ''); this.key = String(key ?? ''); }
   get enabled() { return Boolean(this.url && this.key); }
-
   async request(path, { method = 'GET', body, prefer } = {}) {
     if (!this.enabled) return null;
     const response = await fetch(`${this.url}/rest/v1/${path}`, {
@@ -332,189 +84,276 @@ class TrenchesStore {
     if (!response.ok) throw new Error(`Supabase ${method} ${path} HTTP ${response.status}${text ? `: ${text.slice(0, 160)}` : ''}`);
     return text ? JSON.parse(text) : null;
   }
-
   async chatId() {
     if (env.telegramChatId) return String(env.telegramChatId);
     const rows = await this.request('app_settings?select=value&key=eq.telegram_chat_id&limit=1');
     return String(Array.isArray(rows) ? rows[0]?.value ?? '' : '');
   }
-
   async language() {
     const rows = await this.request('app_settings?select=value&key=eq.telegram_language&limit=1');
     const value = String(Array.isArray(rows) ? rows[0]?.value ?? '' : '').toLowerCase();
     return ['ar', 'en', 'bilingual'].includes(value) ? value : env.telegramLanguage;
   }
-
-  async save(cluster, score, safety) {
+  async save(candidate, score, safety) {
     if (!this.enabled) return null;
     const tokenRows = await this.request('tokens?on_conflict=address', {
-      method: 'POST',
-      prefer: 'resolution=merge-duplicates,return=representation',
+      method: 'POST', prefer: 'resolution=merge-duplicates,return=representation',
       body: {
-        chain: cluster.chain || 'evm',
-        address: cluster.address,
-        symbol: cluster.symbol ?? null,
-        name: cluster.name ?? cluster.symbol ?? null,
-        source: 'circletrenches',
-        listed_at: null,
-        last_seen_at: new Date().toISOString(),
-        initial_price_usd: finite(cluster.priceUsd) || null,
-        initial_liquidity_usd: finite(cluster.liquidityUsd) || null,
-        highest_price_usd: finite(cluster.priceUsd) || null,
+        chain: 'arc', address: candidate.address, symbol: candidate.symbol ?? null,
+        name: candidate.name ?? candidate.symbol ?? null, source: 'arc-onchain-trenches',
+        last_seen_at: new Date().toISOString(), initial_price_usd: candidate.priceUsd || null,
+        initial_liquidity_usd: candidate.liquidityUsd || null, highest_price_usd: candidate.priceUsd || null,
         status: 'tracking'
       }
     });
     const token = Array.isArray(tokenRows) ? tokenRows[0] : null;
     if (!token?.id) return null;
-
-    const signalRows = await this.request('signals', {
-      method: 'POST',
-      prefer: 'return=representation',
+    return this.request('signals', {
+      method: 'POST', prefer: 'return=representation',
       body: {
-        token_id: token.id,
-        signal_type: 'entry',
-        entry_score: score,
-        moon_score: Math.min(100, score + Math.min(10, Math.max(0, cluster.walletsBought - 2) * 2)),
-        risk_score: safety.verified ? 20 : 30,
+        token_id: token.id, signal_type: 'entry', entry_score: score,
+        moon_score: Math.min(100, score + 5), risk_score: safety.risk,
         reason: {
-          trigger: 'trenches-cluster',
-          origin: 'circletrenches-primary',
-          source_url: cluster.sourceUrl,
-          chain: cluster.chain,
-          wallets_bought: cluster.walletsBought,
-          still_holding: cluster.stillHolding,
-          spent_usd: cluster.spentUsd,
-          took_out_usd: cluster.tookOutUsd,
-          net_inflow_usd: cluster.netInflowUsd,
-          first_in: cluster.firstIn,
-          price_since_first_buy_pct: cluster.priceSinceFirstBuyPct,
-          market_cap_usd: cluster.marketCapUsd,
-          liquidity_usd: cluster.liquidityUsd,
-          security_verified: safety.verified,
-          security_reasons: safety.reasons
+          trigger: 'trenches-onchain-cluster', origin: 'arc-public-onchain',
+          wallets: candidate.events.map((event) => ({ address: event.wallet, label: event.label, tx: event.txHash, paid_usd: event.paidUsd })),
+          confirming_wallets: candidate.wallets, observed_paid_usd: candidate.paidUsd,
+          market_cap_usd: candidate.marketCapUsd, liquidity_usd: candidate.liquidityUsd,
+          buys_5m: candidate.buys5m, sells_5m: candidate.sells5m,
+          payer_verified: true, safety_reasons: safety.reasons
         }
       }
     });
-    return Array.isArray(signalRows) ? signalRows[0] ?? null : null;
   }
 }
 
-function money(value) {
-  const n = finite(value);
-  if (Math.abs(n) >= 1e9) return `${(n / 1e9).toFixed(2)}B`;
-  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
-  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
-  return n.toFixed(n >= 100 ? 0 : 2);
+async function dexSnapshot(address) {
+  const response = await fetch(`${DEX_API}/${address}`, { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`DexScreener HTTP ${response.status}`);
+  const payload = await response.json();
+  const pairs = (Array.isArray(payload?.pairs) ? payload.pairs : [])
+    .filter((pair) => low(pair?.chainId) === 'arc')
+    .sort((a, b) => finite(b?.liquidity?.usd) - finite(a?.liquidity?.usd));
+  const pair = pairs[0];
+  if (!pair) return null;
+  const token = low(pair?.baseToken?.address) === low(address) ? pair.baseToken : pair.quoteToken;
+  return {
+    address: low(address), symbol: token?.symbol || 'TOKEN', name: token?.name || token?.symbol || 'Arc token',
+    priceUsd: finite(pair?.priceUsd), liquidityUsd: finite(pair?.liquidity?.usd),
+    marketCapUsd: finite(pair?.marketCap, finite(pair?.fdv)), volume5mUsd: finite(pair?.volume?.m5),
+    buys5m: finite(pair?.txns?.m5?.buys), sells5m: finite(pair?.txns?.m5?.sells),
+    priceChange5mPct: finite(pair?.priceChange?.m5), price24hPct: finite(pair?.priceChange?.h24),
+    dexUrl: pair?.url || `https://dexscreener.com/arc/${pair?.pairAddress || ''}`
+  };
+}
+
+async function contractSafety(candidate) {
+  const reasons = [];
+  if (candidate.liquidityUsd < env.trenchesMinLiquidityUsd) reasons.push('low-liquidity');
+  if (candidate.sells5m < 1) reasons.push('no-real-sells');
+  if (candidate.buys5m > 15 && candidate.sells5m === 0) reasons.push('honeypot-pattern');
+  if (candidate.priceChange5mPct > env.trenchesMaxPriceSinceFirstBuyPct) reasons.push('entry-too-late');
+  if (env.trenchesMaxMarketCapUsd > 0 && candidate.marketCapUsd > env.trenchesMaxMarketCapUsd) reasons.push('market-cap-too-high');
+
+  let providerVerified = false;
+  try {
+    const qs = new URLSearchParams({ contract_addresses: candidate.address });
+    const response = await fetch(`${GOPLUS}?${qs}`, { headers: { accept: 'application/json' } });
+    if (response.ok) {
+      const body = await response.json();
+      const row = body?.result?.[candidate.address] ?? body?.result?.[low(candidate.address)];
+      if (row) {
+        providerVerified = true;
+        const flag = (key) => String(row?.[key] ?? '') === '1';
+        if (flag('is_honeypot')) reasons.push('honeypot');
+        if (flag('cannot_sell_all')) reasons.push('cannot-sell-all');
+        if (flag('is_blacklisted')) reasons.push('blacklist-risk');
+        if (flag('hidden_owner')) reasons.push('hidden-owner');
+      }
+    }
+  } catch {}
+  return { ok: reasons.length === 0, risk: reasons.length ? 80 : providerVerified ? 15 : 25, reasons, providerVerified };
+}
+
+function scoreCandidate(candidate) {
+  const walletScore = Math.min(35, candidate.wallets * 12);
+  const flowScore = candidate.paidUsd > 0 ? Math.min(25, Math.log10(1 + candidate.paidUsd) * 6) : 8;
+  const liquidityScore = Math.min(20, Math.log10(1 + candidate.liquidityUsd) * 3.5);
+  const activityScore = Math.min(12, candidate.buys5m * 0.8) + Math.min(8, candidate.sells5m * 1.2);
+  const early = candidate.priceChange5mPct <= 5 ? 10 : candidate.priceChange5mPct <= 20 ? 7 : 3;
+  return clamp(Math.round(walletScore + flowScore + liquidityScore + activityScore + early), 0, 100);
 }
 
 export class TrenchesWorker {
   constructor() {
-    this.store = new TrenchesStore(env.supabaseUrl, env.supabaseSecretKey);
+    this.wallets = parseWallets();
+    this.walletByAddress = new Map(this.wallets.map((wallet) => [wallet.address, wallet]));
+    this.walletTopics = this.wallets.map((wallet) => padTopicAddress(wallet.address));
+    this.rpc = new RpcClient(process.env.TRENCHES_RPC_URL || 'https://rpc.mainnet.arc.io');
+    this.store = new Store(env.supabaseUrl, env.supabaseSecretKey);
+    this.pollMs = Math.max(1_500, finite(process.env.TRENCHES_RPC_POLL_MS, 2_500));
+    this.maxBlocks = Math.max(1, Math.min(50, Math.floor(finite(process.env.TRENCHES_MAX_BLOCKS_PER_CYCLE, 12))));
+    this.clusterMs = Math.max(30_000, finite(process.env.TRENCHES_CLUSTER_WINDOW_MS, 120_000));
+    this.eliteSingleUsd = Math.max(0, finite(process.env.TRENCHES_ELITE_SINGLE_USD, 5_000));
+    this.lastBlock = 0;
     this.running = false;
-    this.timer = null;
+    this.clusters = new Map();
+    this.seen = new Map();
     this.emitted = new Map();
     this.chatId = '';
     this.language = env.telegramLanguage;
-    this.emptyCycles = 0;
   }
 
-  async notify(cluster, score, safety) {
+  remember(key) {
+    if (this.seen.has(key)) return true;
+    this.seen.set(key, Date.now());
+    if (this.seen.size > 5000) {
+      const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+      for (const [id, at] of this.seen) if (at < cutoff) this.seen.delete(id);
+    }
+    return false;
+  }
+
+  payerEvidence(wallet, tx, receipt, boughtToken) {
+    if (low(tx?.from) === wallet) {
+      return { verified: true, paidUsd: low(tx?.from) === wallet ? usd18(tx?.value) : 0, mode: 'tx-from' };
+    }
+    let paidUsd = 0;
+    let verified = false;
+    for (const log of receipt?.logs ?? []) {
+      if (low(log?.topics?.[0]) !== TRANSFER_TOPIC || topicAddress(log?.topics?.[1]) !== wallet) continue;
+      const to = topicAddress(log?.topics?.[2]);
+      if (!to || to === ZERO) continue;
+      if (low(log?.address) === low(boughtToken)) continue;
+      verified = true;
+      if (low(log?.address) === ARC_SYSTEM_EMITTER || low(log?.address) === ARC_NATIVE_USDC) {
+        paidUsd = Math.max(paidUsd, usd18(log?.data));
+      }
+    }
+    return { verified, paidUsd, mode: verified ? 'outflow-proof' : 'none' };
+  }
+
+  addEvent(token, event) {
+    const cutoff = Date.now() - this.clusterMs;
+    const fresh = (this.clusters.get(token) ?? []).filter((item) => item.observedAt >= cutoff && item.wallet !== event.wallet);
+    fresh.push(event);
+    this.clusters.set(token, fresh);
+    return fresh;
+  }
+
+  async notify(candidate, score, safety) {
     if (!env.telegramBotToken) return;
     if (!this.chatId) this.chatId = await this.store.chatId().catch(() => '');
     if (!this.chatId) return;
     this.language = await this.store.language().catch(() => env.telegramLanguage);
-
-    const securityAr = safety.verified ? '✅ فحص العقد: ناجح' : '⚠️ فحص العقد غير متاح لهذه الشبكة — تنبيه فقط';
-    const securityEn = safety.verified ? '✅ Contract safety: passed' : '⚠️ Contract safety unavailable on this chain — alert only';
+    const walletLines = candidate.events.slice(0, 6).map((event) => `• ${event.label}: ${event.paidUsd > 0 ? `$${money(event.paidUsd)}` : 'verified buy'}`);
     const ar = [
-      '🧠🔥 SUMMECA TRENCHES — SMART MONEY',
+      '🧠🔥 SUMMECA ON-CHAIN TRENCHES', '',
+      `$${candidate.symbol} • ARC`,
+      `👥 شراء مؤكد من ${candidate.wallets} محافظ متتبعة`,
+      `💵 دفع مرصود: ${candidate.paidUsd > 0 ? `$${money(candidate.paidUsd)}` : 'تم إثبات الدفع بدون قيمة دقيقة'}`,
+      ...walletLines,
       '',
-      `$${cluster.symbol ?? 'TOKEN'} • ${String(cluster.chain || 'EVM').toUpperCase()}`,
-      `👥 محافظ اشترت: ${cluster.walletsBought} | ما زالت محتفظة: ${cluster.stillHolding}`,
-      `💰 صافي التدفق: +$${money(cluster.netInflowUsd)} | إجمالي الشراء: $${money(cluster.spentUsd)}`,
-      cluster.firstIn ? `🥇 أول دخول: ${cluster.firstIn}` : '',
-      `📈 منذ أول شراء: ${cluster.priceSinceFirstBuyPct >= 0 ? '+' : ''}${cluster.priceSinceFirstBuyPct.toFixed(1)}%`,
-      `MC: $${money(cluster.marketCapUsd)} | 💧 السيولة: $${money(cluster.liquidityUsd)}`,
-      finite(cluster.priceUsd) > 0 ? `السعر: $${cluster.priceUsd}` : '',
-      `🎯 Trenches Score: ${score}/100`,
-      securityAr,
+      `MC: $${money(candidate.marketCapUsd)} | 💧 السيولة: $${money(candidate.liquidityUsd)}`,
+      `5m: شراء ${candidate.buys5m} / بيع ${candidate.sells5m} | حركة ${candidate.priceChange5mPct.toFixed(1)}%`,
+      `🎯 Smart Wallet Score: ${score}/100 | 🛡️ Risk: ${safety.risk}/100`,
+      safety.providerVerified ? '✅ فحص العقد + نشاط البيع مؤكد' : '✅ تحقق on-chain + سيولة وبيع فعليان',
       '',
-      '🔒 المصدر الوحيد للإشارة: CircleTrenches / بيانات المحافظ العامة.',
-      '🧪 التداول الحقيقي متوقف؛ الإشارة للمراقبة والاختبار.',
-      `CA: ${cluster.address}`,
-      cluster.dexUrl ? `DEX: ${cluster.dexUrl}` : ''
+      '🛡️ Anti-spoof: لم تُقبل الإشارة إلا بعد إثبات خروج قيمة من نفس المحفظة أو كونها مرسل المعاملة.',
+      '🧪 وضع مراقبة/اختبار فقط؛ الشراء الحقيقي غير مفعّل.',
+      `CA: ${candidate.address}`,
+      candidate.dexUrl ? `DEX: ${candidate.dexUrl}` : ''
     ].filter(Boolean).join('\n');
     const en = [
-      '🧠🔥 SUMMECA TRENCHES — SMART MONEY',
+      '🧠🔥 SUMMECA ON-CHAIN TRENCHES', '',
+      `$${candidate.symbol} • ARC`,
+      `👥 ${candidate.wallets} tracked wallets confirmed buying`,
+      `💵 Observed payment: ${candidate.paidUsd > 0 ? `$${money(candidate.paidUsd)}` : 'payer verified; exact value unavailable'}`,
+      ...walletLines,
       '',
-      `$${cluster.symbol ?? 'TOKEN'} • ${String(cluster.chain || 'EVM').toUpperCase()}`,
-      `👥 Wallets bought: ${cluster.walletsBought} | Still holding: ${cluster.stillHolding}`,
-      `💰 Net inflow: +$${money(cluster.netInflowUsd)} | Total spent: $${money(cluster.spentUsd)}`,
-      cluster.firstIn ? `🥇 First in: ${cluster.firstIn}` : '',
-      `📈 Since first buy: ${cluster.priceSinceFirstBuyPct >= 0 ? '+' : ''}${cluster.priceSinceFirstBuyPct.toFixed(1)}%`,
-      `MC: $${money(cluster.marketCapUsd)} | 💧 Liquidity: $${money(cluster.liquidityUsd)}`,
-      finite(cluster.priceUsd) > 0 ? `Price: $${cluster.priceUsd}` : '',
-      `🎯 Trenches Score: ${score}/100`,
-      securityEn,
+      `MC: $${money(candidate.marketCapUsd)} | 💧 Liquidity: $${money(candidate.liquidityUsd)}`,
+      `5m: ${candidate.buys5m} buys / ${candidate.sells5m} sells | move ${candidate.priceChange5mPct.toFixed(1)}%`,
+      `🎯 Smart Wallet Score: ${score}/100 | 🛡️ Risk: ${safety.risk}/100`,
+      safety.providerVerified ? '✅ Contract + sell activity checked' : '✅ On-chain payer proof + real liquidity/sells checked',
       '',
-      '🔒 Sole signal source: CircleTrenches / public wallet activity.',
-      '🧪 Live trading is disabled; monitoring/testing only.',
-      `CA: ${cluster.address}`,
-      cluster.dexUrl ? `DEX: ${cluster.dexUrl}` : ''
+      '🛡️ Anti-spoof: signal requires payment evidence from the tracked wallet or the wallet as transaction sender.',
+      '🧪 Monitoring/testing only; live buying is disabled.',
+      `CA: ${candidate.address}`,
+      candidate.dexUrl ? `DEX: ${candidate.dexUrl}` : ''
     ].filter(Boolean).join('\n');
     const text = this.language === 'en' ? en : this.language === 'bilingual' ? `${ar}\n\n────────────\n\n${en}` : ar;
     await telegramApi(env.telegramBotToken, 'sendMessage', { chat_id: this.chatId, text });
   }
 
-  async process(cluster) {
-    let enriched = cluster;
-    try { enriched = await fetchDexSnapshot(cluster); }
-    catch (error) { console.warn('[trenches:dex]', cluster.address, error.message); }
-    if (!eligible(enriched)) return;
-
-    let safety = { verified: false, blocked: false, reasons: ['security-not-checked'] };
-    try { safety = await goPlusSafety(enriched); }
-    catch (error) { console.warn('[trenches:safety]', enriched.address, error.message); }
-    if (safety.blocked) {
-      console.warn(`[trenches:blocked] ${enriched.address} ${safety.reasons.join(',')}`);
-      return;
-    }
-
-    const key = `${lower(enriched.chain)}:${lower(enriched.address)}`;
-    const last = this.emitted.get(key) ?? 0;
+  async evaluate(token, events) {
+    const unique = [...new Map(events.map((event) => [event.wallet, event])).values()];
+    const paidUsd = unique.reduce((sum, event) => sum + finite(event.paidUsd), 0);
+    const confirmed = unique.length >= env.trenchesMinWallets || paidUsd >= this.eliteSingleUsd;
+    if (!confirmed) return;
+    const last = this.emitted.get(token) ?? 0;
     if (Date.now() - last < env.trenchesSignalCooldownMs) return;
 
-    const score = trenchesScore(enriched, safety);
+    const market = await dexSnapshot(token).catch((error) => {
+      console.warn('[trenches:dex]', token, error.message);
+      return null;
+    });
+    if (!market) return;
+    const candidate = { ...market, events: unique, wallets: unique.length, paidUsd };
+    const safety = await contractSafety(candidate);
+    if (!safety.ok) {
+      console.warn(`[trenches:blocked] ${candidate.symbol} ${candidate.address} ${safety.reasons.join(',')}`);
+      return;
+    }
+    const score = scoreCandidate(candidate);
     if (score < 60) return;
-    this.emitted.set(key, Date.now());
+    this.emitted.set(token, Date.now());
+    await this.store.save(candidate, score, safety).catch((error) => console.warn('[trenches:store]', error.message));
+    await this.notify(candidate, score, safety).catch((error) => console.warn('[trenches:telegram]', error.message));
+    console.log(`[trenches:signal] ARC ${candidate.symbol} wallets=${candidate.wallets} paid=$${Math.round(candidate.paidUsd)} liq=$${Math.round(candidate.liquidityUsd)} score=${score}`);
+  }
 
-    await this.store.save(enriched, score, safety).catch((error) => console.error('[trenches:supabase]', error.message));
-    await this.notify(enriched, score, safety).catch((error) => console.error('[trenches:telegram]', error.message));
-    console.log(`[trenches:signal] chain=${enriched.chain} token=${enriched.symbol} wallets=${enriched.walletsBought} holding=${enriched.stillHolding} net=$${Math.round(enriched.netInflowUsd)} score=${score}`);
+  async processLog(log) {
+    const token = low(log?.address);
+    const wallet = topicAddress(log?.topics?.[2]);
+    if (!EVM.test(token) || !this.walletByAddress.has(wallet)) return;
+    if ([ARC_SYSTEM_EMITTER, ARC_NATIVE_USDC].includes(token)) return;
+    const key = `${low(log?.transactionHash)}:${String(log?.logIndex)}`;
+    if (this.remember(key)) return;
+    const [tx, receipt] = await Promise.all([this.rpc.tx(log.transactionHash), this.rpc.receipt(log.transactionHash)]);
+    const evidence = this.payerEvidence(wallet, tx, receipt, token);
+    if (!evidence.verified) {
+      console.log(`[trenches:spoof-drop] wallet=${wallet.slice(0, 8)}… token=${token.slice(0, 8)}… tx=${String(log.transactionHash).slice(0, 10)}…`);
+      return;
+    }
+    const info = this.walletByAddress.get(wallet);
+    const event = {
+      wallet, label: info?.label || wallet.slice(0, 8), txHash: log.transactionHash,
+      paidUsd: evidence.paidUsd, proof: evidence.mode, observedAt: Date.now()
+    };
+    const cluster = this.addEvent(token, event);
+    await this.evaluate(token, cluster);
   }
 
   async cycle() {
-    if (this.running) return;
+    if (this.running || !this.walletTopics.length) return;
     this.running = true;
     try {
-      const html = await fetchText(env.trenchesPrimaryUrl);
-      const clusters = parseTrenchesHtml(html, env.trenchesPrimaryUrl);
-      if (!clusters.length) {
-        this.emptyCycles += 1;
-        if (this.emptyCycles === 1 || this.emptyCycles % 30 === 0) {
-          console.warn(`[trenches] source connected but no aggregate token rows were present in the server response (emptyCycles=${this.emptyCycles})`);
-        }
-        return;
+      const latest = await this.rpc.blockNumber();
+      if (!(latest > 0)) return;
+      if (!this.lastBlock) {
+        this.lastBlock = Math.max(0, latest - 2);
+        console.log(`[trenches:onchain] synced latest=${latest} wallets=${this.wallets.length}`);
       }
-      this.emptyCycles = 0;
-      const ordered = clusters
-        .filter((item) => item.netInflowUsd > 0)
-        .sort((a, b) => (b.walletsBought - a.walletsBought) || (b.netInflowUsd - a.netInflowUsd))
-        .slice(0, 25);
-      console.log(`[trenches] parsed=${clusters.length} candidates=${ordered.length} source=${env.trenchesPrimaryUrl}`);
-      for (const cluster of ordered) await this.process(cluster);
+      const from = this.lastBlock + 1;
+      if (from > latest) return;
+      const to = Math.min(latest, from + this.maxBlocks - 1);
+      const logs = await this.rpc.logs(from, to, this.walletTopics);
+      this.lastBlock = to;
+      if (Array.isArray(logs) && logs.length) {
+        console.log(`[trenches:onchain] blocks=${from}-${to} incomingTransfers=${logs.length}`);
+        for (const log of logs.slice(0, 100)) await this.processLog(log);
+      }
     } catch (error) {
-      console.error('[trenches:cycle]', error.message);
+      console.error('[trenches:onchain]', error.message);
     } finally {
       this.running = false;
     }
@@ -525,16 +364,13 @@ export class TrenchesWorker {
       console.log('SUMMECA TRENCHES: disabled');
       return false;
     }
-    if (!env.telegramBotToken || !this.store.enabled) {
-      console.log('SUMMECA TRENCHES: skipped — Telegram or Supabase configuration missing');
+    if (!this.wallets.length) {
+      console.error('SUMMECA TRENCHES: no TRENCHES_WALLETS configured');
       return false;
     }
-    this.chatId = await this.store.chatId().catch(() => '');
-    this.language = await this.store.language().catch(() => env.telegramLanguage);
-    console.log(`SUMMECA TRENCHES: PRIMARY source=${env.trenchesPrimaryUrl} wallets>=${env.trenchesMinWallets} holding>=${env.trenchesMinStillHolding} net>=${env.trenchesMinNetInflowUsd}`);
+    console.log(`SUMMECA TRENCHES: ON-CHAIN ARC wallet-driven mode wallets=${this.wallets.length} poll=${this.pollMs}ms`);
     await this.cycle();
-    this.timer = setInterval(() => void this.cycle(), env.trenchesPollMs);
-    this.timer.unref?.();
+    setInterval(() => void this.cycle(), this.pollMs);
     return true;
   }
 }
