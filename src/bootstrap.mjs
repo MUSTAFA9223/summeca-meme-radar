@@ -1,5 +1,5 @@
 import { env } from './config/env.mjs';
-import { startPrelaunchWorker } from './signals/prelaunchWorker.mjs';
+import { startSafePrelaunchWorker } from './signals/prelaunchSafeWorker.mjs';
 import { startTrenchesWorker } from './signals/trenchesWorker.mjs';
 
 if (!env.trenchesEnabled) {
@@ -9,4 +9,4 @@ if (!env.trenchesEnabled) {
 }
 
 await startTrenchesWorker();
-await startPrelaunchWorker();
+await startSafePrelaunchWorker();
