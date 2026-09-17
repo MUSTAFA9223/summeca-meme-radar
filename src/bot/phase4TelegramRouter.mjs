@@ -42,9 +42,9 @@ async function consume(update, base, ownerId) {
   const callback = update?.callback_query;
   const callbackChat = String(callback?.message?.chat?.id ?? '');
   const data = String(callback?.data ?? '');
-  if (callback && callbackChat === ownerId && data.startsWith('p4:')) {
+  if (callback && callbackChat === ownerId && (data.startsWith('p4:') || data.startsWith('p5:'))) {
     await telegramCall(base, 'answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
-    const result = await terminal.handle(data).catch((error) => ({ handled: true, text: `❌ Phase 4: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
+    const result = await terminal.handle(data).catch((error) => ({ handled: true, text: `❌ Terminal extension: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
     if (result?.handled) await sendResult(base, ownerId, result).catch(() => {});
     return true;
   }
@@ -78,13 +78,13 @@ async function filterUpdates(response, base) {
   headers.delete('content-encoding');
   return new Response(JSON.stringify(payload), { status: response.status, statusText: response.statusText, headers });
 }
-function appendLeaderboardCommand(init) {
+function appendCommands(init) {
   if (typeof init?.body !== 'string') return init;
   try {
     const body = JSON.parse(init.body);
     if (!Array.isArray(body?.commands)) return init;
     if (!body.commands.some((c) => c?.command === 'leaderboard')) {
-      body.commands.splice(Math.max(0, body.commands.length - 3), 0, { command: 'leaderboard', description: 'Smart-Wallet Evidence Leaderboard' });
+      body.commands.splice(Math.max(0, body.commands.length - 3), 0, { command: 'leaderboard', description: 'Smart-Wallet Performance Leaderboard' });
     }
     return { ...init, body: JSON.stringify(body) };
   } catch { return init; }
@@ -98,8 +98,8 @@ globalThis.fetch = async (input, init = {}) => {
     const response = await previousFetch(input, init);
     return filterUpdates(response, base);
   }
-  if (method === 'setMyCommands') return previousFetch(input, appendLeaderboardCommand(init));
+  if (method === 'setMyCommands') return previousFetch(input, appendCommands(init));
   return previousFetch(input, init);
 };
 
-console.log('SUMMECA PHASE 4 TELEGRAM ROUTER: p4 callbacks + /leaderboard on shared getUpdates stream');
+console.log('SUMMECA EXTENSION TELEGRAM ROUTER: p4+p5 callbacks + /leaderboard on shared getUpdates stream');
