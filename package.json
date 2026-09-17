@@ -1,9 +1,9 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.25.2",
+  "version": "0.25.3",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with filtered Pump.fun launch detection, holder-concentration quality gates, smart-wallet confirmation, Banana-style Telegram analysis/Paper trading terminal, TP/SL/trailing risk automation, buy presets, copy-preview confirmation, Paper Limit/DCA orders, manual-confirm sniper checks, smart-wallet dashboard, parallel fault-isolated startup, and adaptive Arc/DexScreener rate limiting.",
+  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with filtered Pump.fun launch detection, holder-concentration quality gates, smart-wallet confirmation, Banana-style Telegram analysis/Paper trading terminal, TP/SL/trailing risk automation, buy presets, copy-preview confirmation, Paper Limit/DCA orders, manual-confirm sniper checks, smart-wallet dashboard, fully routed Telegram advanced callbacks, parallel fault-isolated startup, and adaptive Arc/DexScreener rate limiting.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
