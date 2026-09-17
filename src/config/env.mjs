@@ -56,8 +56,21 @@ export const env = {
   telegramChatId: process.env.TELEGRAM_CHAT_ID ?? '',
   telegramLanguage: language('TELEGRAM_LANGUAGE', 'ar'),
 
-  // Smart-money discovery intentionally stays independent from the live-trading
-  // switch. It can produce alerts/signals while real-money execution remains locked.
+  // Trenches-first mode. CircleTrenches is the sole discovery/signal source.
+  // DexScreener and GoPlus are used only to validate the discovered token.
+  trenchesEnabled: (process.env.TRENCHES_ENABLED ?? 'false') === 'true',
+  trenchesPrimaryUrl: process.env.TRENCHES_PRIMARY_URL ?? 'https://circletrenches.com/',
+  trenchesPollMs: Math.max(5_000, num('TRENCHES_POLL_MS', 10_000)),
+  trenchesMinWallets: Math.max(1, Math.min(50, Math.floor(num('TRENCHES_MIN_WALLETS', 2)))),
+  trenchesMinStillHolding: Math.max(1, Math.min(50, Math.floor(num('TRENCHES_MIN_STILL_HOLDING', 2)))),
+  trenchesMinNetInflowUsd: Math.max(0, num('TRENCHES_MIN_NET_INFLOW_USD', 1_000)),
+  trenchesMinLiquidityUsd: Math.max(0, num('TRENCHES_MIN_LIQUIDITY_USD', 8_000)),
+  trenchesMaxMarketCapUsd: Math.max(0, num('TRENCHES_MAX_MARKET_CAP_USD', 3_000_000)),
+  trenchesMaxPriceSinceFirstBuyPct: Math.max(0, num('TRENCHES_MAX_PRICE_SINCE_FIRST_BUY_PCT', 40)),
+  trenchesSignalCooldownMs: Math.max(60_000, num('TRENCHES_SIGNAL_COOLDOWN_MS', 900_000)),
+
+  // Legacy Birdeye Smart Money engine. Kept for rollback but disabled in
+  // Trenches-first production mode.
   smartMoneyEnabled: (process.env.SMART_MONEY_ENABLED ?? 'true') !== 'false',
   smartMoneyWalletPollMs: Math.max(2_500, num('SMART_MONEY_WALLET_POLL_MS', 5_000)),
   smartMoneyDiscoveryPollMs: Math.max(15_000, num('SMART_MONEY_DISCOVERY_POLL_MS', 60_000)),
@@ -117,6 +130,9 @@ if (env.smartMoneyEliteWalletWinRate < env.smartMoneyMinWalletWinRate) {
 }
 if (env.smartMoneyEliteWalletScore < env.smartMoneyMinWalletScore) {
   throw new Error('SMART_MONEY_ELITE_WALLET_SCORE must be >= SMART_MONEY_MIN_WALLET_SCORE');
+}
+if (env.trenchesMinStillHolding > env.trenchesMinWallets && env.trenchesMinWallets > 1) {
+  console.warn('[trenches:config] TRENCHES_MIN_STILL_HOLDING is above TRENCHES_MIN_WALLETS; this intentionally requires additional holders beyond the buy count threshold');
 }
 
 if (env.liveTradingEnabled) {
