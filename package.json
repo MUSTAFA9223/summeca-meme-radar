@@ -1,14 +1,14 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.25.3",
+  "version": "0.26.0",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with filtered Pump.fun launch detection, holder-concentration quality gates, smart-wallet confirmation, Banana-style Telegram analysis/Paper trading terminal, TP/SL/trailing risk automation, buy presets, copy-preview confirmation, Paper Limit/DCA orders, manual-confirm sniper checks, smart-wallet dashboard, fully routed Telegram advanced callbacks, parallel fault-isolated startup, and adaptive Arc/DexScreener rate limiting.",
+  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with filtered Pump.fun launch detection, holder-concentration quality gates, smart-wallet confirmation, Banana-style Telegram analysis/Paper trading terminal, TP/SL/trailing risk automation, Paper Limit/DCA/Sniper workflows, Deep Safety checks, evidence-based Smart-Wallet Leaderboard, execution preflight, shared Telegram phase4 routing, parallel fault-isolated startup, and adaptive Arc/DexScreener rate limiting. Live transaction broadcast remains disabled.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/bootstrap.mjs && node --check src/infra/arcRpcGuard.mjs && node --check src/infra/dexScreenerGuard.mjs && node --check src/infra/telegramTerminalGuard.mjs && node --check src/config/env.mjs && node --check src/signals/trenchesWorker.mjs && node --check src/signals/prelaunchWorker.mjs && node --check src/signals/prelaunchSafeWorker.mjs && node --check src/signals/multiChainWorker.mjs && node --check src/signals/bnbLeanWorker.mjs && node --check src/signals/solanaUltraEarlyWorker.mjs && node --check src/bot/tradingTerminal.mjs && node --check src/bot/advancedTerminal.mjs && node --check src/bot/phase3Terminal.mjs && node --check src/bot/phase3Compat.mjs && node --check src/bot/leanTelegramController.mjs && node --check src/telegramOwnerMenu.mjs && node --check src/notifiers/telegram.mjs"
+    "check": "node --check src/bootstrap.mjs && node --check src/infra/arcRpcGuard.mjs && node --check src/infra/dexScreenerGuard.mjs && node --check src/infra/telegramTerminalGuard.mjs && node --check src/config/env.mjs && node --check src/signals/trenchesWorker.mjs && node --check src/signals/prelaunchWorker.mjs && node --check src/signals/prelaunchSafeWorker.mjs && node --check src/signals/multiChainWorker.mjs && node --check src/signals/bnbLeanWorker.mjs && node --check src/signals/solanaUltraEarlyWorker.mjs && node --check src/bot/tradingTerminal.mjs && node --check src/bot/advancedTerminal.mjs && node --check src/bot/phase3Terminal.mjs && node --check src/bot/phase3Compat.mjs && node --check src/bot/phase4SafetyLeaderboard.mjs && node --check src/bot/phase4TelegramRouter.mjs && node --check src/bot/leanTelegramController.mjs && node --check src/telegramOwnerMenu.mjs && node --check src/notifiers/telegram.mjs"
   },
   "engines": { "node": ">=22" }
 }
