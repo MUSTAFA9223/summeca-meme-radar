@@ -77,6 +77,44 @@ export function isSolanaEarlyAlertEligible({
     && move <= maxMovePct;
 }
 
+export function isSolanaBreakoutEligible({
+  ageMs = 0,
+  minLiquidityUsd = 8_000,
+  minMarketCapUsd = 20_000,
+  maxMarketCapUsd = 1_800_000,
+  minBuys5m = 15,
+  minSells5m = 2,
+  minVolume5mUsd = 2_500,
+  minRatio = 1.25,
+  maxRatio = 12,
+  minMovePct = 45,
+  maxMovePct = 800,
+  minAgeMs = 20_000,
+  maxAgeMs = 8 * 60_000,
+  market = {}
+} = {}) {
+  const buys = finite(market?.buys5m);
+  const sells = finite(market?.sells5m);
+  const ratio = buys / Math.max(1, sells);
+  const marketCap = finite(market?.marketCapUsd);
+  const liquidity = finite(market?.liquidityUsd);
+  const volume = finite(market?.volume5mUsd);
+  const move = finite(market?.priceChange5mPct);
+  return finite(market?.priceUsd) > 0
+    && ageMs >= minAgeMs
+    && ageMs <= maxAgeMs
+    && liquidity >= minLiquidityUsd
+    && marketCap >= minMarketCapUsd
+    && marketCap <= maxMarketCapUsd
+    && buys >= minBuys5m
+    && sells >= minSells5m
+    && volume >= minVolume5mUsd
+    && ratio >= minRatio
+    && ratio <= maxRatio
+    && move >= minMovePct
+    && move <= maxMovePct;
+}
+
 export function advanceSolanaEarlyConfirmation({
   count = 0,
   lastAt = 0,
@@ -413,6 +451,19 @@ export class SolanaUltraEarlyWorker {
     this.earlyMaxAgeMs = numEnv('SOLANA_EARLY_MAX_AGE_MS', 150_000, 30_000, 300_000);
     this.earlyConfirmations = Math.round(numEnv('SOLANA_EARLY_CONFIRMATIONS', 2, 1, 4));
     this.earlyConfirmGapMs = numEnv('SOLANA_EARLY_CONFIRM_GAP_MS', 8_000, 2_000, 60_000);
+    this.breakoutEnabled = boolEnv('SOLANA_BREAKOUT_ALERTS_ENABLED', true);
+    this.breakoutMinLiquidityUsd = numEnv('SOLANA_BREAKOUT_MIN_LIQUIDITY_USD', 8_000, 1_000, 200_000);
+    this.breakoutMinMarketCapUsd = numEnv('SOLANA_BREAKOUT_MIN_MARKET_CAP_USD', 20_000, 1_000, 500_000);
+    this.breakoutMaxMarketCapUsd = numEnv('SOLANA_BREAKOUT_MAX_MARKET_CAP_USD', 1_800_000, 100_000, 10_000_000);
+    this.breakoutMinBuys5m = numEnv('SOLANA_BREAKOUT_MIN_BUYS_5M', 15, 5, 250);
+    this.breakoutMinSells5m = numEnv('SOLANA_BREAKOUT_MIN_SELLS_5M', 2, 1, 100);
+    this.breakoutMinVolume5mUsd = numEnv('SOLANA_BREAKOUT_MIN_VOLUME_5M_USD', 2_500, 250, 500_000);
+    this.breakoutMinRatio = numEnv('SOLANA_BREAKOUT_MIN_RATIO', 1.25, 1.01, 10);
+    this.breakoutMaxRatio = numEnv('SOLANA_BREAKOUT_MAX_RATIO', 12, 2, 100);
+    this.breakoutMinMovePct = numEnv('SOLANA_BREAKOUT_MIN_MOVE_PCT', 45, 20, 300);
+    this.breakoutMaxMovePct = numEnv('SOLANA_BREAKOUT_MAX_MOVE_PCT', 800, 100, 5000);
+    this.breakoutConfirmations = Math.round(numEnv('SOLANA_BREAKOUT_CONFIRMATIONS', 2, 1, 4));
+    this.breakoutConfirmGapMs = numEnv('SOLANA_BREAKOUT_CONFIRM_GAP_MS', 6_000, 2_000, 60_000);
     this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
     this.pendingMaxAgeMs = numEnv('SOLANA_PENDING_MAX_AGE_MS', 8 * 60_000, 4 * 60_000, 20 * 60_000);
@@ -431,6 +482,7 @@ export class SolanaUltraEarlyWorker {
       plausible: 0,
       profilePass: 0,
       earlyAlerts: 0,
+      breakoutAlerts: 0,
       qualified: 0,
       paperOpened: 0,
       rejectionReasons: new Map(),
@@ -464,6 +516,10 @@ export class SolanaUltraEarlyWorker {
       earlyEligibleCount: 0,
       earlyLastEligibleAt: 0,
       earlyLastEligiblePriceUsd: 0,
+      breakoutSent: false,
+      breakoutEligibleCount: 0,
+      breakoutLastEligibleAt: 0,
+      breakoutLastEligiblePriceUsd: 0,
       qualifiedSent: false,
       topSent: false
     };
@@ -514,6 +570,31 @@ export class SolanaUltraEarlyWorker {
     if (!state.rootMessageId) state.rootMessageId = Number(message?.message_id ?? 0);
     this.funnel.earlyAlerts += 1;
     console.log(`[solana:early-watch] mint=${short(mint)} score=${score} buys=${market.buys5m} sells=${market.sells5m} ratio=${ratio.toFixed(2)} age=${age}s`);
+  }
+
+  async sendBreakout(mint, state, market) {
+    if (state.breakoutSent) return;
+    state.breakoutSent = true;
+    const age = Math.max(1, Math.round((Date.now() - state.createdAt) / 1000));
+    const ratio = market.buys5m / Math.max(1, market.sells5m);
+    const message = await sink.send([
+      '🚀🔥 اختراق قوي — SOLANA',
+      '',
+      `${market.symbol} • Pump.fun`,
+      `⏱️ العمر: ${age}s`,
+      `📈 الحركة خلال 5 دقائق: +${finite(market.priceChange5mPct).toFixed(1)}%`,
+      `💧 السيولة: ${money(market.liquidityUsd)} | القيمة السوقية: ${money(market.marketCapUsd)}`,
+      `🟢 شراء ${market.buys5m} / 🔴 بيع ${market.sells5m} | النسبة ${ratio.toFixed(2)}x`,
+      `💵 حجم 5 دقائق: ${money(market.volume5mUsd)}`,
+      '',
+      '⚡ هذه إشارة زخم/اختراق، وليست QUALIFIED؛ فحص الحائزين قد لا يكون متاحًا بعد.',
+      '✅ تم تأكيد الزخم بقراءتين منفصلتين قبل إرسال التنبيه.',
+      '⚠️ الارتفاع القوي قد ينعكس بسرعة، لذلك لا يعني أن الشراء مضمون.',
+      `العقد: ${mint}`
+    ].join('\n'), mint, { marketUrl: market.url, replyTo: state.rootMessageId });
+    if (!state.rootMessageId) state.rootMessageId = Number(message?.message_id ?? 0);
+    this.funnel.breakoutAlerts += 1;
+    console.log(`[solana:breakout] mint=${short(mint)} move=${finite(market.priceChange5mPct).toFixed(1)}% buys=${market.buys5m} sells=${market.sells5m} ratio=${ratio.toFixed(2)} age=${age}s`);
   }
 
   async sendQualified(mint, state, market, profile, score) {
@@ -595,7 +676,7 @@ export class SolanaUltraEarlyWorker {
         method: 'logsSubscribe',
         params: [{ mentions: [PUMP_FUN_PROGRAM_ID] }, { commitment: 'processed' }]
       }));
-      console.log(`SUMMECA SOLANA ULTRA: filtered Pump.fun stream connected poll=${this.marketPollMs}ms early>=${this.earlyAlertMinScore} confirm=${this.earlyConfirmations}x gap=${this.earlyConfirmGapMs}ms qualified>=${this.minScore}`);
+      console.log(`SUMMECA SOLANA ULTRA: Pump.fun stream poll=${this.marketPollMs}ms early>=${this.earlyAlertMinScore} breakout>=${this.breakoutMinMovePct}% qualified>=${this.minScore}`);
     });
     ws.addEventListener('message', (event) => {
       let message;
@@ -697,12 +778,49 @@ export class SolanaUltraEarlyWorker {
       .slice(0, 5)
       .map(([reason, count]) => `${reason}=${count}`)
       .join(',');
-    console.log(`[solana:funnel] detected=${this.funnel.detected} market=${this.funnel.market} plausible=${this.funnel.plausible} early=${this.funnel.earlyAlerts} profilePass=${this.funnel.profilePass} qualified=${this.funnel.qualified} paper=${this.funnel.paperOpened} rejects=[${rejected}]`);
+    console.log(`[solana:funnel] detected=${this.funnel.detected} market=${this.funnel.market} plausible=${this.funnel.plausible} early=${this.funnel.earlyAlerts} breakout=${this.funnel.breakoutAlerts} profilePass=${this.funnel.profilePass} qualified=${this.funnel.qualified} paper=${this.funnel.paperOpened} rejects=[${rejected}]`);
   }
 
   async handleMarket(mint, state, market) {
     const ageMs = Date.now() - state.createdAt;
     this.funnel.market += 1;
+
+    if (this.breakoutEnabled && !state.breakoutSent && !state.earlySent) {
+      const breakoutEligible = isSolanaBreakoutEligible({
+        ageMs,
+        minLiquidityUsd: this.breakoutMinLiquidityUsd,
+        minMarketCapUsd: this.breakoutMinMarketCapUsd,
+        maxMarketCapUsd: this.breakoutMaxMarketCapUsd,
+        minBuys5m: this.breakoutMinBuys5m,
+        minSells5m: this.breakoutMinSells5m,
+        minVolume5mUsd: this.breakoutMinVolume5mUsd,
+        minRatio: this.breakoutMinRatio,
+        maxRatio: this.breakoutMaxRatio,
+        minMovePct: this.breakoutMinMovePct,
+        maxMovePct: this.breakoutMaxMovePct,
+        market
+      });
+      if (breakoutEligible) {
+        const confirmation = advanceSolanaEarlyConfirmation({
+          count: state.breakoutEligibleCount,
+          lastAt: state.breakoutLastEligibleAt,
+          lastPriceUsd: state.breakoutLastEligiblePriceUsd,
+          currentPriceUsd: market.priceUsd,
+          now: Date.now(),
+          minGapMs: this.breakoutConfirmGapMs,
+          confirmations: this.breakoutConfirmations
+        });
+        state.breakoutEligibleCount = confirmation.count;
+        state.breakoutLastEligibleAt = confirmation.lastAt;
+        state.breakoutLastEligiblePriceUsd = confirmation.lastPriceUsd;
+        if (confirmation.confirmed) await this.sendBreakout(mint, state, market);
+        else console.log(`[solana:breakout-pending] mint=${short(mint)} move=${finite(market.priceChange5mPct).toFixed(1)}% confirm=${confirmation.count}/${this.breakoutConfirmations}`);
+      } else {
+        state.breakoutEligibleCount = 0;
+        state.breakoutLastEligibleAt = 0;
+        state.breakoutLastEligiblePriceUsd = 0;
+      }
+    }
 
     const existingPaper = this.bridge.hasOpenPaperPosition(mint);
     const reject = this.rejectionReason(state, market);
