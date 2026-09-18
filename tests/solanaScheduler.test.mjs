@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { selectSolanaMarketCandidates } from '../src/signals/solanaUltraEarlyWorker.mjs';
+import { isSolanaPaperProbeEligible, selectSolanaMarketCandidates } from '../src/signals/solanaUltraEarlyWorker.mjs';
 
 test('fresh initial-buy candidates outrank restored backlog', () => {
   const now = 1_000_000;
@@ -63,4 +63,11 @@ test('recently checked candidates are not rescheduled before poll interval', () 
   }).map(([mint]) => mint);
 
   assert.deepEqual(selected, ['due']);
+});
+
+
+test('paper probe eligibility uses the plausible gate result plus score threshold', () => {
+  assert.equal(isSolanaPaperProbeEligible({ rejectionReason: null, score: 70, minScore: 68 }), true);
+  assert.equal(isSolanaPaperProbeEligible({ rejectionReason: null, score: 67, minScore: 68 }), false);
+  assert.equal(isSolanaPaperProbeEligible({ rejectionReason: 'weak-buy-sell-ratio', score: 90, minScore: 68 }), false);
 });
