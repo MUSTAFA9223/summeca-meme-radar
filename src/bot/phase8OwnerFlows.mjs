@@ -4,6 +4,7 @@ import { AppSettings } from '../storage/appSettings.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { fetchPumpNativeMarket } from '../feeds/pumpFunNative.mjs';
 import { manualTradeCaps } from './phase6ManualConfirm.mjs';
+import { DEFAULT_STOP_LADDER_CONFIG, STOP_LADDER_KEY, formatStopLadder, normalizeStopLadderConfig, parseStopLadderInput } from '../trading/stopLadder.mjs';
 import {
   createPrivyTradingWallet,
   getActiveTradingWallet,
@@ -653,6 +654,41 @@ async function confirmWalletTransfer(intentId) {
   }
 }
 
+async function loadStopLadderConfig() {
+  if (!settings.enabled) return normalizeStopLadderConfig(DEFAULT_STOP_LADDER_CONFIG);
+  const raw = await settings.get(STOP_LADDER_KEY).catch(() => '');
+  return normalizeStopLadderConfig(raw || DEFAULT_STOP_LADDER_CONFIG);
+}
+
+async function saveStopLadderConfig(config) {
+  const normalized = normalizeStopLadderConfig(config);
+  if (!settings.enabled) throw new Error('إعدادات البوت غير متاحة');
+  await settings.set(STOP_LADDER_KEY, JSON.stringify(normalized));
+  return normalized;
+}
+
+async function stopLadderDashboard() {
+  const config = await loadStopLadderConfig();
+  return {
+    text: [
+      '🪜 سُلّم الوقف الديناميكي',
+      '',
+      ...formatStopLadder(config).map((line) => `• ${line}`),
+      '',
+      'مثال التعديل:',
+      'SL=15;100:50,300:200,500:350',
+      '',
+      'المعنى: إذا وصل الربح +100% يرتفع الوقف إلى +50%. وإذا وصل +300% يصبح الوقف +200%.',
+      '✅ الوقف يتحرك للأعلى فقط ولا يعود للخلف بعد رفعه.'
+    ].join('\n'),
+    keyboard: [
+      [{ text: '✏️ تعديل السُلّم', callback_data: 'p8:ladderedit' }],
+      [{ text: '♻️ إعادة الافتراضي', callback_data: 'p8:ladderreset' }],
+      [{ text: '🏠 القائمة', callback_data: 'menu:home' }]
+    ]
+  };
+}
+
 async function tradingWalletDashboard() {
   const wallets = await listTradingWallets();
   const active = await getActiveTradingWallet();
@@ -867,6 +903,22 @@ export async function handlePhase8Callback(callback, terminal) {
     await saveList(COPY_KEY, rows);
     return result(`🗑 تم حذف ${removed?.label || 'المحفظة'} من نسخ التداول.`, [[{ text: '🧠 نسخ التداول', callback_data: 'p8:copy' }]]);
   }
+  if (data === 'p8:ladder') return { handled: true, ...(await stopLadderDashboard()) };
+  if (data === 'p8:ladderedit') {
+    pendingInput.set(chatId, { type: 'stop-ladder', expiresAt: Date.now() + 5 * 60_000 });
+    return result([
+      '✏️ أرسل إعداد السُلّم في رسالة واحدة.',
+      '',
+      'مثال:',
+      'SL=15;100:50,300:200,500:350',
+      '',
+      'SL هو وقف الخسارة الأولي. وكل مستوى بعده هو: ارتفاع الربح : مستوى الوقف.'
+    ].join('\n'), [[{ text: '❌ إلغاء', callback_data: 'p8:ladder' }]]);
+  }
+  if (data === 'p8:ladderreset') {
+    await saveStopLadderConfig(DEFAULT_STOP_LADDER_CONFIG);
+    return { handled: true, ...(await stopLadderDashboard()) };
+  }
   if (data === 'p8:wallets') return { handled: true, ...(await tradingWalletDashboard()) };
   if (data.startsWith('p8:wview:')) {
     const index = Number(data.split(':')[2]);
@@ -943,6 +995,19 @@ export async function handlePhase8Message(message, terminal) {
   const text = String(message?.text || '').trim();
   const pending = pendingInput.get(chatId);
   if (pending && pending.expiresAt <= Date.now()) pendingInput.delete(chatId);
+  if (pendingInput.get(chatId)?.type === 'stop-ladder' && !text.startsWith('/')) {
+    try {
+      const config = parseStopLadderInput(text);
+      pendingInput.delete(chatId);
+      await saveStopLadderConfig(config);
+      return {
+        handled: true,
+        ...(await stopLadderDashboard())
+      };
+    } catch (error) {
+      return result(`❌ لم أفهم صيغة السُلّم: ${String(error?.message ?? error)}\n\nمثال صحيح:\nSL=15;100:50,300:200,500:350`);
+    }
+  }
   if (pendingInput.get(chatId)?.type === 'wallet-send-recipient' && !text.startsWith('/')) {
     const row = pendingInput.get(chatId);
     if (!SOLANA.test(text)) return result('❌ عنوان المستلم ليس عنوان Solana صالحًا. أرسل عنوانًا صحيحًا أو اضغط إلغاء.');
@@ -1007,6 +1072,7 @@ export async function handlePhase8Message(message, terminal) {
   if (/^\/watch(?:@\w+)?\b/i.test(text)) return { handled: true, ...(await watchDashboard()) };
   if (/^\/(copy|copywallet)(?:@\w+)?\b/i.test(text)) return { handled: true, ...(await copyDashboard()) };
   if (/^\/wallets(?:@\w+)?\b/i.test(text)) return { handled: true, ...(await tradingWalletDashboard()) };
+  if (/^\/(stopladder|stop)(?:@\w+)?\b/i.test(text)) return { handled: true, ...(await stopLadderDashboard()) };
   return { handled: false };
 }
 
