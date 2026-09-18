@@ -30,6 +30,15 @@ export function countOpenProbePositions(positions = []) {
     .length;
 }
 
+export function selectProbeForQualifiedPreemption(positions = []) {
+  return (Array.isArray(positions) ? positions : [])
+    .filter((position) =>
+      positionLifecycle(position) === 'solana-ultra-probe'
+      && !position?.forcedExitReason
+    )
+    .sort((a, b) => finite(a?.entryAt, 0) - finite(b?.entryAt, 0))[0] ?? null;
+}
+
 
 function scoreFromUltra(score, profile = {}, market = {}) {
   const top10 = finite(profile?.top10UsersPct, 0);
@@ -108,6 +117,7 @@ export class SolanaTradeCandidateBridge {
       env.maxOpenPositions,
       Math.floor(finite(process.env.SOLANA_PAPER_MAX_PROBES, Math.max(0, env.maxOpenPositions - 1)))
     )),
+    preemptProbeForQualified = String(process.env.SOLANA_PAPER_PREEMPT_PROBE_FOR_QUALIFIED ?? 'true').toLowerCase() !== 'false',
     logger = console
   } = {}) {
     this.store = store;
@@ -116,6 +126,7 @@ export class SolanaTradeCandidateBridge {
     this.paperMinScore = paperMinScore;
     this.paperProbeMinScore = paperProbeMinScore;
     this.maxProbeOpen = maxProbeOpen;
+    this.preemptProbeForQualified = preemptProbeForQualified;
     this.logger = logger;
     this.initialized = false;
     this.initializing = null;
@@ -346,6 +357,34 @@ export class SolanaTradeCandidateBridge {
     if (!this.enabled || scores.entry < paperThreshold || this.trader.getPosition(mint)) {
       await this.recordStage({ mint, state, stage: candidateStage, score: scores.entry, reason: isProbe ? rejectionReason : null });
       return { paperOpened: false, scores, snapshot };
+    }
+
+    if (
+      qualified
+      && this.preemptProbeForQualified
+      && this.trader.openPositions.length >= env.maxOpenPositions
+    ) {
+      const victim = selectProbeForQualifiedPreemption(this.trader.openPositions);
+      if (victim && typeof this.trader.requestExit === 'function') {
+        const exit = this.trader.requestExit(victim.address, 'paper qualified capacity preemption');
+        if (exit?.ok) {
+          await this.recordStage({
+            mint,
+            state,
+            stage: 'qualified_waiting_capacity',
+            score: scores.entry,
+            reason: 'paper-preempt-probe',
+            metadata: {
+              victimAddress: victim.address,
+              victimEntryAt: victim.entryAt ?? null,
+              openPositions: this.trader.openPositions.length,
+              maxOpen: env.maxOpenPositions
+            }
+          });
+          this.logger.log(`[solana:paper-preempt] qualified=${String(mint).slice(0, 8)}… score=${scores.entry} victim=${String(victim.address).slice(0, 8)}…`);
+          return { paperOpened: false, scores, snapshot, reason: 'waiting-capacity' };
+        }
+      }
     }
 
     const result = this.trader.enterQualified(snapshot, scores, {
