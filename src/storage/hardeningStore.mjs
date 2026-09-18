@@ -202,6 +202,32 @@ export class HardeningStore {
     return this.updateAudit(requestId, { payload: { ...(row.payload || {}), events } });
   }
 
+  async findLiveTradeByEntryTx(entryTx, walletAddress) {
+    const path = [
+      'live_trades?select=*',
+      `entry_tx=eq.${encodeURIComponent(entryTx)}`,
+      `wallet_address=eq.${encodeURIComponent(walletAddress)}`,
+      'limit=1'
+    ].join('&');
+    const rows = await this.request(path);
+    return Array.isArray(rows) ? rows[0] ?? null : null;
+  }
+
+  async recentSucceededManualBuys(sinceIso, limit = 50) {
+    const safeLimit = Math.max(1, Math.min(100, Number(limit) || 50));
+    const path = [
+      'execution_audit?select=*',
+      'network=eq.sol',
+      'side=eq.buy',
+      'status=eq.succeeded',
+      `created_at=gte.${encodeURIComponent(sinceIso)}`,
+      'order=created_at.desc',
+      `limit=${safeLimit}`
+    ].join('&');
+    const rows = await this.request(path);
+    return Array.isArray(rows) ? rows : [];
+  }
+
   async updateLiveTrade(id, patch = {}) {
     const rows = await this.request(`live_trades?id=eq.${encodeURIComponent(id)}`, {
       method: 'PATCH',
