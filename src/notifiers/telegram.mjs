@@ -29,10 +29,7 @@ export async function discoverPrivateStartChat(token) {
   return ids[0];
 }
 
-export const normalizeTelegramLanguage = (language) => {
-  const value = String(language ?? 'ar').trim().toLowerCase();
-  return ['ar', 'en', 'bilingual'].includes(value) ? value : 'ar';
-};
+export const normalizeTelegramLanguage = () => 'ar';
 
 const money = (value) => Number(value ?? 0).toLocaleString('en-US', { maximumFractionDigits: 0 });
 const compactMoney = (value) => {
@@ -79,12 +76,12 @@ const tokenKeyboard = (address, language = 'ar', { early = false, safe = false }
     [
       { text: '📊 DEX', url: `https://dexscreener.com/solana/${encodeURIComponent(mint)}` },
       { text: '🔥 FOMO', url: `https://fomo.family/tokens/solana/${encodeURIComponent(mint)}` },
-      { text: '👻 Phantom', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` }
+      { text: '👻 فانتوم', url: `https://phantom.com/tokens/solana/${encodeURIComponent(mint)}` }
     ],
     ...(early ? [[{ text: '🚀 Pump.fun', url: `https://pump.fun/coin/${encodeURIComponent(mint)}` }]] : []),
     [
-      { text: ar ? '🧪 شراء Paper' : '🧪 Paper buy', callback_data: `paper:menu:${mint}` },
-      { text: ar ? '🧪 بيع Paper' : '🧪 Paper sell', callback_data: `paper:sellmenu:${mint}` }
+      { text: ar ? '🧪 شراء تجريبي' : '🧪 Paper buy', callback_data: `paper:menu:${mint}` },
+      { text: ar ? '🧪 بيع تجريبي' : '🧪 Paper sell', callback_data: `paper:sellmenu:${mint}` }
     ],
     [
       { text: '10%', callback_data: `paper:buy:p10:${mint}` },
@@ -144,20 +141,20 @@ export class TelegramNotifier {
     if (!this.enabled || !candidate?.address) return null;
     const mint = String(candidate.address);
     const ar = [
-      '⚡ NEW CREATE — تم إنشاء عملة الآن', '',
+      '⚡ تم إنشاء عملة جديدة الآن', '',
       `${candidate.symbol && candidate.symbol !== 'NEW' ? `$${candidate.symbol}` : 'عملة Pump.fun جديدة'}${candidate.name && candidate.name !== 'New Pump.fun coin' ? ` — ${candidate.name}` : ''}`,
       'المرحلة: 🟢 إنشاء مباشر على Pump.fun',
-      `Slot: ${event.slot ?? '—'}`, '',
+      `رقم الكتلة: ${event.slot ?? '—'}`, '',
       '⚠️ هذه عملة خام ولم تجتز فحوص السوق والأمان والزخم.',
-      `CA: ${mint}`
+      `العقد: ${mint}`
     ].join('\n');
     const en = [
       '⚡ NEW CREATE — coin created now', '',
       `${candidate.symbol && candidate.symbol !== 'NEW' ? `$${candidate.symbol}` : 'New Pump.fun coin'}${candidate.name && candidate.name !== 'New Pump.fun coin' ? ` — ${candidate.name}` : ''}`,
       'Stage: 🟢 direct Pump.fun creation',
-      `Slot: ${event.slot ?? '—'}`, '',
+      `رقم الكتلة: ${event.slot ?? '—'}`, '',
       '⚠️ Raw launch only; market, safety, and momentum gates have not passed.',
-      `CA: ${mint}`
+      `العقد: ${mint}`
     ].join('\n');
     return this.#send(this.#pick(ar, en), { reply_markup: tokenKeyboard(mint, this.language, { early: true, safe: false }) });
   }
@@ -181,16 +178,16 @@ export class TelegramNotifier {
     const quality = entryQuality({ ...s, entryScore: sc.entry, moonScore: sc.moon, riskScore: sc.risk });
 
     const ar = [
-      '🔥 SUMMECA TRENDING — إشارة دخول معتمدة', '',
+      '🔥 SUMMECA — إشارة دخول معتمدة', '',
       `$${symbol}  •  ${displayName}`, '',
       `⏱️ العمر: ${ageLabel(s, 'ar')}  |  📍 ${venue}`,
-      `CA: ${s.address}`, '',
-      `MC: $${marketCap}  |  Vol 5m: $${volume5m}`,
-      `💧 Liquidity: $${liquidity}  |  💵 Price: ${currentPrice ? `$${currentPrice}` : '—'}`,
-      `🟢 Buy 30s: ${buyers.toFixed(1)}  |  🔴 Sell: ${sellers.toFixed(1)}  |  Ratio ${ratio.toFixed(2)}x`,
-      `👥 Unique buyers: ${uniqueBuyersLabel}  |  5m: ${Number(s.priceChange5mPct ?? 0).toFixed(1)}%`, '',
-      `⚡ Momentum ${momentum}/100  |  🎯 Entry ${sc.entry}/100`,
-      `🚀 Moon ${sc.moon}/100  |  🛡️ Risk ${sc.risk}/100`,
+      `العقد: ${s.address}`, '',
+      `القيمة السوقية: $${marketCap}  |  حجم 5 دقائق: $${volume5m}`,
+      `💧 السيولة: $${liquidity}  |  💵 السعر: ${currentPrice ? `$${currentPrice}` : '—'}`,
+      `🟢 شراء 30ث: ${buyers.toFixed(1)}  |  🔴 بيع: ${sellers.toFixed(1)}  |  النسبة ${ratio.toFixed(2)}x`,
+      `👥 المشترون الفريدون: ${uniqueBuyersLabel}  |  5m: ${Number(s.priceChange5mPct ?? 0).toFixed(1)}%`, '',
+      `⚡ الزخم ${momentum}/100  |  🎯 الدخول ${sc.entry}/100`,
+      `🚀 فرصة الصعود ${sc.moon}/100  |  🛡️ المخاطر ${sc.risk}/100`,
       quality.ar,
       '✅ فحص السكام/الأمان: ناجح',
       '📈 بدأت متابعة الأداء من هذه الإشارة.', '',
@@ -201,13 +198,13 @@ export class TelegramNotifier {
       '🔥 SUMMECA TRENDING — APPROVED ENTRY SIGNAL', '',
       `$${symbol}  •  ${displayName}`, '',
       `⏱️ Age: ${ageLabel(s, 'en')}  |  📍 ${venue}`,
-      `CA: ${s.address}`, '',
-      `MC: $${marketCap}  |  Vol 5m: $${volume5m}`,
-      `💧 Liquidity: $${liquidity}  |  💵 Price: ${currentPrice ? `$${currentPrice}` : '—'}`,
-      `🟢 Buys 30s: ${buyers.toFixed(1)}  |  🔴 Sells: ${sellers.toFixed(1)}  |  Ratio ${ratio.toFixed(2)}x`,
-      `👥 Unique buyers: ${uniqueBuyersLabel}  |  5m: ${Number(s.priceChange5mPct ?? 0).toFixed(1)}%`, '',
-      `⚡ Momentum ${momentum}/100  |  🎯 Entry ${sc.entry}/100`,
-      `🚀 Moon ${sc.moon}/100  |  🛡️ Risk ${sc.risk}/100`,
+      `العقد: ${s.address}`, '',
+      `القيمة السوقية: $${marketCap}  |  حجم 5 دقائق: $${volume5m}`,
+      `💧 السيولة: $${liquidity}  |  💵 السعر: ${currentPrice ? `$${currentPrice}` : '—'}`,
+      `🟢 Buys 30s: ${buyers.toFixed(1)}  |  🔴 Sells: ${sellers.toFixed(1)}  |  النسبة ${ratio.toFixed(2)}x`,
+      `👥 المشترون الفريدون: ${uniqueBuyersLabel}  |  5m: ${Number(s.priceChange5mPct ?? 0).toFixed(1)}%`, '',
+      `⚡ الزخم ${momentum}/100  |  🎯 الدخول ${sc.entry}/100`,
+      `🚀 فرصة الصعود ${sc.moon}/100  |  🛡️ المخاطر ${sc.risk}/100`,
       quality.en,
       '✅ Scam/safety check: PASSED',
       '📈 Performance tracking started from this signal.', '',
@@ -258,8 +255,8 @@ export class TelegramNotifier {
 
     if (event.type === 'reference') {
       return this.#send(this.#pick(
-        `📍 بدأ مرجع المتابعة — $${s.symbol}\nالسعر المرجعي: $${currentPrice}\n⚡ Momentum ${momentum}/100\n🟢 شراء 30ث: ${buyers} | 🔴 بيع: ${sellers}\nالسيولة: $${money(s.liquidityUsd)}`,
-        `📍 Tracking reference set — $${s.symbol}\nReference price: $${currentPrice}\n⚡ Momentum ${momentum}/100\n🟢 Buys 30s: ${buyers} | 🔴 Sells: ${sellers}\nLiquidity: $${money(s.liquidityUsd)}`
+        `📍 بدأ مرجع المتابعة — $${s.symbol}\nالسعر المرجعي: $${currentPrice}\n⚡ الزخم ${momentum}/100\n🟢 شراء 30ث: ${buyers} | 🔴 بيع: ${sellers}\nالسيولة: $${money(s.liquidityUsd)}`,
+        `📍 تم تثبيت مرجع المتابعة — $${s.symbol}\nالسعر المرجعي: $${currentPrice}\n⚡ الزخم ${momentum}/100\n🟢 Buys 30s: ${buyers} | 🔴 Sells: ${sellers}\nالسيولة: $${money(s.liquidityUsd)}`
       ), reply);
     }
 
@@ -268,18 +265,18 @@ export class TelegramNotifier {
       `الصعود من الإشارة: +${pct(event.returnPct)}`,
       `أعلى صعود مسجل: +${pct(event.peakReturnPct)}`,
       `السعر الحالي: ${currentPrice ? `$${currentPrice}` : '—'}`,
-      `⚡ Momentum ${momentum}/100 | Entry ${sc.entry}/100 | Risk ${sc.risk}/100`,
+      `⚡ الزخم ${momentum}/100 | Entry ${sc.entry}/100 | Risk ${sc.risk}/100`,
       `🟢 شراء 30ث: ${buyers} | 🔴 بيع: ${sellers}`,
       `حجم الشراء: $${money(s.buyVolume30sUsd)} | البيع: $${money(s.sellVolume30sUsd)}`
     ].join('\n');
     const en = [
       `🚀 $${s.symbol} update — crossed +${event.milestonePct}%`, '',
-      `Return from signal: +${pct(event.returnPct)}`,
-      `Peak recorded: +${pct(event.peakReturnPct)}`,
-      `Current price: ${currentPrice ? `$${currentPrice}` : '—'}`,
-      `⚡ Momentum ${momentum}/100 | Entry ${sc.entry}/100 | Risk ${sc.risk}/100`,
+      `الصعود من الإشارة: +${pct(event.returnPct)}`,
+      `أعلى صعود مسجل: +${pct(event.peakReturnPct)}`,
+      `السعر الحالي: ${currentPrice ? `$${currentPrice}` : '—'}`,
+      `⚡ الزخم ${momentum}/100 | Entry ${sc.entry}/100 | Risk ${sc.risk}/100`,
       `🟢 Buys 30s: ${buyers} | 🔴 Sells: ${sellers}`,
-      `Buy volume: $${money(s.buyVolume30sUsd)} | Sell: $${money(s.sellVolume30sUsd)}`
+      `حجم الشراء: $${money(s.buyVolume30sUsd)} | البيع: $${money(s.sellVolume30sUsd)}`
     ].join('\n');
     return this.#send(this.#pick(ar, en), reply);
   }
