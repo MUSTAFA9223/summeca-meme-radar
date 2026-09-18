@@ -61,7 +61,7 @@ export function parseStopLadderInput(text) {
     }
     ladderText = ladderText ? `${ladderText},${part}` : part;
   }
-  const levels = normalizeStopLadderLevels(ladderText || raw);
+  const levels = normalizeStopLadderLevels(ladderText || raw, []);
   if (!levels.length) throw new Error('صيغة السلم غير صالحة');
   return normalizeStopLadderConfig({ initialStopLossPct, levels });
 }
