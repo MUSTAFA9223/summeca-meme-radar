@@ -38,21 +38,43 @@ export function isSolanaPaperProbeEligible({
 export function isSolanaEarlyAlertEligible({
   rejectionReason = null,
   score = 0,
-  minScore = 55,
+  minScore = 75,
+  minLiquidityUsd = 8_000,
+  minMarketCapUsd = 25_000,
+  maxMarketCapUsd = 1_200_000,
+  minBuys5m = 10,
+  minSells5m = 2,
+  minVolume5mUsd = 1_500,
+  minRatio = 1.5,
+  maxRatio = 8,
+  minMovePct = 3,
+  maxMovePct = 35,
+  ageMs = 0,
+  minAgeMs = 20_000,
+  maxAgeMs = 150_000,
   market = {}
 } = {}) {
   const buys = finite(market?.buys5m);
   const sells = finite(market?.sells5m);
   const ratio = buys / Math.max(1, sells);
+  const marketCap = finite(market?.marketCapUsd);
+  const liquidity = finite(market?.liquidityUsd);
+  const volume = finite(market?.volume5mUsd);
+  const move = finite(market?.priceChange5mPct);
   return !rejectionReason
-    && finite(score) >= finite(minScore, 55)
-    && finite(market?.marketCapUsd) > 0
-    && finite(market?.marketCapUsd) <= 1_800_000
-    && buys >= 5
-    && sells >= 1
-    && finite(market?.volume5mUsd) >= 400
-    && ratio >= 1.3
-    && finite(market?.priceChange5mPct) <= 55;
+    && finite(score) >= finite(minScore, 75)
+    && ageMs >= minAgeMs
+    && ageMs <= maxAgeMs
+    && marketCap >= minMarketCapUsd
+    && marketCap <= maxMarketCapUsd
+    && liquidity >= minLiquidityUsd
+    && buys >= minBuys5m
+    && sells >= minSells5m
+    && volume >= minVolume5mUsd
+    && ratio >= minRatio
+    && ratio <= maxRatio
+    && move >= minMovePct
+    && move <= maxMovePct;
 }
 
 export function selectSolanaMarketCandidates(entries, {
@@ -334,7 +356,21 @@ export class SolanaUltraEarlyWorker {
     this.marketPollMs = numEnv('SOLANA_ULTRA_MARKET_POLL_MS', 1_500, 1_000, 5_000);
     this.minScore = numEnv('SOLANA_QUALIFIED_MIN_SCORE', 72, 50, 95);
     this.paperProbeMinScore = numEnv('SOLANA_PAPER_PROBE_MIN_SCORE', 60, 55, 90);
-    this.earlyAlertMinScore = numEnv('SOLANA_EARLY_ALERT_MIN_SCORE', 55, 45, 85);
+    this.earlyAlertMinScore = numEnv('SOLANA_EARLY_ALERT_MIN_SCORE', 75, 55, 95);
+    this.earlyMinLiquidityUsd = numEnv('SOLANA_EARLY_MIN_LIQUIDITY_USD', 8_000, 1_000, 100_000);
+    this.earlyMinMarketCapUsd = numEnv('SOLANA_EARLY_MIN_MARKET_CAP_USD', 25_000, 1_000, 500_000);
+    this.earlyMaxMarketCapUsd = numEnv('SOLANA_EARLY_MAX_MARKET_CAP_USD', 1_200_000, 100_000, 5_000_000);
+    this.earlyMinBuys5m = numEnv('SOLANA_EARLY_MIN_BUYS_5M', 10, 3, 100);
+    this.earlyMinSells5m = numEnv('SOLANA_EARLY_MIN_SELLS_5M', 2, 1, 50);
+    this.earlyMinVolume5mUsd = numEnv('SOLANA_EARLY_MIN_VOLUME_5M_USD', 1_500, 100, 100_000);
+    this.earlyMinRatio = numEnv('SOLANA_EARLY_MIN_RATIO', 1.5, 1.05, 10);
+    this.earlyMaxRatio = numEnv('SOLANA_EARLY_MAX_RATIO', 8, 2, 100);
+    this.earlyMinMovePct = numEnv('SOLANA_EARLY_MIN_MOVE_PCT', 3, -20, 50);
+    this.earlyMaxMovePct = numEnv('SOLANA_EARLY_MAX_MOVE_PCT', 35, 5, 100);
+    this.earlyMinAgeMs = numEnv('SOLANA_EARLY_MIN_AGE_MS', 20_000, 5_000, 180_000);
+    this.earlyMaxAgeMs = numEnv('SOLANA_EARLY_MAX_AGE_MS', 150_000, 30_000, 300_000);
+    this.earlyConfirmations = Math.round(numEnv('SOLANA_EARLY_CONFIRMATIONS', 2, 1, 4));
+    this.earlyConfirmGapMs = numEnv('SOLANA_EARLY_CONFIRM_GAP_MS', 8_000, 2_000, 60_000);
     this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
     this.pendingMaxAgeMs = numEnv('SOLANA_PENDING_MAX_AGE_MS', 8 * 60_000, 4 * 60_000, 20 * 60_000);
@@ -383,6 +419,9 @@ export class SolanaUltraEarlyWorker {
       rootMessageId: 0,
       launchSent: false,
       earlySent: false,
+      earlyEligibleCount: 0,
+      earlyLastEligibleAt: 0,
+      earlyLastEligiblePriceUsd: 0,
       qualifiedSent: false,
       topSent: false
     };
@@ -514,7 +553,7 @@ export class SolanaUltraEarlyWorker {
         method: 'logsSubscribe',
         params: [{ mentions: [PUMP_FUN_PROGRAM_ID] }, { commitment: 'processed' }]
       }));
-      console.log(`SUMMECA SOLANA ULTRA: filtered Pump.fun stream connected poll=${this.marketPollMs}ms early>=${this.earlyAlertMinScore} qualified>=${this.minScore}`);
+      console.log(`SUMMECA SOLANA ULTRA: filtered Pump.fun stream connected poll=${this.marketPollMs}ms early>=${this.earlyAlertMinScore} confirm=${this.earlyConfirmations}x gap=${this.earlyConfirmGapMs}ms qualified>=${this.minScore}`);
     });
     ws.addEventListener('message', (event) => {
       let message;
@@ -645,14 +684,52 @@ export class SolanaUltraEarlyWorker {
 
     if (!reject && !state.earlySent) {
       const earlyScore = qualityScore(state, market, null);
-      if (isSolanaEarlyAlertEligible({
+      const eligible = isSolanaEarlyAlertEligible({
         rejectionReason: reject,
         score: earlyScore,
         minScore: this.earlyAlertMinScore,
+        minLiquidityUsd: this.earlyMinLiquidityUsd,
+        minMarketCapUsd: this.earlyMinMarketCapUsd,
+        maxMarketCapUsd: this.earlyMaxMarketCapUsd,
+        minBuys5m: this.earlyMinBuys5m,
+        minSells5m: this.earlyMinSells5m,
+        minVolume5mUsd: this.earlyMinVolume5mUsd,
+        minRatio: this.earlyMinRatio,
+        maxRatio: this.earlyMaxRatio,
+        minMovePct: this.earlyMinMovePct,
+        maxMovePct: this.earlyMaxMovePct,
+        ageMs,
+        minAgeMs: this.earlyMinAgeMs,
+        maxAgeMs: this.earlyMaxAgeMs,
         market
-      })) {
+      });
+      if (eligible) {
+        const now = Date.now();
+        const priorPrice = finite(state.earlyLastEligiblePriceUsd);
+        const currentPrice = finite(market.priceUsd);
+        const priceHolding = !(priorPrice > 0) || currentPrice >= priorPrice * 0.99;
+        const enoughGap = !state.earlyLastEligibleAt || now - state.earlyLastEligibleAt >= this.earlyConfirmGapMs;
+
+        if (!priceHolding) {
+          state.earlyEligibleCount = 1;
+        } else if (enoughGap) {
+          state.earlyEligibleCount = Math.max(1, finite(state.earlyEligibleCount)) + (state.earlyLastEligibleAt ? 1 : 0);
+        }
+        if (enoughGap || !state.earlyLastEligibleAt) {
+          state.earlyLastEligibleAt = now;
+          state.earlyLastEligiblePriceUsd = currentPrice;
+        }
+
         state.lastScore = Math.max(finite(state.lastScore), earlyScore);
-        await this.sendEarlyWatch(mint, state, market, earlyScore);
+        if (state.earlyEligibleCount >= this.earlyConfirmations) {
+          await this.sendEarlyWatch(mint, state, market, earlyScore);
+        } else {
+          console.log(`[solana:early-pending] mint=${short(mint)} score=${earlyScore} confirm=${state.earlyEligibleCount}/${this.earlyConfirmations} liq=${money(market.liquidityUsd)} vol=${money(market.volume5mUsd)} move=${finite(market.priceChange5mPct).toFixed(1)}%`);
+        }
+      } else {
+        state.earlyEligibleCount = 0;
+        state.earlyLastEligibleAt = 0;
+        state.earlyLastEligiblePriceUsd = 0;
       }
     }
 
