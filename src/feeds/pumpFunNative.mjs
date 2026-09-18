@@ -21,7 +21,7 @@ const minGapMs = () => Math.max(250, Math.min(2_000, finite(process.env.PUMP_NAT
 const cacheMs = () => Math.max(2_000, Math.min(30_000, finite(process.env.PUMP_NATIVE_CACHE_MS, 8_000)));
 const timeoutMs = () => Math.max(1_500, Math.min(10_000, finite(process.env.PUMP_NATIVE_TIMEOUT_MS, 4_000)));
 const flowCacheMs = () => Math.max(1_500, Math.min(15_000, finite(process.env.PUMP_NATIVE_FLOW_CACHE_MS, 5_000)));
-const flowAuthCooldownMs = () => Math.max(15_000, Math.min(300_000, finite(process.env.PUMP_NATIVE_FLOW_AUTH_COOLDOWN_MS, 60_000)));
+const flowAuthCooldownMs = () => Math.max(15_000, Math.min(300_000, finite(process.env.PUMP_NATIVE_FLOW_AUTH_COOLDOWN_MS, 300_000)));
 
 function createdAtMs(value) {
   const n = finite(value, null);
@@ -200,7 +200,7 @@ async function fetchPumpNativeTradeFlow(mint, solPriceUsd) {
     return flow;
   } catch (error) {
     const message = String(error?.message ?? error);
-    if (/HTTP (401|403)/.test(message)) tradeFlowDisabledUntil = Date.now() + flowAuthCooldownMs();
+    if (/HTTP (400|401|403)/.test(message)) tradeFlowDisabledUntil = Date.now() + flowAuthCooldownMs();
     if (Date.now() - tradeFlowWarningAt >= 30_000) {
       tradeFlowWarningAt = Date.now();
       console.warn(`[pump-native:flow] ${message}; continuing without native trade flow`);
