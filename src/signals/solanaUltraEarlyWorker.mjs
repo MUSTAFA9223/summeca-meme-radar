@@ -4,6 +4,7 @@ import { telegramApi } from '../notifiers/telegram.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { fetchTokenOverview, fetchTokenSecurity } from '../feeds/birdeye.mjs';
 import { fetchPumpNativeMarkets } from '../feeds/pumpFunNative.mjs';
+import { fetchHeliusHolderProfile } from '../feeds/heliusTokenHolders.mjs';
 import { SolanaTradeCandidateBridge } from './solanaTradeCandidateBridge.mjs';
 
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -474,6 +475,20 @@ export class SolanaUltraEarlyWorker {
     if (state.profile && now - state.lastProfileAt < this.profileRefreshMs) return state.profile;
     state.lastProfileAt = now;
     const prior = state.profile;
+
+    try {
+      const helius = await fetchHeliusHolderProfile(env.heliusApiKey, mint);
+      if (helius) {
+        state.profile = helius;
+        console.log(`[solana:holder-profile] mint=${short(mint)} provider=helius-token-accounts holders=${helius.observedAccounts} top=${helius.topUserPct.toFixed(1)}% pass=${helius.pass ? 'yes' : 'no'} complete=${helius.complete ? 'yes' : 'no'}`);
+        return helius;
+      }
+    } catch (error) {
+      if (error?.code !== 'HELIUS_HOLDER_COOLDOWN') {
+        console.warn(`[solana:holder-helius] mint=${short(mint)} ${error.message}`);
+      }
+    }
+
     try {
       const direct = await fetchHolderProfile(mint);
       if (direct) {
@@ -481,7 +496,7 @@ export class SolanaUltraEarlyWorker {
         return direct;
       }
     } catch (error) {
-      console.warn(`[solana:holder-profile] mint=${short(mint)} ${error.message}`);
+      console.warn(`[solana:holder-rpc] mint=${short(mint)} ${error.message}`);
     }
 
     try {
