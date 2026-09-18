@@ -134,6 +134,74 @@ export class HardeningStore {
     return Array.isArray(rows) ? rows : [];
   }
 
+  async openLiveTradesForProtection(walletAddress) {
+    const path = [
+      'live_trades?select=*,tokens(address,symbol,name,source,listed_at)',
+      `wallet_address=eq.${encodeURIComponent(walletAddress)}`,
+      'status=in.(open,closing)',
+      'order=opened_at.asc'
+    ].join('&');
+    const rows = await this.request(path);
+    return Array.isArray(rows) ? rows : [];
+  }
+
+  async claimLiveTradeForSell(id, requestId, reason) {
+    const rows = await this.request(
+      `live_trades?id=eq.${encodeURIComponent(id)}&status=eq.open&sell_lock_request_id=is.null`,
+      {
+        method: 'PATCH',
+        prefer: 'return=representation',
+        body: {
+          status: 'closing',
+          sell_lock_request_id: String(requestId),
+          sell_broadcast_at: null,
+          exit_reason: String(reason ?? 'protection-exit'),
+          updated_at: isoNow()
+        }
+      }
+    );
+    return Array.isArray(rows) ? rows[0] ?? null : null;
+  }
+
+  async releaseLiveTradeSell(id, requestId, patch = {}) {
+    const rows = await this.request(
+      `live_trades?id=eq.${encodeURIComponent(id)}&status=eq.closing&sell_lock_request_id=eq.${encodeURIComponent(requestId)}`,
+      {
+        method: 'PATCH',
+        prefer: 'return=representation',
+        body: {
+          ...patch,
+          status: 'open',
+          sell_lock_request_id: null,
+          sell_broadcast_at: null,
+          updated_at: isoNow()
+        }
+      }
+    );
+    return Array.isArray(rows) ? rows[0] ?? null : null;
+  }
+
+  async latestRiskSignal(tokenId, sinceIso) {
+    const path = [
+      'signals?select=id,created_at,reason',
+      `token_id=eq.${encodeURIComponent(tokenId)}`,
+      'signal_type=eq.risk_reject',
+      `created_at=gte.${encodeURIComponent(sinceIso)}`,
+      'order=created_at.desc',
+      'limit=1'
+    ].join('&');
+    const rows = await this.request(path);
+    return Array.isArray(rows) ? rows[0] ?? null : null;
+  }
+
+  async appendAuditEvent(requestId, event) {
+    const row = await this.getAudit(requestId);
+    if (!row) return null;
+    const prior = Array.isArray(row.payload?.events) ? row.payload.events : [];
+    const events = [...prior.slice(-29), { at: isoNow(), ...event }];
+    return this.updateAudit(requestId, { payload: { ...(row.payload || {}), events } });
+  }
+
   async updateLiveTrade(id, patch = {}) {
     const rows = await this.request(`live_trades?id=eq.${encodeURIComponent(id)}`, {
       method: 'PATCH',
