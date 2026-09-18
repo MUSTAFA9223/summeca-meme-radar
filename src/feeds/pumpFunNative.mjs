@@ -200,7 +200,7 @@ async function fetchPumpNativeTradeFlow(mint, solPriceUsd) {
     return flow;
   } catch (error) {
     const message = String(error?.message ?? error);
-    if (/HTTP (401|403)/.test(message)) tradeFlowDisabledUntil = Date.now() + flowAuthCooldownMs();
+    if (/HTTP (400|401|403)/.test(message)) tradeFlowDisabledUntil = Date.now() + flowAuthCooldownMs();
     if (Date.now() - tradeFlowWarningAt >= 30_000) {
       tradeFlowWarningAt = Date.now();
       console.warn(`[pump-native:flow] ${message}; continuing without native trade flow`);
