@@ -1,6 +1,7 @@
 import { env } from '../config/env.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
+import { fetchPumpNativeMarket } from '../feeds/pumpFunNative.mjs';
 
 const STATE_KEY = 'auto_smart_wallet_discovery_v1';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -481,6 +482,22 @@ async function harvestSolana(token) {
   if (!SOLANA.test(String(token.address || ''))) return [];
   const start = Date.parse(token.listed_at || '') || 0;
   let buyers = [];
+
+  const native = await fetchPumpNativeMarket(token.address, { includeFlow: true }).catch(() => null);
+  if (Array.isArray(native?.buyerWallets) && native.buyerWallets.length) {
+    buyers = native.buyerWallets
+      .filter((row) => SOLANA.test(String(row?.address || '')))
+      .slice(0, 12)
+      .map((row) => ({
+        address: String(row.address),
+        txHash: '',
+        timestamp: finite(row.at) / 1000
+      }));
+    if (buyers.length) {
+      console.log(`[auto-smart:pump-buyers] mint=${short(token.address)} buyers=${buyers.length}`);
+      return buyers;
+    }
+  }
 
   if (env.heliusApiKey) {
     const qs = new URLSearchParams({
