@@ -62,12 +62,14 @@ export class SolanaTradeCandidateBridge {
     }),
     enabled = String(process.env.SOLANA_PAPER_BRIDGE_ENABLED ?? 'true').toLowerCase() !== 'false',
     paperMinScore = Math.max(50, Math.min(95, finite(process.env.SOLANA_PAPER_MIN_SCORE, 72))),
+    paperProbeMinScore = Math.max(50, Math.min(95, finite(process.env.SOLANA_PAPER_PROBE_MIN_SCORE, 68))),
     logger = console
   } = {}) {
     this.store = store;
     this.trader = trader;
     this.enabled = enabled;
     this.paperMinScore = paperMinScore;
+    this.paperProbeMinScore = paperProbeMinScore;
     this.logger = logger;
     this.initialized = false;
     this.initializing = null;
@@ -139,7 +141,7 @@ export class SolanaTradeCandidateBridge {
     }
   }
 
-  async observe({ mint, state, market, profile, score, qualified, rejectionReason = null }) {
+  async observe({ mint, state, market, profile, score, qualified, paperEligible = qualified, rejectionReason = null }) {
     await this.initialize();
     const snapshot = snapshotFromUltra({ mint, state, market, profile });
     const scores = scoreFromUltra(score, profile, market);
@@ -171,7 +173,8 @@ export class SolanaTradeCandidateBridge {
       }
     }
 
-    if (!qualified) {
+    const isProbe = !qualified && paperEligible;
+    if (!qualified && !paperEligible) {
       await this.recordStage({
         mint,
         state,
@@ -186,6 +189,21 @@ export class SolanaTradeCandidateBridge {
       return { paperOpened: false, scores, snapshot };
     }
 
+    if (isProbe) {
+      await this.recordStage({
+        mint,
+        state,
+        stage: 'paper_probe_candidate',
+        score: scores.entry,
+        reason: rejectionReason || 'profile-provider-pending',
+        metadata: {
+          profileProvider: profile?.provider || null,
+          limitedEvidence: true,
+          liveEligible: false
+        }
+      });
+    }
+
     let refs = null;
     const now = Date.now();
     if (!this.snapshotAt.has(mint) || now - this.snapshotAt.get(mint) >= 5_000) {
@@ -198,7 +216,7 @@ export class SolanaTradeCandidateBridge {
       }
     }
 
-    if (!this.signalSent.has(mint) && state?.tokenId) {
+    if (qualified && !this.signalSent.has(mint) && state?.tokenId) {
       try {
         await this.store.saveSignal({
           tokenId: state.tokenId,
@@ -218,14 +236,16 @@ export class SolanaTradeCandidateBridge {
       }
     }
 
-    if (!this.enabled || scores.entry < this.paperMinScore || this.trader.getPosition(mint)) {
-      await this.recordStage({ mint, state, stage: 'qualified', score: scores.entry });
+    const paperThreshold = qualified ? this.paperMinScore : this.paperProbeMinScore;
+    const candidateStage = qualified ? 'qualified' : 'paper_probe_candidate';
+    if (!this.enabled || scores.entry < paperThreshold || this.trader.getPosition(mint)) {
+      await this.recordStage({ mint, state, stage: candidateStage, score: scores.entry, reason: isProbe ? rejectionReason : null });
       return { paperOpened: false, scores, snapshot };
     }
 
     const result = this.trader.enterQualified(snapshot, scores, {
-      strategy: 'solana-ultra-qualified',
-      sizeMultiplier: 0.35
+      strategy: qualified ? 'solana-ultra-qualified' : 'solana-ultra-probe',
+      sizeMultiplier: qualified ? 0.35 : 0.15
     });
     if (!result?.ok) {
       await this.recordStage({
@@ -245,11 +265,11 @@ export class SolanaTradeCandidateBridge {
       await this.recordStage({
         mint,
         state,
-        stage: 'paper_open',
+        stage: qualified ? 'paper_open' : 'paper_probe_open',
         score: scores.entry,
-        metadata: { strategy: result.position.strategy, sizeUsd: result.position.usdSize }
+        metadata: { strategy: result.position.strategy, sizeUsd: result.position.usdSize, liveEligible: qualified }
       });
-      this.logger.log(`[solana:paper-entry] mint=${String(mint).slice(0, 8)}… score=${scores.entry} usd=${Number(result.position.usdSize).toFixed(2)}`);
+      this.logger.log(`[solana:paper-entry] mode=${qualified ? 'qualified' : 'probe'} mint=${String(mint).slice(0, 8)}… score=${scores.entry} usd=${Number(result.position.usdSize).toFixed(2)}`);
       return { paperOpened: true, position: result.position, scores, snapshot };
     } catch (error) {
       this.logger.warn?.(`[solana:paper-bridge:open] mint=${String(mint).slice(0, 8)}… ${error?.message ?? error}`);
