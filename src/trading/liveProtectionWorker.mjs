@@ -6,7 +6,7 @@ import { fetchDexScreenerSnapshot } from '../feeds/dexscreener.mjs';
 import { HardeningStore } from '../storage/hardeningStore.mjs';
 import { JupiterSwapClient, SOL_MINT } from './jupiterSwap.mjs';
 import { PrivySolanaWallet } from './privyWallet.mjs';
-import { SolanaRpcClient } from './solanaRpc.mjs';
+import { SolanaRpcClient, parseMintSecurityAccount } from './solanaRpc.mjs';
 import {
   advanceProtectionState,
   liquidityEmergency,
@@ -226,6 +226,22 @@ export class LiveProtectionEngine {
     return value;
   }
 
+  async freshMintSecurity(mint) {
+    let lastError = null;
+    for (const endpoint of this.rpcEndpoints()) {
+      try {
+        const result = await rawSolanaRpc(endpoint, 'getAccountInfo', [
+          String(mint),
+          { encoding: 'jsonParsed', commitment: 'confirmed' }
+        ]);
+        return parseMintSecurityAccount(result);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError || new Error('all Solana RPC mint-security providers failed');
+  }
+
   async securitySnapshot(mint) {
     const key = String(mint);
     const cached = this.securityCache.get(key);
@@ -237,7 +253,7 @@ export class LiveProtectionEngine {
     }
 
     const [onchainResult, birdResult] = await Promise.allSettled([
-      this.rpc.getMintSecurity(key),
+      this.freshMintSecurity(key),
       env.birdeyeApiKey ? fetchTokenSecurity(env.birdeyeApiKey, key) : Promise.resolve({})
     ]);
     const onchain = onchainResult.status === 'fulfilled' ? onchainResult.value : {};
@@ -779,7 +795,6 @@ export class LiveProtectionEngine {
     );
     await this.cycle();
     this.timer = setInterval(() => void this.cycle(), this.settings.pollMs);
-    this.timer.unref?.();
     return true;
   }
 
