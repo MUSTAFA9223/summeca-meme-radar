@@ -9,6 +9,7 @@ import { PrivySolanaWallet } from './privyWallet.mjs';
 import { SolanaRpcClient, parseMintSecurityAccount } from './solanaRpc.mjs';
 import {
   advanceProtectionState,
+  initialProtectionState,
   liquidityEmergency,
   protectionSettings
 } from './liveProtectionPolicy.mjs';
@@ -114,6 +115,7 @@ export class LiveProtectionEngine {
     this.securityCache = new Map();
     this.sellabilityFailures = new Map();
     this.dryTriggerCache = new Map();
+    this.lastRecoveryScanAt = 0;
     this.running = false;
     this.timer = null;
   }
@@ -767,10 +769,72 @@ export class LiveProtectionEngine {
     }
   }
 
+  async recoverManualBuyRows() {
+    if (this.now() - this.lastRecoveryScanAt < 60_000) return;
+    this.lastRecoveryScanAt = this.now();
+    const sinceIso = new Date(this.now() - 24 * 60 * 60 * 1000).toISOString();
+    const audits = await this.store.recentSucceededManualBuys(sinceIso, 50);
+    for (const audit of audits) {
+      const tx = String(audit.tx_hash || '');
+      const address = String(audit.token_address || '');
+      if (!tx || !address) continue;
+      const existing = await this.store.findLiveTradeByEntryTx(tx, env.privyWalletAddress);
+      if (existing) continue;
+
+      const payload = audit.payload || {};
+      const quantityAtomic = String(
+        payload.executionOutputAmountAtomic
+        || payload.freshQuoteOutAtomic
+        || payload.quotedOutAtomic
+        || '0'
+      );
+      if (!/^\d+$/.test(quantityAtomic) || BigInt(quantityAtomic) <= 0n) continue;
+      const token = await this.store.upsertSolanaToken(address, {
+        symbol: payload.symbol || null,
+        priceUsd: payload.priceUsd || null,
+        source: 'manual-confirm-live-recovery'
+      });
+      if (!token?.id) continue;
+
+      const state = initialProtectionState(payload.priceUsd || null, this.settings);
+      try {
+        await this.store.insertLiveTrade({
+          token_id: token.id,
+          wallet_address: env.privyWalletAddress,
+          status: 'open',
+          entry_tx: tx,
+          entry_price_usd: state.entryPriceUsd,
+          input_sol: audit.amount_native,
+          quantity_atomic: quantityAtomic,
+          high_water_pnl_pct: state.highWaterPnlPct,
+          highest_price_usd: state.highestPriceUsd,
+          current_stop: state.currentStop,
+          stop_reason: 'recovered-initial-stop',
+          protection_started_at: isoNow(),
+          metadata: {
+            request_id: audit.request_id,
+            manual_confirm: true,
+            recovered_from_execution_audit: true,
+            remaining_cost_basis_sol: audit.amount_native
+          }
+        });
+        await this.store.appendAuditEvent(audit.request_id, {
+          type: 'live-protection-recovered',
+          liveTradeEntryTx: tx
+        }).catch(() => {});
+        console.warn(`[live-protect:recovery] restored missing live_trade from successful manual buy tx=${short(tx)}`);
+      } catch (error) {
+        const raced = await this.store.findLiveTradeByEntryTx(tx, env.privyWalletAddress).catch(() => null);
+        if (!raced) console.warn(`[live-protect:recovery] could not restore tx=${short(tx)} ${String(error?.message ?? error)}`);
+      }
+    }
+  }
+
   async cycle() {
     if (this.running) return;
     this.running = true;
     try {
+      await this.recoverManualBuyRows();
       const trades = await this.store.openLiveTradesForProtection(env.privyWalletAddress);
       await Promise.allSettled(trades.map((trade) => trade.status === 'closing'
         ? this.reconcileClosingTrade(trade)
