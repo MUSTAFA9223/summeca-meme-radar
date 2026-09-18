@@ -60,3 +60,22 @@ test('promoted probe is no longer subject to probe max hold', () => {
   assert.equal(result.closed, undefined);
   assert.equal(trader.openPositions.length, 1);
 });
+
+
+test('capacity exit request closes probe at its own next observed price', () => {
+  const trader = makeTrader();
+  const opened = trader.enterQualified(snapshot(baseTime), baseScores, {
+    strategy: 'solana-ultra-probe',
+    sizeMultiplier: 0.15
+  });
+  assert.equal(opened.ok, true);
+
+  const requested = trader.requestExit(snapshot(baseTime).address, 'paper probe capacity reserve');
+  assert.equal(requested.ok, true);
+
+  const result = trader.update(snapshot(baseTime + 5_000, 0.00105), baseScores);
+  assert.ok(result.closed);
+  assert.equal(result.closed.exitReason, 'paper probe capacity reserve');
+  assert.ok(result.closed.pnlPct > 4.9);
+  assert.equal(trader.openPositions.length, 0);
+});
