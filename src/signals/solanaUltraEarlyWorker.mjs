@@ -30,9 +30,29 @@ const numEnv = (name, fallback, min, max) => Math.max(min, Math.min(max, finite(
 export function isSolanaPaperProbeEligible({
   rejectionReason = null,
   score = 0,
-  minScore = 68
+  minScore = 60
 } = {}) {
-  return !rejectionReason && finite(score) >= finite(minScore, 68);
+  return !rejectionReason && finite(score) >= finite(minScore, 60);
+}
+
+export function isSolanaEarlyAlertEligible({
+  rejectionReason = null,
+  score = 0,
+  minScore = 55,
+  market = {}
+} = {}) {
+  const buys = finite(market?.buys5m);
+  const sells = finite(market?.sells5m);
+  const ratio = buys / Math.max(1, sells);
+  return !rejectionReason
+    && finite(score) >= finite(minScore, 55)
+    && finite(market?.marketCapUsd) > 0
+    && finite(market?.marketCapUsd) <= 1_800_000
+    && buys >= 5
+    && sells >= 1
+    && finite(market?.volume5mUsd) >= 400
+    && ratio >= 1.3
+    && finite(market?.priceChange5mPct) <= 55;
 }
 
 export function selectSolanaMarketCandidates(entries, {
@@ -91,8 +111,9 @@ class SolanaTelegramSink {
       [
         { text: '🟢 Buy', callback_data: `term:b:sol:${token}` },
         { text: '🔴 Sell', callback_data: `term:s:sol:${token}` },
-        { text: '📊 Positions', callback_data: 'term:p' }
+        { text: '👀 متابعة', callback_data: `watch:add:${token}` }
       ],
+      [{ text: '📊 Positions', callback_data: 'term:p' }],
       [
         { text: '🚀 Pump.fun', url: `https://pump.fun/coin/${encodeURIComponent(token)}` },
         { text: '🟢 GMGN', url: `https://gmgn.ai/sol/token/${encodeURIComponent(token)}` }
@@ -313,6 +334,7 @@ export class SolanaUltraEarlyWorker {
     this.marketPollMs = numEnv('SOLANA_ULTRA_MARKET_POLL_MS', 1_500, 1_000, 5_000);
     this.minScore = numEnv('SOLANA_QUALIFIED_MIN_SCORE', 72, 50, 95);
     this.paperProbeMinScore = numEnv('SOLANA_PAPER_PROBE_MIN_SCORE', 60, 55, 90);
+    this.earlyAlertMinScore = numEnv('SOLANA_EARLY_ALERT_MIN_SCORE', 55, 45, 85);
     this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
     this.pendingMaxAgeMs = numEnv('SOLANA_PENDING_MAX_AGE_MS', 8 * 60_000, 4 * 60_000, 20 * 60_000);
@@ -330,6 +352,7 @@ export class SolanaUltraEarlyWorker {
       market: 0,
       plausible: 0,
       profilePass: 0,
+      earlyAlerts: 0,
       qualified: 0,
       paperOpened: 0,
       rejectionReasons: new Map(),
@@ -359,6 +382,7 @@ export class SolanaUltraEarlyWorker {
       profile: null,
       rootMessageId: 0,
       launchSent: false,
+      earlySent: false,
       qualifiedSent: false,
       topSent: false
     };
@@ -385,6 +409,30 @@ export class SolanaUltraEarlyWorker {
       `CA: ${mint}`
     ].join('\n'), mint);
     state.rootMessageId = Number(message?.message_id ?? 0);
+  }
+
+  async sendEarlyWatch(mint, state, market, score) {
+    if (state.earlySent) return;
+    state.earlySent = true;
+    const age = Math.max(1, Math.round((Date.now() - state.createdAt) / 1000));
+    const ratio = market.buys5m / Math.max(1, market.sells5m);
+    const message = await sink.send([
+      '👀⚡ SUMMECA EARLY WATCH — SOLANA',
+      '',
+      '$' + market.symbol + ' • Pump.fun',
+      `🎯 Early Score: ${score}/100`,
+      `⏱️ العمر: ${age}s`,
+      '💧 السيولة: $' + money(market.liquidityUsd) + ' | MC: $' + money(market.marketCapUsd),
+      `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | Ratio ${ratio.toFixed(2)}x`,
+      'Vol: $' + money(market.volume5mUsd) + ' | Move: ' + finite(market.priceChange5mPct).toFixed(1) + '%',
+      '',
+      '🟡 إشارة مبكرة: نشاط السوق جيد، لكن فحص الحائزين/الأمان الكامل لم يكتمل بعد.',
+      '✅ لن ينفذ البوت شراءً حقيقيًا تلقائيًا من هذه الإشارة.',
+      `CA: ${mint}`
+    ].join('\n'), mint, { marketUrl: market.url, replyTo: state.rootMessageId });
+    if (!state.rootMessageId) state.rootMessageId = Number(message?.message_id ?? 0);
+    this.funnel.earlyAlerts += 1;
+    console.log(`[solana:early-watch] mint=${short(mint)} score=${score} buys=${market.buys5m} sells=${market.sells5m} ratio=${ratio.toFixed(2)} age=${age}s`);
   }
 
   async sendQualified(mint, state, market, profile, score) {
@@ -466,7 +514,7 @@ export class SolanaUltraEarlyWorker {
         method: 'logsSubscribe',
         params: [{ mentions: [PUMP_FUN_PROGRAM_ID] }, { commitment: 'processed' }]
       }));
-      console.log(`SUMMECA SOLANA ULTRA: filtered Pump.fun stream connected poll=${this.marketPollMs}ms score>=${this.minScore}`);
+      console.log(`SUMMECA SOLANA ULTRA: filtered Pump.fun stream connected poll=${this.marketPollMs}ms early>=${this.earlyAlertMinScore} qualified>=${this.minScore}`);
     });
     ws.addEventListener('message', (event) => {
       let message;
@@ -568,7 +616,7 @@ export class SolanaUltraEarlyWorker {
       .slice(0, 5)
       .map(([reason, count]) => `${reason}=${count}`)
       .join(',');
-    console.log(`[solana:funnel] detected=${this.funnel.detected} market=${this.funnel.market} plausible=${this.funnel.plausible} profilePass=${this.funnel.profilePass} qualified=${this.funnel.qualified} paper=${this.funnel.paperOpened} rejects=[${rejected}]`);
+    console.log(`[solana:funnel] detected=${this.funnel.detected} market=${this.funnel.market} plausible=${this.funnel.plausible} early=${this.funnel.earlyAlerts} profilePass=${this.funnel.profilePass} qualified=${this.funnel.qualified} paper=${this.funnel.paperOpened} rejects=[${rejected}]`);
   }
 
   async handleMarket(mint, state, market) {
@@ -594,6 +642,19 @@ export class SolanaUltraEarlyWorker {
     }
 
     if (ageMs > 8 * 60_000 && !existingPaper) return;
+
+    if (!reject && !state.earlySent) {
+      const earlyScore = qualityScore(state, market, null);
+      if (isSolanaEarlyAlertEligible({
+        rejectionReason: reject,
+        score: earlyScore,
+        minScore: this.earlyAlertMinScore,
+        market
+      })) {
+        state.lastScore = Math.max(finite(state.lastScore), earlyScore);
+        await this.sendEarlyWatch(mint, state, market, earlyScore);
+      }
+    }
 
     const profile = await this.profileFor(mint, state);
     if (!profile) {
