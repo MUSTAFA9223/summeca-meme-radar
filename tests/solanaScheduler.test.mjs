@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSolanaPaperProbeEligible, selectSolanaMarketCandidates } from '../src/signals/solanaUltraEarlyWorker.mjs';
+import { isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates } from '../src/signals/solanaUltraEarlyWorker.mjs';
 
 test('fresh initial-buy candidates outrank restored backlog', () => {
   const now = 1_000_000;
@@ -70,4 +70,35 @@ test('paper probe eligibility uses the plausible gate result plus score threshol
   assert.equal(isSolanaPaperProbeEligible({ rejectionReason: null, score: 70, minScore: 68 }), true);
   assert.equal(isSolanaPaperProbeEligible({ rejectionReason: null, score: 67, minScore: 68 }), false);
   assert.equal(isSolanaPaperProbeEligible({ rejectionReason: 'weak-buy-sell-ratio', score: 90, minScore: 68 }), false);
+});
+
+
+test('early alert lane surfaces strong market flow without waiting for holder profile', () => {
+  const market = {
+    marketCapUsd: 320_000,
+    buys5m: 12,
+    sells5m: 4,
+    volume5mUsd: 2_400,
+    priceChange5mPct: 24
+  };
+  assert.equal(isSolanaEarlyAlertEligible({
+    rejectionReason: null,
+    score: 65,
+    minScore: 55,
+    market
+  }), true);
+});
+
+test('early alert lane still rejects weak or one-way unsafe market flow', () => {
+  const base = {
+    marketCapUsd: 320_000,
+    buys5m: 12,
+    sells5m: 4,
+    volume5mUsd: 2_400,
+    priceChange5mPct: 24
+  };
+  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: 'weak-buy-sell-ratio', score: 80, market: base }), false);
+  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: null, score: 80, market: { ...base, sells5m: 0 } }), false);
+  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: null, score: 80, market: { ...base, volume5mUsd: 100 } }), false);
+  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: null, score: 50, minScore: 55, market: base }), false);
 });
