@@ -39,7 +39,7 @@ export function isSolanaEarlyAlertEligible({
   rejectionReason = null,
   score = 0,
   minScore = 75,
-  minLiquidityUsd = 5_000,
+  minLiquidityUsd = 8_000,
   minMarketCapUsd = 25_000,
   maxMarketCapUsd = 1_200_000,
   minBuys5m = 10,
@@ -79,7 +79,7 @@ export function isSolanaEarlyAlertEligible({
 
 export function isSolanaBreakoutEligible({
   ageMs = 0,
-  minLiquidityUsd = 8_000,
+  minLiquidityUsd = 5_000,
   minMarketCapUsd = 15_000,
   maxMarketCapUsd = 2_000_000,
   minBuys5m = 10,
