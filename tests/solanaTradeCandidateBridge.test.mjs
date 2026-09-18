@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSolanaBridgePaperTrade, SolanaTradeCandidateBridge } from '../src/signals/solanaTradeCandidateBridge.mjs';
+import { countOpenProbePositions, isSolanaBridgePaperTrade, selectProbeCapacityExits, SolanaTradeCandidateBridge } from '../src/signals/solanaTradeCandidateBridge.mjs';
 
 class FakeStore {
   constructor() {
@@ -215,4 +215,19 @@ test('existing probe is promoted when holder profile later qualifies without ope
   assert.equal(trader.promoteCalls, 1);
   assert.equal(trader.position.lifecycleStrategy, 'solana-ultra-qualified');
   assert.ok(store.funnel.some((row) => row.stage === 'paper_promoted'));
+});
+
+
+test('probe capacity keeps one paper slot reserved for qualified candidates', () => {
+  const positions = [
+    { address: 'old-probe', entryAt: 1000, strategy: 'solana-ultra-probe', lifecycleStrategy: 'solana-ultra-probe' },
+    { address: 'new-probe', entryAt: 2000, strategy: 'solana-ultra-probe', lifecycleStrategy: 'solana-ultra-probe' },
+    { address: 'qualified', entryAt: 1500, strategy: 'solana-ultra-qualified', lifecycleStrategy: 'solana-ultra-qualified' }
+  ];
+
+  assert.equal(countOpenProbePositions(positions), 2);
+  const exits = selectProbeCapacityExits(positions, 1);
+  assert.deepEqual(exits.map((position) => position.address), ['old-probe']);
+  assert.deepEqual(selectProbeCapacityExits(positions, 2), []);
+  assert.deepEqual(selectProbeCapacityExits(positions, 0).map((position) => position.address), ['old-probe', 'new-probe']);
 });
