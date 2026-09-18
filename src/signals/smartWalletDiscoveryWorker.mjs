@@ -673,18 +673,32 @@ export class SmartWalletDiscoveryWorker {
       await this.loadState();
       const tokens = await this.store.tokens();
       const now = Date.now();
+      const emptyRetryMs = Math.max(60_000, finite(process.env.AUTO_SMART_EMPTY_RETRY_MS, 120_000));
       const winners = tokens
-        .map((token) => ({ token, network: normalizeNetwork(token.chain), roi: peakRoi(token) }))
+        .map((token) => {
+          const network = normalizeNetwork(token.chain);
+          const key = tokenKey(network, token.address);
+          const prior = this.state.processed[key];
+          return {
+            token,
+            network,
+            roi: peakRoi(token),
+            prior,
+            retry: Boolean(prior),
+            lastSeenAt: Date.parse(token.last_seen_at || token.listed_at || '') || 0
+          };
+        })
         .filter((row) => row.network && row.roi >= this.winnerMinPeakRoi)
         .filter((row) => {
-          const key = tokenKey(row.network, row.token.address);
-          const prior = this.state.processed[key];
-          if (!prior) return true;
-          if (prior.buyers > 0) return false;
-          const emptyRetryMs = Math.max(60_000, finite(process.env.AUTO_SMART_EMPTY_RETRY_MS, 120_000));
-          return now - finite(prior.at) >= emptyRetryMs;
+          if (!row.prior) return true;
+          if (row.prior.buyers > 0) return false;
+          return now - finite(row.prior.at) >= emptyRetryMs;
         })
-        .sort((a, b) => b.roi - a.roi)
+        .sort((a, b) =>
+          Number(a.retry) - Number(b.retry)
+          || b.lastSeenAt - a.lastSeenAt
+          || b.roi - a.roi
+        )
         .slice(0, this.winnersPerCycle);
 
       if (!winners.length) {
