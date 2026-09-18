@@ -5,6 +5,7 @@ import {
   applyWinnerEvidence,
   extractEvmWinnerBuyers,
   extractSolanaWinnerBuyers,
+  extractSolanaRpcWinnerBuyers,
   scoreAutoSmartWallet
 } from '../src/signals/smartWalletDiscoveryWorker.mjs';
 
@@ -138,4 +139,52 @@ test('scoring requires enough evidence even when ROI is extreme', () => {
   });
   assert.equal(score.samples, 1);
   assert.equal(score.promoted, false);
+});
+
+
+test('Solana RPC fallback proves a buyer from positive token delta plus native spend', () => {
+  const mint = '9xQeWvG816bUx9EPfEZ5QxvT1c2fv7FzYfg41ZfYgS3';
+  const buyer = 'J2Gys26qFcmetpneVYTcpeRMwLMNE2RRdtJCSkwxVKjG';
+  const tx = {
+    _signature: 'rpc-sig',
+    blockTime: 10,
+    transaction: {
+      message: {
+        accountKeys: [{ pubkey: buyer }]
+      }
+    },
+    meta: {
+      fee: 5000,
+      preBalances: [10_000_000],
+      postBalances: [8_000_000],
+      preTokenBalances: [],
+      postTokenBalances: [{
+        mint,
+        owner: buyer,
+        uiTokenAmount: { amount: '1000000' }
+      }],
+      logMessages: []
+    }
+  };
+  const buyers = extractSolanaRpcWinnerBuyers([tx], mint);
+  assert.equal(buyers.length, 1);
+  assert.equal(buyers[0].address, buyer);
+  assert.equal(buyers[0].txHash, 'rpc-sig');
+});
+
+test('Solana RPC fallback ignores free token receipts without trade or native spend', () => {
+  const mint = '9xQeWvG816bUx9EPfEZ5QxvT1c2fv7FzYfg41ZfYgS3';
+  const buyer = 'J2Gys26qFcmetpneVYTcpeRMwLMNE2RRdtJCSkwxVKjG';
+  const tx = {
+    transaction: { message: { accountKeys: [{ pubkey: buyer }] } },
+    meta: {
+      fee: 5000,
+      preBalances: [10_000_000],
+      postBalances: [9_995_000],
+      preTokenBalances: [],
+      postTokenBalances: [{ mint, owner: buyer, uiTokenAmount: { amount: '1000000' } }],
+      logMessages: []
+    }
+  };
+  assert.equal(extractSolanaRpcWinnerBuyers([tx], mint).length, 0);
 });
