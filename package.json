@@ -1,9 +1,9 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.48.0",
+  "version": "0.49.0",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with confirmed high-quality pre-holder Solana early-watch alerts, manual Telegram watch threads, dynamic Solana copy-wallet monitoring, multi-wallet Privy execution, qualified-candidate paper flow, bounded Pump.fun-native enrichment, manual-confirm live execution, and isolated multi-wallet position protection. Blind automatic live entry remains disabled.",
+  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with confirmed high-quality pre-holder Solana early-watch alerts, manual Telegram watch threads, dynamic Solana copy-wallet monitoring, multi-wallet Privy execution, qualified-candidate paper flow, bounded Pump.fun-native enrichment, manual-confirm live execution, and isolated multi-wallet position protection. Wallet receive/send cards and smart-wallet entry alerts are supported; blind automatic live entry remains disabled.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
