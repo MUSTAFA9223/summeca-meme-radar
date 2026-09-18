@@ -6,6 +6,7 @@ import { PrivySolanaWallet } from '../trading/privyWallet.mjs';
 import { JupiterSwapClient, SOL_MINT } from '../trading/jupiterSwap.mjs';
 import { runLiveConfigSmoke } from '../trading/liveConfigSmoke.mjs';
 import { initialProtectionState, protectionSettings } from '../trading/liveProtectionPolicy.mjs';
+import { getActiveTradingWallet, privyClientForTradingWallet, walletFromAuditPayload } from '../trading/walletRegistry.mjs';
 
 const store = new HardeningStore();
 const SOLANA_PUBLIC_RPC = 'https://api.mainnet-beta.solana.com';
@@ -149,6 +150,10 @@ async function prepareBuy(amountSol, address) {
   if (!store.enabled) return { text: '❌ Execution Audit store غير متاح؛ تم إيقاف المسار الحقيقي للحماية.', keyboard: [] };
   const amount = finite(amountSol);
   const caps = manualTradeCaps();
+  const executionWallet = await getActiveTradingWallet();
+  if (!executionWallet?.id || !isTerminalAddress('sol', executionWallet?.address)) {
+    return { text: '❌ لا توجد محفظة تداول Solana نشطة. افتح /wallets واختر أو أنشئ محفظة.', keyboard: [] };
+  }
   if (!isTerminalAddress('sol', address) || !(amount > 0) || amount > caps.maxBuySol) {
     await createBlockedAudit({ address, side: 'buy', amountNative: amount || null, error: 'amount/address outside manual caps' });
     return { text: `❌ الصفقة خارج حدود الحماية. Max Buy = ${caps.maxBuySol.toFixed(4)} SOL`, keyboard: [] };
@@ -175,7 +180,9 @@ async function prepareBuy(amountSol, address) {
     payload: {
       mode: 'manual-confirm', amountAtomic, inputMint: SOL_MINT, outputMint: address,
       quotedOutAtomic: outAmount, route: routeNames(quote), symbol: market?.symbol || null,
-      priceUsd: market?.priceUsd || null, liveEnabled: manualLiveGate().liveEnabled, manualArmed: manualLiveGate().manualArmed
+      priceUsd: market?.priceUsd || null,
+      walletId: executionWallet.id, walletAddress: executionWallet.address, walletLabel: executionWallet.label,
+      liveEnabled: manualLiveGate().liveEnabled, manualArmed: manualLiveGate().manualArmed
     }
   });
   const live = manualLiveGate().liveEnabled && manualLiveGate().manualArmed;
@@ -184,6 +191,7 @@ async function prepareBuy(amountSol, address) {
       '🔐 MANUAL LIVE BUY — FINAL PREVIEW', '',
       `${market ? `$${market.symbol}` : 'TOKEN'} • SOLANA`,
       `Amount: ${amount.toFixed(4)} SOL`,
+      `Wallet: ${executionWallet.label} • ${short(executionWallet.address)}`,
       `Liquidity: ${market?.liquidityUsd ? money(market.liquidityUsd) : '—'}`,
       `Price impact: ${impact.toFixed(3)}% / cap ${caps.maxPriceImpactPct.toFixed(2)}%`,
       `Slippage cap: ${(caps.maxSlippageBps / 100).toFixed(2)}%`,
@@ -203,11 +211,15 @@ async function prepareBuy(amountSol, address) {
 async function prepareSell(percent, address) {
   if (!store.enabled) return { text: '❌ Execution Audit store غير متاح؛ تم إيقاف المسار الحقيقي للحماية.', keyboard: [] };
   const pct = Math.max(1, Math.min(100, Math.round(finite(percent))));
+  const executionWallet = await getActiveTradingWallet();
+  if (!executionWallet?.id || !isTerminalAddress('sol', executionWallet?.address)) {
+    return { text: '❌ لا توجد محفظة تداول Solana نشطة. افتح /wallets واختر محفظة.', keyboard: [] };
+  }
   if (!isTerminalAddress('sol', address) || ![25, 50, 100].includes(pct)) return { text: '❌ نسبة البيع غير صالحة.', keyboard: [] };
   const duplicate = await activeDuplicate(address, 'sell');
   if (duplicate) return existingIntentResult(duplicate);
 
-  const balance = await tokenBalanceAtomic(env.privyWalletAddress, address);
+  const balance = await tokenBalanceAtomic(executionWallet.address, address);
   if (balance <= 0n) {
     await createBlockedAudit({ address, side: 'sell', error: 'wallet has zero token balance', payload: { sellPct: pct } });
     return { text: '❌ لا يوجد رصيد فعلي لهذا التوكن في محفظة التنفيذ.', keyboard: [] };
@@ -231,7 +243,9 @@ async function prepareSell(percent, address) {
     payload: {
       mode: 'manual-confirm', sellPct: pct, amountAtomic: amountAtomic.toString(), inputMint: address, outputMint: SOL_MINT,
       quotedOutLamports: outLamports.toString(), route: routeNames(quote), symbol: market?.symbol || null,
-      priceUsd: market?.priceUsd || null, liveEnabled: manualLiveGate().liveEnabled, manualArmed: manualLiveGate().manualArmed
+      priceUsd: market?.priceUsd || null,
+      walletId: executionWallet.id, walletAddress: executionWallet.address, walletLabel: executionWallet.label,
+      liveEnabled: manualLiveGate().liveEnabled, manualArmed: manualLiveGate().manualArmed
     }
   });
   const live = manualLiveGate().liveEnabled && manualLiveGate().manualArmed;
@@ -240,6 +254,7 @@ async function prepareSell(percent, address) {
       '🔐 MANUAL LIVE SELL — FINAL PREVIEW', '',
       `${market ? `$${market.symbol}` : 'TOKEN'} • SOLANA`,
       `Sell: ${pct}% من الرصيد الفعلي`,
+      `Wallet: ${executionWallet.label} • ${short(executionWallet.address)}`,
       `Estimated output: ${(Number(outLamports) / 1e9).toFixed(6)} SOL`,
       `Price impact: ${impact.toFixed(3)}% / cap ${caps.maxPriceImpactPct.toFixed(2)}%`,
       `Slippage cap: ${(caps.maxSlippageBps / 100).toFixed(2)}%`,
@@ -254,14 +269,20 @@ async function prepareSell(percent, address) {
   };
 }
 
-function walletClient() {
-  return new PrivySolanaWallet({
-    appId: env.privyAppId, appSecret: env.privyAppSecret, walletId: env.privyWalletId,
-    walletAddress: env.privyWalletAddress, authorizationPrivateKey: env.privyAuthorizationPrivateKey
-  });
+function defaultExecutionWallet() {
+  return {
+    id: String(env.privyWalletId || ''),
+    address: String(env.privyWalletAddress || ''),
+    label: 'SUMMECA Primary'
+  };
+}
+
+function auditExecutionWallet(row) {
+  return walletFromAuditPayload(row?.payload) || defaultExecutionWallet();
 }
 
 async function recordSuccessfulTrade(row, execution) {
+  const executionWallet = auditExecutionWallet(row);
   const market = await marketFor(row.token_address).catch(() => null);
   const token = await store.upsertSolanaToken(row.token_address, {
     symbol: market?.symbol || row.payload?.symbol, name: market?.name, priceUsd: market?.priceUsd,
@@ -277,7 +298,7 @@ async function recordSuccessfulTrade(row, execution) {
     const state = initialProtectionState(entryPrice, protectionSettings());
     const liveRow = {
       token_id: token.id,
-      wallet_address: env.privyWalletAddress,
+      wallet_address: executionWallet.address,
       status: 'open',
       entry_tx: execution.signature,
       entry_price_usd: entryPrice,
@@ -292,6 +313,8 @@ async function recordSuccessfulTrade(row, execution) {
       metadata: {
         request_id: row.request_id,
         manual_confirm: true,
+        wallet_id: executionWallet.id,
+        wallet_label: executionWallet.label,
         router: execution.router || null,
         mode: execution.mode || null,
         entry_liquidity_usd: market?.liquidityUsd || null,
@@ -397,6 +420,11 @@ async function confirmIntent(requestId) {
   }
 
   const caps = manualTradeCaps();
+  const executionWallet = auditExecutionWallet(row);
+  if (!executionWallet?.id || !isTerminalAddress('sol', executionWallet?.address)) {
+    await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: 'execution wallet missing from audit intent' });
+    return { text: '⛔ محفظة التنفيذ المرتبطة بالـPreview غير متاحة؛ تم إيقاف الصفقة.', keyboard: [] };
+  }
   const inputMint = String(row.payload?.inputMint || '');
   const outputMint = String(row.payload?.outputMint || '');
   const amountAtomic = String(row.payload?.amountAtomic || '');
@@ -413,21 +441,21 @@ async function confirmIntent(requestId) {
   }
 
   if (row.side === 'buy') {
-    const balance = await walletSolBalanceLamports(env.privyWalletAddress);
+    const balance = await walletSolBalanceLamports(executionWallet.address);
     const reserve = BigInt(Math.round(caps.reserveSol * 1e9));
     if (balance < BigInt(amountAtomic) + reserve) {
       await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: 'insufficient SOL after reserve cap' });
       return { text: `⛔ الرصيد لا يترك احتياطي ${caps.reserveSol.toFixed(4)} SOL بعد الصفقة.`, keyboard: [] };
     }
   } else {
-    const balance = await tokenBalanceAtomic(env.privyWalletAddress, row.token_address);
+    const balance = await tokenBalanceAtomic(executionWallet.address, row.token_address);
     if (balance < BigInt(amountAtomic)) {
       await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: 'token balance changed before execution' });
       return { text: '⛔ رصيد التوكن تغيّر منذ Preview؛ أعد إنشاء Sell Preview.', keyboard: [] };
     }
   }
 
-  const wallet = walletClient();
+  const wallet = privyClientForTradingWallet(executionWallet);
   const client = new JupiterSwapClient({ apiKey: env.jupiterApiKey, wallet });
   if (!client.configured) {
     await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: 'Privy/Jupiter client not configured' });
