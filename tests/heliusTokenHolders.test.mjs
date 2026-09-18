@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { holderProfileFromTokenAccounts } from '../src/feeds/heliusTokenHolders.mjs';
+import { holderProfileFromParsedProgramAccounts, holderProfileFromTokenAccounts } from '../src/feeds/heliusTokenHolders.mjs';
 
 test('Helius holder profile aggregates duplicate token accounts by owner', () => {
   const profile = holderProfileFromTokenAccounts([
@@ -54,4 +54,37 @@ test('truncated Helius token-account evidence never passes the safety gate', () 
 
   assert.equal(profile.limitedEvidence, true);
   assert.equal(profile.pass, false);
+});
+
+
+test('parsed getProgramAccounts rows produce a complete holder profile', () => {
+  const row = (owner, amount) => ({
+    account: {
+      data: {
+        parsed: {
+          info: {
+            owner,
+            tokenAmount: { amount: String(amount) }
+          }
+        }
+      }
+    }
+  });
+  const profile = holderProfileFromParsedProgramAccounts([
+    row('curve', 70),
+    row('alice', 5),
+    row('bob', 5),
+    row('carol', 5),
+    row('dave', 4),
+    row('erin', 3),
+    row('frank', 3),
+    row('gina', 2),
+    row('hank', 2),
+    row('ivy', 1)
+  ]);
+
+  assert.equal(profile.provider, 'solana-getProgramAccounts');
+  assert.equal(profile.complete, true);
+  assert.equal(profile.pass, true);
+  assert.equal(profile.observedAccounts, 9);
 });
