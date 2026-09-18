@@ -202,3 +202,19 @@ test('breakout lane rejects one-way, low-liquidity, or weak-volume spikes', () =
   assert.equal(isSolanaBreakoutEligible({ ageMs: 80_000, market: { ...base, sells5m: 0 } }), false);
   assert.equal(isSolanaBreakoutEligible({ ageMs: 80_000, market: { ...base, volume5mUsd: 500 } }), false);
 });
+
+
+test('tuned breakout lane accepts moderate verified liquidity and flow only after a strong move', () => {
+  const market = {
+    priceUsd: 0.0002,
+    liquidityUsd: 6_000,
+    marketCapUsd: 90_000,
+    buys5m: 12,
+    sells5m: 4,
+    volume5mUsd: 1_800,
+    priceChange5mPct: 52
+  };
+  assert.equal(isSolanaBreakoutEligible({ ageMs: 70_000, market }), true);
+  assert.equal(isSolanaBreakoutEligible({ ageMs: 70_000, market: { ...market, priceChange5mPct: 25 } }), false);
+  assert.equal(isSolanaBreakoutEligible({ ageMs: 70_000, market: { ...market, sells5m: 1 } }), false);
+});
