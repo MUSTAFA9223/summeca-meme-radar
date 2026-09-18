@@ -25,6 +25,14 @@ const boolEnv = (name, fallback = true) => {
 };
 const numEnv = (name, fallback, min, max) => Math.max(min, Math.min(max, finite(process.env[name], fallback)));
 
+export function isSolanaPaperProbeEligible({
+  rejectionReason = null,
+  score = 0,
+  minScore = 68
+} = {}) {
+  return !rejectionReason && finite(score) >= finite(minScore, 68);
+}
+
 export function selectSolanaMarketCandidates(entries, {
   now = Date.now(),
   pollMs = 1_500,
@@ -546,13 +554,11 @@ export class SolanaUltraEarlyWorker {
       this.noteRejection('profile-provider-pending');
       const score = qualityScore(state, market, null);
       state.lastScore = score;
-      const ratio = market.buys5m / Math.max(1, market.sells5m);
-      const paperEligible = !reject
-        && score >= this.paperProbeMinScore
-        && market.buys5m >= 5
-        && market.volume5mUsd >= 400
-        && ratio >= 1.3
-        && market.priceChange5mPct <= 45;
+      const paperEligible = isSolanaPaperProbeEligible({
+        rejectionReason: reject,
+        score,
+        minScore: this.paperProbeMinScore
+      });
       const bridgeResult = await this.bridge.observe({
         mint,
         state,
