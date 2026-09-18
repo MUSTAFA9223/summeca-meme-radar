@@ -112,7 +112,7 @@ export class SolanaTradeCandidateBridge {
     }),
     enabled = String(process.env.SOLANA_PAPER_BRIDGE_ENABLED ?? 'true').toLowerCase() !== 'false',
     paperMinScore = Math.max(50, Math.min(95, finite(process.env.SOLANA_PAPER_MIN_SCORE, 72))),
-    paperProbeMinScore = Math.max(50, Math.min(95, finite(process.env.SOLANA_PAPER_PROBE_MIN_SCORE, 68))),
+    paperProbeMinScore = Math.max(50, Math.min(95, finite(process.env.SOLANA_PAPER_PROBE_MIN_SCORE, 60))),
     maxProbeOpen = Math.max(0, Math.min(
       env.maxOpenPositions,
       Math.floor(finite(process.env.SOLANA_PAPER_MAX_PROBES, Math.max(0, env.maxOpenPositions - 1)))
