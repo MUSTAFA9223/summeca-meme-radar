@@ -4,6 +4,8 @@ import { env } from '../config/env.mjs';
 import { fetchTokenOverview, fetchTokenSecurity } from '../feeds/birdeye.mjs';
 import { fetchDexScreenerSnapshot } from '../feeds/dexscreener.mjs';
 import { HardeningStore } from '../storage/hardeningStore.mjs';
+import { AppSettings } from '../storage/appSettings.mjs';
+import { DEFAULT_STOP_LADDER_CONFIG, STOP_LADDER_KEY, normalizeStopLadderConfig } from './stopLadder.mjs';
 import { JupiterSwapClient, SOL_MINT } from './jupiterSwap.mjs';
 import { PrivySolanaWallet } from './privyWallet.mjs';
 import { SolanaRpcClient, parseMintSecurityAccount } from './solanaRpc.mjs';
@@ -117,6 +119,10 @@ export class LiveProtectionEngine {
     this.dryTriggerCache = new Map();
     this.walletJupiter = new Map();
     this.lastRecoveryScanAt = 0;
+    this.appSettings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
+    this.stopLadderConfig = normalizeStopLadderConfig(DEFAULT_STOP_LADDER_CONFIG);
+    this.manualStopLadderConfigured = false;
+    this.lastStopLadderRefreshAt = 0;
     this.running = false;
     this.timer = null;
   }
@@ -127,6 +133,16 @@ export class LiveProtectionEngine {
       PUBLICNODE_SOLANA_RPC,
       PUBLIC_SOLANA_RPC
     ].filter(Boolean);
+  }
+
+  async refreshStopLadderConfig() {
+    if (!this.appSettings.enabled) return this.stopLadderConfig;
+    if (this.now() - this.lastStopLadderRefreshAt < 10_000) return this.stopLadderConfig;
+    this.lastStopLadderRefreshAt = this.now();
+    const raw = await this.appSettings.get(STOP_LADDER_KEY).catch(() => '');
+    this.manualStopLadderConfigured = Boolean(String(raw || '').trim());
+    this.stopLadderConfig = normalizeStopLadderConfig(raw || DEFAULT_STOP_LADDER_CONFIG);
+    return this.stopLadderConfig;
   }
 
   async readTokenBalance(mint, walletAddress = env.privyWalletAddress) {
@@ -450,6 +466,7 @@ export class LiveProtectionEngine {
 
     let entryPrice = validPrice(trade.entry_price_usd);
     if (!entryPrice) entryPrice = validPrice(market?.priceUsd);
+    const ladderConfig = await this.refreshStopLadderConfig();
     const state = advanceProtectionState({
       entryPriceUsd: entryPrice,
       currentPriceUsd: market?.priceUsd,
@@ -457,7 +474,12 @@ export class LiveProtectionEngine {
       previousHighestPriceUsd: trade.highest_price_usd,
       previousHighWaterPnlPct: trade.high_water_pnl_pct,
       previousCurrentStop: trade.current_stop
-    }, this.settings);
+    }, {
+      ...this.settings,
+      stopLossPct: ladderConfig.initialStopLossPct,
+      stopLadder: ladderConfig.levels,
+      manualStopLadder: this.manualStopLadderConfigured
+    });
     const nextStopReason = state.stopReason === 'hold-stop'
       ? (trade.stop_reason || 'initial-stop')
       : state.stopReason;

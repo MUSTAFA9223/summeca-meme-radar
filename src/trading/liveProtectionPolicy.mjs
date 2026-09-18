@@ -1,3 +1,4 @@
+import { DEFAULT_STOP_LADDER_CONFIG, normalizeStopLadderConfig, stopFloorForHighWater } from './stopLadder.mjs';
 const finite = (value, fallback = 0) => {
   const n = Number(value);
   return Number.isFinite(n) ? n : fallback;
@@ -28,6 +29,7 @@ export function protectionSettings(source = process.env) {
     tightTrailPct,
     profitLockTriggerPct,
     profitLockFloorPct: Math.min(profitLockFloorPct, Math.max(0, profitLockTriggerPct - 0.1)),
+    stopLadder: normalizeStopLadderConfig(DEFAULT_STOP_LADDER_CONFIG).levels,
     minLiquidityUsd: clamp(source.LIVE_PROTECTION_MIN_LIQUIDITY_USD ?? 2000, 100, 250_000),
     liquidityCollapseRatio: clamp(source.LIVE_PROTECTION_LIQUIDITY_COLLAPSE_RATIO ?? 0.25, 0.02, 0.95),
     sellabilityFailures: Math.round(clamp(source.LIVE_PROTECTION_SELLABILITY_FAILURES ?? 2, 1, 8)),
@@ -79,14 +81,24 @@ export function advanceProtectionState({
   const candidates = [
     { value: -Math.abs(settings.stopLossPct), reason: 'initial-stop' }
   ];
-  if (highWaterPnlPct >= settings.trailStartPct) {
-    candidates.push({ value: highWaterPnlPct - settings.trailPct, reason: `trailing-${settings.trailPct}%` });
+  if (settings.manualStopLadder !== true) {
+    if (highWaterPnlPct >= settings.trailStartPct) {
+      candidates.push({ value: highWaterPnlPct - settings.trailPct, reason: `trailing-${settings.trailPct}%` });
+    }
+    if (highWaterPnlPct >= settings.profitLockTriggerPct) {
+      candidates.push({ value: settings.profitLockFloorPct, reason: `profit-lock+${settings.profitLockFloorPct}%` });
+    }
+    if (highWaterPnlPct >= settings.tightTrailStartPct) {
+      candidates.push({ value: highWaterPnlPct - settings.tightTrailPct, reason: `tight-trailing-${settings.tightTrailPct}%` });
+    }
   }
-  if (highWaterPnlPct >= settings.profitLockTriggerPct) {
-    candidates.push({ value: settings.profitLockFloorPct, reason: `profit-lock+${settings.profitLockFloorPct}%` });
-  }
-  if (highWaterPnlPct >= settings.tightTrailStartPct) {
-    candidates.push({ value: highWaterPnlPct - settings.tightTrailPct, reason: `tight-trailing-${settings.tightTrailPct}%` });
+  const ladderConfig = normalizeStopLadderConfig({
+    initialStopLossPct: settings.stopLossPct,
+    levels: settings.stopLadder || DEFAULT_STOP_LADDER_CONFIG.levels
+  });
+  const ladder = stopFloorForHighWater(highWaterPnlPct, ladderConfig);
+  if (ladder.floorPct != null) {
+    candidates.push({ value: ladder.floorPct, reason: `profit-ladder+${ladder.floorPct}%@+${ladder.triggerPct}%` });
   }
 
   let chosen = { value: priorStop, reason: 'previous-stop' };

@@ -1,6 +1,7 @@
 import { env } from '../config/env.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
+import { fetchPumpNativeMarket } from '../feeds/pumpFunNative.mjs';
 
 const STATE_KEY = 'auto_smart_wallet_discovery_v1';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -482,6 +483,22 @@ async function harvestSolana(token) {
   const start = Date.parse(token.listed_at || '') || 0;
   let buyers = [];
 
+  const native = await fetchPumpNativeMarket(token.address, { includeFlow: true }).catch(() => null);
+  if (Array.isArray(native?.buyerWallets) && native.buyerWallets.length) {
+    buyers = native.buyerWallets
+      .filter((row) => SOLANA.test(String(row?.address || '')))
+      .slice(0, 12)
+      .map((row) => ({
+        address: String(row.address),
+        txHash: '',
+        timestamp: finite(row.at) / 1000
+      }));
+    if (buyers.length) {
+      console.log(`[auto-smart:pump-buyers] mint=${short(token.address)} buyers=${buyers.length}`);
+      return buyers;
+    }
+  }
+
   if (env.heliusApiKey) {
     const qs = new URLSearchParams({
       'api-key': env.heliusApiKey,
@@ -566,13 +583,13 @@ export class SmartWalletDiscoveryWorker {
     this.monitorRunning = false;
     this.state = emptyState();
     this.stateLoaded = false;
-    this.discoveryIntervalMs = Math.max(60_000, finite(process.env.AUTO_SMART_DISCOVERY_INTERVAL_MS, 120_000));
+    this.discoveryIntervalMs = Math.max(45_000, finite(process.env.AUTO_SMART_DISCOVERY_INTERVAL_MS, 60_000));
     this.monitorIntervalMs = Math.max(5_000, finite(process.env.AUTO_SMART_MONITOR_INTERVAL_MS, 8_000));
     this.winnerMinPeakRoi = Math.max(20, finite(process.env.AUTO_SMART_WINNER_MIN_PEAK_ROI_PCT, 50));
     this.minSamples = Math.max(2, Math.floor(finite(process.env.AUTO_SMART_MIN_WINNING_TOKENS, 2)));
     this.minScore = clamp(finite(process.env.AUTO_SMART_MIN_SCORE, 60), 40, 95);
     this.minAveragePeakRoi = Math.max(20, finite(process.env.AUTO_SMART_MIN_AVG_PEAK_ROI_PCT, 40));
-    this.winnersPerCycle = Math.max(1, Math.min(3, Math.floor(finite(process.env.AUTO_SMART_WINNERS_PER_CYCLE, 1))));
+    this.winnersPerCycle = Math.max(1, Math.min(4, Math.floor(finite(process.env.AUTO_SMART_WINNERS_PER_CYCLE, 2))));
     this.solMonitorCursor = 0;
     this.evmMonitorCursor = 0;
   }
@@ -656,18 +673,32 @@ export class SmartWalletDiscoveryWorker {
       await this.loadState();
       const tokens = await this.store.tokens();
       const now = Date.now();
+      const emptyRetryMs = Math.max(60_000, finite(process.env.AUTO_SMART_EMPTY_RETRY_MS, 120_000));
       const winners = tokens
-        .map((token) => ({ token, network: normalizeNetwork(token.chain), roi: peakRoi(token) }))
+        .map((token) => {
+          const network = normalizeNetwork(token.chain);
+          const key = tokenKey(network, token.address);
+          const prior = this.state.processed[key];
+          return {
+            token,
+            network,
+            roi: peakRoi(token),
+            prior,
+            retry: Boolean(prior),
+            lastSeenAt: Date.parse(token.last_seen_at || token.listed_at || '') || 0
+          };
+        })
         .filter((row) => row.network && row.roi >= this.winnerMinPeakRoi)
         .filter((row) => {
-          const key = tokenKey(row.network, row.token.address);
-          const prior = this.state.processed[key];
-          if (!prior) return true;
-          if (prior.buyers > 0) return false;
-          const emptyRetryMs = Math.max(60_000, finite(process.env.AUTO_SMART_EMPTY_RETRY_MS, 120_000));
-          return now - finite(prior.at) >= emptyRetryMs;
+          if (!row.prior) return true;
+          if (row.prior.buyers > 0) return false;
+          return now - finite(row.prior.at) >= emptyRetryMs;
         })
-        .sort((a, b) => b.roi - a.roi)
+        .sort((a, b) =>
+          Number(a.retry) - Number(b.retry)
+          || b.lastSeenAt - a.lastSeenAt
+          || b.roi - a.roi
+        )
         .slice(0, this.winnersPerCycle);
 
       if (!winners.length) {
