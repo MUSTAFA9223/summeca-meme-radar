@@ -728,6 +728,7 @@ export function installPhase8OwnerFlows() {
   const watchMs = clamp(process.env.WATCH_UPDATE_INTERVAL_MS ?? 20_000, 10_000, 120_000);
   const copyMs = clamp(process.env.COPY_WALLET_POLL_MS ?? 10_000, 5_000, 120_000);
   setTimeout(() => void processWalletCreateRequest().catch((error) => console.warn('[phase8:wallet-create]', error.message)), 3_000).unref?.();
+  setInterval(() => void processWalletCreateRequest().catch((error) => console.warn('[phase8:wallet-create]', error.message)), 30_000).unref?.();
   setInterval(() => void watchCycle().catch((error) => console.warn('[phase8:watch]', error.message)), watchMs).unref?.();
   setInterval(() => void copyCycle().catch((error) => console.warn('[phase8:copy]', error.message)), copyMs).unref?.();
   console.log(`SUMMECA PHASE 8: متابعة + نسخ تداول + مدير محافظ Privy; watch=${watchMs}ms copy=${copyMs}ms`);
