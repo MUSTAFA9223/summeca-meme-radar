@@ -11,7 +11,7 @@ import {
 test('auto smart wallet is never promoted from one winning token', () => {
   const one = applyWinnerEvidence(null, {
     network: 'solana',
-    address: '7YWHMfk9JZe0LM0g1tA9MeDQoXxzwMQEpuC6ccfX2VkJ',
+    address: 'J2Gys26qFcmetpneVYTcpeRMwLMNE2RRdtJCSkwxVKjG',
     tokenAddress: '9xQeWvG816bUx9EPfEZ5QxvT1c2fv7FzYfg41ZfYgS3',
     peakRoiPct: 400
   });
@@ -20,7 +20,7 @@ test('auto smart wallet is never promoted from one winning token', () => {
 });
 
 test('repeated high-quality winner evidence promotes a wallet', () => {
-  const address = '7YWHMfk9JZe0LM0g1tA9MeDQoXxzwMQEpuC6ccfX2VkJ';
+  const address = 'J2Gys26qFcmetpneVYTcpeRMwLMNE2RRdtJCSkwxVKjG';
   const one = applyWinnerEvidence(null, {
     network: 'solana',
     address,
@@ -78,7 +78,7 @@ test('the same EVM address stays network-specific', () => {
 
 test('Solana winner parser extracts unique SWAP recipients', () => {
   const mint = '9xQeWvG816bUx9EPfEZ5QxvT1c2fv7FzYfg41ZfYgS3';
-  const buyer = '7YWHMfk9JZe0LM0g1tA9MeDQoXxzwMQEpuC6ccfX2VkJ';
+  const buyer = 'J2Gys26qFcmetpneVYTcpeRMwLMNE2RRdtJCSkwxVKjG';
   const rows = [
     {
       type: 'SWAP',
