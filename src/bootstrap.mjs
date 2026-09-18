@@ -12,6 +12,7 @@ import { installPhase4PerformanceOverlay } from './bot/phase4PerformanceOverlay.
 import { installPhase5RiskQuote } from './bot/phase5RiskQuote.mjs';
 import { installPhase6ManualConfirm } from './bot/phase6ManualConfirm.mjs';
 import { installPhase7FinalGuard } from './bot/phase7FinalGuard.mjs';
+import { startLiveProtectionSupervisor } from './trading/liveProtectionSupervisor.mjs';
 
 installArcRpcGuard();
 installDexScreenerGuard();
@@ -25,6 +26,10 @@ installPhase4PerformanceOverlay();
 installPhase5RiskQuote();
 installPhase6ManualConfirm();
 installPhase7FinalGuard();
+
+// Exit protection is isolated from radar/Telegram event-loop pressure. This does
+// not load the legacy liveAutomation auto-buy engine; manual entry remains Phase 6/7 only.
+startLiveProtectionSupervisor();
 
 // Shared Telegram wrappers only. They do not create additional long-pollers.
 await import('./bot/phase4TelegramRouter.mjs');
