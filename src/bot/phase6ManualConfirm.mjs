@@ -347,7 +347,7 @@ async function recordSuccessfulTrade(row, execution) {
     return inserted;
   }
 
-  const open = await store.findOpenLiveTrades(token.id).catch(() => []);
+  const open = await store.findOpenLiveTrades(token.id, executionWallet.address).catch(() => []);
   for (const trade of open) {
     const soldAtomic = /^\d+$/.test(String(row.payload?.amountAtomic || '')) ? BigInt(String(row.payload.amountAtomic)) : 0n;
     const quantityBefore = /^\d+$/.test(String(trade.quantity_atomic || '')) ? BigInt(String(trade.quantity_atomic)) : 0n;
