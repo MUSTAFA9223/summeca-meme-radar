@@ -208,11 +208,40 @@ function walletKey(network, address) {
   return { network: net || 'unknown', address: normalized, key: `${net || 'unknown'}:${normalized}` };
 }
 
+async function autoDiscoveredWallets() {
+  const rows = await supabaseRows('app_settings?select=value&key=eq.auto_smart_wallet_discovery_v1&limit=1');
+  try {
+    const state = JSON.parse(String(rows?.[0]?.value || '{}'));
+    return (Array.isArray(state?.wallets) ? state.wallets : []).filter((row) => row?.promoted && row?.address && row?.network);
+  } catch {
+    return [];
+  }
+}
+
 async function walletLeaderboard() {
   const base = new Map(configuredWallets().map((w) => {
     const id = walletKey(w.network, w.address);
     return [id.key, { ...w, network: id.network, address: id.address, signals: 0, clusters: 0, paidUsd: 0, scoreSum: 0, riskSum: 0 }];
   }));
+  const autoWallets = await autoDiscoveredWallets();
+  for (const w of autoWallets) {
+    const id = walletKey(w.network, w.address);
+    const prior = base.get(id.key) ?? {
+      network: id.network,
+      address: id.address,
+      label: w.label || short(id.address),
+      signals: 0,
+      clusters: 0,
+      paidUsd: 0,
+      scoreSum: 0,
+      riskSum: 0
+    };
+    prior.autoDiscovered = true;
+    prior.autoScore = finite(w.score);
+    prior.autoSamples = finite(w.samples);
+    prior.autoAvgPeakRoi = finite(w.avgPeakRoi);
+    base.set(id.key, prior);
+  }
   const rows = await supabaseRows('signals?select=created_at,entry_score,risk_score,reason,tokens(chain)&order=created_at.desc&limit=250');
   for (const signal of rows) {
     const wallets = Array.isArray(signal?.reason?.wallets) ? signal.reason.wallets : [];
@@ -233,12 +262,16 @@ async function walletLeaderboard() {
   const ranked = [...base.values()].map((w) => {
     const avgEntry = w.signals ? w.scoreSum / w.signals : 0;
     const avgRisk = w.signals ? w.riskSum / w.signals : 50;
-    const evidence = clamp(Math.round(Math.min(35, w.signals * 5) + Math.min(20, w.clusters * 4) + Math.min(20, Math.log10(1 + w.paidUsd) * 5) + avgEntry * 0.2 - avgRisk * 0.1), 0, 100);
-    return { ...w, avgEntry, avgRisk, evidence };
+    const signalEvidence = clamp(Math.round(Math.min(35, w.signals * 5) + Math.min(20, w.clusters * 4) + Math.min(20, Math.log10(1 + w.paidUsd) * 5) + avgEntry * 0.2 - avgRisk * 0.1), 0, 100);
+    const evidence = Math.max(signalEvidence, finite(w.autoScore));
+    return { ...w, avgEntry, avgRisk, signalEvidence, evidence };
   }).sort((a, b) => b.evidence - a.evidence || b.signals - a.signals);
-  const lines = ['🧠 SMART-WALLET LEADERBOARD', '', 'الترتيب هنا Evidence Score فقط — ليس Win Rate أو ROI إلا بعد وجود نتائج أسعار كافية.', ''];
+  const lines = ['🧠 SMART-WALLET LEADERBOARD', '', 'Auto Discovery يحتاج ≥2 عملات ناجحة مختلفة قبل ترقية المحفظة. النتيجة دليل تاريخي وليست ضمان ربح.', ''];
   for (const [i, w] of ranked.slice(0, 10).entries()) {
-    lines.push(`${i + 1}. [${String(w.network || 'unknown').toUpperCase()}] ${w.label} • ${w.evidence}/100`, `   signals ${w.signals} | clusters ${w.clusters} | verified flow ${money(w.paidUsd)} | avg entry ${w.avgEntry.toFixed(0)}`);
+    const auto = w.autoDiscovered
+      ? ` | AUTO ${w.autoSamples} wins • avg peak +${finite(w.autoAvgPeakRoi).toFixed(0)}%`
+      : '';
+    lines.push(`${i + 1}. [${String(w.network || 'unknown').toUpperCase()}] ${w.label} • ${w.evidence}/100`, `   signals ${w.signals} | clusters ${w.clusters} | verified flow ${money(w.paidUsd)} | avg entry ${w.avgEntry.toFixed(0)}${auto}`);
   }
   if (!ranked.length) lines.push('لا توجد أدلة كافية حتى الآن.');
   lines.push('', '📈 Performance/ROI ranking سيُفعل تلقائيًا فقط عندما تتوفر عينات نتائج موثوقة كافية.');

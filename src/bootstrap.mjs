@@ -44,6 +44,7 @@ const [
   { startBnbLeanWorker },
   { startSolanaUltraEarlyWorker },
   { startWalletPerformanceWorker },
+  { startSmartWalletDiscoveryWorker },
   { startLeanTelegramController }
 ] = await Promise.all([
   import('./signals/trenchesWorker.mjs'),
@@ -52,6 +53,7 @@ const [
   import('./signals/bnbLeanWorker.mjs'),
   import('./signals/solanaUltraEarlyWorker.mjs'),
   import('./signals/walletPerformanceWorker.mjs'),
+  import('./signals/smartWalletDiscoveryWorker.mjs'),
   import('./bot/leanTelegramController.mjs')
 ]);
 
@@ -83,5 +85,6 @@ await Promise.allSettled([
   startSafely('bnb', startBnbLeanWorker),
   startSafely('solana-ultra', startSolanaUltraEarlyWorker),
   startSafely('wallet-performance', startWalletPerformanceWorker),
+  startSafely('smart-wallet-discovery', startSmartWalletDiscoveryWorker),
   startSafely('telegram-controller', startLeanTelegramController)
 ]);
