@@ -421,7 +421,8 @@ async function copyDashboard() {
   lines.push('', 'عند اكتشاف Buy/Sell سترى أزرار مبلغ ثابت أو نسبة من صفقة المتداول. التنفيذ الحقيقي يمر دائمًا بـ Manual Confirm.');
   const keyboard = [[{ text: '➕ إضافة محفظة', callback_data: 'p8:cadd' }, { text: '🔄 تحديث', callback_data: 'p8:copy' }]];
   rows.slice(0, 8).forEach((row, i) => keyboard.push([
-    { text: `${row.enabled ? '⏸' : '▶️'} ${row.label || `Trader ${i + 1}`}`, callback_data: `p8:ctoggle:${i}` }
+    { text: `${row.enabled ? '⏸' : '▶️'} ${row.label || `Trader ${i + 1}`}`, callback_data: `p8:ctoggle:${i}` },
+    { text: '🗑 حذف', callback_data: `p8:cdel:${i}` }
   ]));
   return { text: lines.join('\n'), keyboard };
 }
@@ -583,6 +584,14 @@ export async function handlePhase8Callback(callback, terminal) {
     rows[index].enabled = !rows[index].enabled;
     await saveList(COPY_KEY, rows);
     return { handled: true, ...(await copyDashboard()) };
+  }
+  if (data.startsWith('p8:cdel:')) {
+    const index = Number(data.split(':')[2]);
+    const rows = await loadList(COPY_KEY);
+    if (!Number.isInteger(index) || !rows[index]) return result('❌ المحفظة غير موجودة.');
+    const [removed] = rows.splice(index, 1);
+    await saveList(COPY_KEY, rows);
+    return result(`🗑 تم حذف ${removed?.label || 'المحفظة'} من Copy Trading.`, [[{ text: '🧠 Copy Trading', callback_data: 'p8:copy' }]]);
   }
   if (data === 'p8:wallets') return { handled: true, ...(await tradingWalletDashboard()) };
   if (data === 'p8:wcreate') {
