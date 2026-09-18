@@ -1,11 +1,19 @@
 const PUMP_FUN_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const SOLANA_TRACKER_PUBLIC_RPC = 'https://rpc.solanatracker.io/public';
 const PUBLICNODE_SOLANA_RPC = 'https://solana-rpc.publicnode.com';
 const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 const HELIUS_BACKOFF_MS = 180_000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const publicRpcLanes = [
+  {
+    endpoint: SOLANA_TRACKER_PUBLIC_RPC,
+    provider: 'Solana Tracker Public RPC',
+    minIntervalMs: 300,
+    tail: Promise.resolve(),
+    nextAt: 0
+  },
   {
     endpoint: PUBLICNODE_SOLANA_RPC,
     provider: 'PublicNode Solana RPC',
