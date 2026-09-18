@@ -52,15 +52,15 @@ export function terminalActionKeyboard(network, address, marketUrl = '') {
   const rows = [
     [
       { text: '🔎 تحليل', callback_data: `term:a:${key}:${token}` },
-      { text: '🟢 Buy', callback_data: `term:b:${key}:${token}` },
-      { text: '🔴 Sell', callback_data: `term:s:${key}:${token}` }
+      { text: '🟢 شراء', callback_data: `term:b:${key}:${token}` },
+      { text: '🔴 بيع', callback_data: `term:s:${key}:${token}` }
     ],
     [
-      { text: '📊 Positions', callback_data: 'term:p' },
-      { text: '📋 CA', copy_text: { text: token } }
+      { text: '📊 المراكز', callback_data: 'term:p' },
+      { text: '📋 نسخ العقد', copy_text: { text: token } }
     ]
   ];
-  if (marketUrl) rows.push([{ text: '📈 Market', url: marketUrl }]);
+  if (marketUrl) rows.push([{ text: '📈 السوق', url: marketUrl }]);
   return rows;
 }
 
@@ -183,10 +183,10 @@ function scoreMarket(market, holders) {
 }
 
 function riskLabel(score) {
-  if (score >= 86) return '💎 TOP-TIER';
-  if (score >= 72) return '✅ QUALIFIED';
-  if (score >= 55) return '👀 WATCH';
-  return '⚠️ HIGH RISK';
+  if (score >= 86) return '💎 إشارة قوية جدًا';
+  if (score >= 72) return '✅ مؤهلة';
+  if (score >= 55) return '👀 مراقبة';
+  return '⚠️ مخاطرة مرتفعة';
 }
 
 export class TradingTerminal {
@@ -223,27 +223,27 @@ export class TradingTerminal {
       ? holders && !holders.error
         ? [
             `🐋 أكبر حساب توكن: ${pct(holders.largestPct)}`,
-            `👥 Top 5 token accounts: ${pct(holders.top5Pct)}`,
-            `👥 Top 10 token accounts: ${pct(holders.top10Pct)}`,
+            `👥 أكبر 5 حسابات: ${pct(holders.top5Pct)}`,
+            `👥 أكبر 10 حسابات: ${pct(holders.top10Pct)}`,
             'ℹ️ هذه حسابات توكن وليست بالضرورة محافظ بشرية فريدة.'
           ]
         : ['👥 توزيع الحيازة: غير متاح مؤقتًا من RPC']
       : ['👥 فحص الحيازة المفصل لهذه الشبكة سيضاف عبر indexer مخصص؛ حاليًا نعتمد بيانات السوق والمحافظ المتتبعة.'];
 
     const lines = [
-      `🔎 SUMMECA TOKEN ANALYSIS — ${config.label}`,
+      `🔎 تحليل العملة في SUMMECA — ${config.label}`,
       '',
       `${market ? `$${market.symbol}` : 'TOKEN'} • ${short(address)}`,
-      `🎯 Quality: ${quality.score}/100 • ${riskLabel(quality.score)}`,
+      `🎯 درجة الجودة: ${quality.score}/100 • ${riskLabel(quality.score)}`,
       market ? `💵 السعر: ${priceText(market.priceUsd)}` : '💵 السعر: لم يظهر بعد',
-      market ? `💧 السيولة: ${money(market.liquidityUsd)} | MC: ${money(market.marketCapUsd)}` : '',
-      market ? `⚡ 5m شراء ${market.buys5m} / بيع ${market.sells5m} | Ratio ${ratio.toFixed(2)}x` : '',
-      market ? `📊 Vol 5m: ${money(market.volume5mUsd)} | حركة 5m: ${pct(market.priceChange5mPct)}` : '',
+      market ? `💧 السيولة: ${money(market.liquidityUsd)} | القيمة السوقية: ${money(market.marketCapUsd)}` : '',
+      market ? `⚡ 5m شراء ${market.buys5m} / بيع ${market.sells5m} | النسبة ${ratio.toFixed(2)}x` : '',
+      market ? `📊 حجم 5 دقائق: ${money(market.volume5mUsd)} | حركة 5 دقائق: ${pct(market.priceChange5mPct)}` : '',
       ...holderLines,
       quality.reasons.length ? `⚠️ ملاحظات: ${quality.reasons.slice(0, 4).join(' • ')}` : '🛡️ لا توجد ملاحظات رئيسية من الفلاتر المتاحة.',
       '',
       '⚠️ التحليل يقلل المخاطر ولا يتنبأ بالسعر أو يضمن الربح.',
-      `CA: ${address}`
+      `العقد: ${address}`
     ].filter(Boolean).join('\n');
 
     return { text: lines, keyboard: terminalActionKeyboard(key, address, market?.url || '') };
@@ -257,13 +257,13 @@ export class TradingTerminal {
     const buttons = [25, 50, 100, 250].map((amount) => ({ text: `$${amount}`, callback_data: `term:bp:${amount}:${key}:${address}` }));
     return {
       text: [
-        `🟢 BUY PREVIEW — ${label}`,
+        `🟢 معاينة الشراء — ${label}`,
         '',
         `${market ? `$${market.symbol}` : 'TOKEN'} • ${short(address)}`,
         `السعر الحالي: ${market ? priceText(market.priceUsd) : 'غير متاح'}`,
         `السيولة: ${market ? money(market.liquidityUsd) : 'غير متاحة'}`,
         '',
-        'اختر مبلغًا لاختبار الصفقة في Paper Mode.',
+        'اختر مبلغًا لمعاينة الصفقة في الوضع التجريبي.',
         `🔒 التداول الحقيقي من هذه الواجهة: ${env.liveTradingEnabled ? 'مهيأ بالمحرك لكن غير منفّذ من Terminal الآمن' : 'مقفل'}`,
         'لن يتم توقيع أو إرسال أي معاملة حقيقية من هذه الشاشة.'
       ].join('\n'),
@@ -276,10 +276,10 @@ export class TradingTerminal {
     const amount = finite(amountUsd);
     if (!isTerminalAddress(key, address) || amount <= 0 || amount > 5_000) return { text: '❌ بيانات الصفقة غير صالحة.', keyboard: [] };
     const market = await dexMarket(key, address).catch(() => null);
-    if (!market?.priceUsd) return { text: '❌ لا يوجد سعر سوق موثوق حاليًا لإجراء Paper Buy.', keyboard: terminalActionKeyboard(key, address, market?.url || '') };
+    if (!market?.priceUsd) return { text: '❌ لا يوجد سعر سوق موثوق حاليًا لإجراء شراء تجريبي.', keyboard: terminalActionKeyboard(key, address, market?.url || '') };
     return {
       text: [
-        '🧪 تأكيد PAPER BUY', '',
+        '🧪 تأكيد الشراء التجريبي', '',
         `${NETWORKS[key].label} • $${market.symbol}`,
         `المبلغ: $${amount.toFixed(2)}`,
         `السعر المرجعي: ${priceText(market.priceUsd)}`,
@@ -288,7 +288,7 @@ export class TradingTerminal {
         'هذه محاكاة فقط ولا تستخدم أموالًا حقيقية.'
       ].join('\n'),
       keyboard: [[
-        { text: '✅ تأكيد Paper', callback_data: `term:bc:${amount}:${key}:${address}` },
+        { text: '✅ تأكيد الشراء التجريبي', callback_data: `term:bc:${amount}:${key}:${address}` },
         { text: '❌ إلغاء', callback_data: `term:a:${key}:${address}` }
       ]]
     };
@@ -298,7 +298,7 @@ export class TradingTerminal {
     const key = normalizeTerminalNetwork(network);
     const amount = finite(amountUsd);
     const market = await dexMarket(key, address).catch(() => null);
-    if (!market?.priceUsd) return { text: '❌ تعذر تنفيذ Paper Buy لعدم توفر سعر السوق.', keyboard: terminalActionKeyboard(key, address, market?.url || '') };
+    if (!market?.priceUsd) return { text: '❌ تعذر تنفيذ الشراء التجريبي لعدم توفر سعر السوق.', keyboard: terminalActionKeyboard(key, address, market?.url || '') };
     const rows = await this.#loadPositions();
     const id = `${key}:${String(address).toLowerCase()}`;
     const existing = rows.find((row) => row.id === id && row.status === 'open');
@@ -320,8 +320,8 @@ export class TradingTerminal {
     }
     await this.#savePositions(rows);
     return {
-      text: `✅ PAPER BUY تم\n\n$${market.symbol} • ${NETWORKS[key].label}\nالمبلغ: $${amount.toFixed(2)}\nالسعر: ${priceText(market.priceUsd)}\n\nلا توجد أموال حقيقية مستخدمة.`,
-      keyboard: [[{ text: '📊 Positions', callback_data: 'term:p' }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
+      text: `✅ تم الشراء التجريبي\n\n$${market.symbol} • ${NETWORKS[key].label}\nالمبلغ: $${amount.toFixed(2)}\nالسعر: ${priceText(market.priceUsd)}\n\nلم تُستخدم أموال حقيقية.`,
+      keyboard: [[{ text: '📊 المراكز', callback_data: 'term:p' }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
     };
   }
 
@@ -333,12 +333,12 @@ export class TradingTerminal {
     const position = rows.find((row) => row.id === id && row.status === 'open');
     if (!position) {
       return {
-        text: `🔴 SELL — ${NETWORKS[key].label}\n\nلا يوجد Paper Position مفتوح لهذا العقد.\nالتداول الحقيقي ما زال مقفولًا من Terminal الآمن.`,
+        text: `🔴 بيع — ${NETWORKS[key].label}\n\nلا يوجد مركز تجريبي مفتوح لهذا العقد.\nالتداول الحقيقي ما زال مقفولًا من Terminal الآمن.`,
         keyboard: terminalActionKeyboard(key, address)
       };
     }
     return {
-      text: `🔴 SELL PREVIEW — PAPER\n\n$${position.symbol} • ${NETWORKS[key].label}\nاختر نسبة الإغلاق:`,
+      text: `🔴 معاينة البيع — تجريبي\n\n$${position.symbol} • ${NETWORKS[key].label}\nاختر نسبة الإغلاق:`,
       keyboard: [[25, 50, 100].map((part) => ({ text: `${part}%`, callback_data: `term:sp:${part}:${key}:${address}` }))]
     };
   }
@@ -349,7 +349,7 @@ export class TradingTerminal {
     const rows = await this.#loadPositions();
     const id = `${key}:${String(address).toLowerCase()}`;
     const position = rows.find((row) => row.id === id && row.status === 'open');
-    if (!position) return { text: '❌ لا يوجد Position مفتوح.', keyboard: [] };
+    if (!position) return { text: '❌ لا يوجد مركز مفتوح.', keyboard: [] };
     const market = await dexMarket(key, address).catch(() => null);
     if (!market?.priceUsd) return { text: '❌ لا يتوفر سعر حالي لتأكيد البيع.', keyboard: [] };
     const sellQty = finite(position.qty) * (part / 100);
@@ -358,7 +358,7 @@ export class TradingTerminal {
     const pnl = proceeds - costPart;
     return {
       text: [
-        '🧪 تأكيد PAPER SELL', '',
+        '🧪 تأكيد البيع التجريبي', '',
         `$${position.symbol} • ${NETWORKS[key].label}`,
         `النسبة: ${part}%`,
         `السعر الحالي: ${priceText(market.priceUsd)}`,
@@ -367,7 +367,7 @@ export class TradingTerminal {
         'هذه محاكاة فقط.'
       ].join('\n'),
       keyboard: [[
-        { text: '✅ تأكيد Paper Sell', callback_data: `term:sc:${part}:${key}:${address}` },
+        { text: '✅ تأكيد الشراء التجريبي Sell', callback_data: `term:sc:${part}:${key}:${address}` },
         { text: '❌ إلغاء', callback_data: 'term:p' }
       ]]
     };
@@ -379,7 +379,7 @@ export class TradingTerminal {
     const rows = await this.#loadPositions();
     const id = `${key}:${String(address).toLowerCase()}`;
     const position = rows.find((row) => row.id === id && row.status === 'open');
-    if (!position) return { text: '❌ لا يوجد Position مفتوح.', keyboard: [] };
+    if (!position) return { text: '❌ لا يوجد مركز مفتوح.', keyboard: [] };
     const market = await dexMarket(key, address).catch(() => null);
     if (!market?.priceUsd) return { text: '❌ تعذر قراءة السعر الحالي.', keyboard: [] };
     const soldQty = finite(position.qty) * (part / 100);
@@ -394,7 +394,7 @@ export class TradingTerminal {
     await this.#savePositions(rows);
     return {
       text: `✅ PAPER SELL تم\n\n$${position.symbol} • ${part}%\nالسعر: ${priceText(market.priceUsd)}\nPnL: ${pnl >= 0 ? '+' : ''}${money(pnl)}\n\nمحاكاة فقط.`,
-      keyboard: [[{ text: '📊 Positions', callback_data: 'term:p' }]]
+      keyboard: [[{ text: '📊 المراكز', callback_data: 'term:p' }]]
     };
   }
 
@@ -403,8 +403,8 @@ export class TradingTerminal {
     if (!rows.length) {
       return {
         text: [
-          '📊 SUMMECA POSITIONS', '',
-          'لا توجد Paper Positions مفتوحة حاليًا.',
+          '📊 مراكز SUMMECA', '',
+          'لا توجد مراكز تجريبية مفتوحة حاليًا.',
           `🔒 Live Trading: ${env.liveTradingEnabled ? 'المحرك مهيأ لكن Terminal الآمن لا ينفذ معاملات' : 'مقفل'}`,
           '',
           'افتح أي إشارة واضغط Buy لتجربة المسار كاملًا بدون أموال حقيقية.'
@@ -413,7 +413,7 @@ export class TradingTerminal {
       };
     }
 
-    const lines = ['📊 SUMMECA POSITIONS — PAPER', ''];
+    const lines = ['📊 مراكز SUMMECA — PAPER', ''];
     const keyboard = [];
     for (const row of rows) {
       const market = await dexMarket(row.network, row.address).catch(() => null);
@@ -426,11 +426,11 @@ export class TradingTerminal {
       lines.push(`  PnL ${unrealized >= 0 ? '+' : ''}${money(unrealized)} (${pnlPct >= 0 ? '+' : ''}${pct(pnlPct)})`);
       keyboard.push([
         { text: `🔎 ${row.symbol}`, callback_data: `term:a:${row.network}:${row.address}` },
-        { text: `🔴 Sell ${row.symbol}`, callback_data: `term:s:${row.network}:${row.address}` }
+        { text: `🔴 بيع ${row.symbol}`, callback_data: `term:s:${row.network}:${row.address}` }
       ]);
       await wait(80);
     }
-    lines.push('', '🧪 جميع المراكز أعلاه Paper فقط.');
+    lines.push('', '🧪 جميع المراكز أعلاه تجريبية فقط.');
     keyboard.push([{ text: '🏠 القائمة', callback_data: 'menu:home' }]);
     return { text: lines.join('\n'), keyboard };
   }
@@ -450,8 +450,8 @@ export class TradingTerminal {
       if (action === 'sp' && parts.length >= 5) return { handled: true, ...(await this.paperSellConfirm(parts[2], parts[3], parts.slice(4).join(':'))) };
       if (action === 'sc' && parts.length >= 5) return { handled: true, ...(await this.paperSell(parts[2], parts[3], parts.slice(4).join(':'))) };
     } catch (error) {
-      return { handled: true, text: `❌ Trading Terminal error: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]] };
+      return { handled: true, text: `❌ خطأ في منصة التداول: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]] };
     }
-    return { handled: true, text: 'ℹ️ أمر Trading Terminal غير معروف.', keyboard: [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]] };
+    return { handled: true, text: 'ℹ️ أمر منصة التداول غير معروف.', keyboard: [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]] };
   }
 }
