@@ -62,6 +62,22 @@ export function holderProfileFromTokenAccounts(accounts = [], { complete = true,
   };
 }
 
+export function holderProfileFromParsedProgramAccounts(rows = []) {
+  const accounts = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const info = row?.account?.data?.parsed?.info ?? {};
+    const owner = String(info?.owner ?? '').trim();
+    const amount = info?.tokenAmount?.amount ?? info?.token_amount?.amount ?? 0;
+    if (!owner || !(Number(amount) > 0)) continue;
+    accounts.push({ owner, amount });
+  }
+  if (!accounts.length) return null;
+  return holderProfileFromTokenAccounts(accounts, {
+    complete: true,
+    provider: 'solana-getProgramAccounts'
+  });
+}
+
 export async function fetchHeliusHolderProfile(apiKey, mint) {
   const key = String(mint ?? '').trim();
   if (!apiKey || !key) return null;
