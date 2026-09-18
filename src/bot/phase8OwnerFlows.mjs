@@ -340,15 +340,18 @@ export function parseSolanaCopyTrade(tx, walletAddress) {
   const feeLamports = BigInt(Math.trunc(finite(tx?.meta?.fee)));
   if (chosen.delta > 0n && solDeltaLamports < 0n) {
     const spent = -solDeltaLamports;
+    const tradeLamports = spent > feeLamports ? spent - feeLamports : 0n;
+    if (tradeLamports < 500_000n) return null;
     return {
       side: 'buy',
       mint: chosen.mint,
       tokenDeltaAtomic: chosen.delta.toString(),
-      sourceLamports: (spent > feeLamports ? spent - feeLamports : spent).toString(),
+      sourceLamports: tradeLamports.toString(),
       solDeltaLamports: solDeltaLamports.toString()
     };
   }
   if (chosen.delta < 0n && solDeltaLamports > 0n) {
+    if (solDeltaLamports < 500_000n) return null;
     return {
       side: 'sell',
       mint: chosen.mint,
