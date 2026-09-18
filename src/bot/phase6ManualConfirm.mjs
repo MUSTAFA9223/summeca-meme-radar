@@ -5,6 +5,7 @@ import { TradingTerminal, normalizeTerminalNetwork, isTerminalAddress } from './
 import { PrivySolanaWallet } from '../trading/privyWallet.mjs';
 import { JupiterSwapClient, SOL_MINT } from '../trading/jupiterSwap.mjs';
 import { runLiveConfigSmoke } from '../trading/liveConfigSmoke.mjs';
+import { initialProtectionState, protectionSettings } from '../trading/liveProtectionPolicy.mjs';
 
 const store = new HardeningStore();
 const SOLANA_PUBLIC_RPC = 'https://api.mainnet-beta.solana.com';
@@ -266,29 +267,105 @@ async function recordSuccessfulTrade(row, execution) {
     symbol: market?.symbol || row.payload?.symbol, name: market?.name, priceUsd: market?.priceUsd,
     source: 'manual-confirm-live'
   }).catch(() => null);
-  if (!token?.id) return;
+  if (!token?.id) {
+    await store.appendAuditEvent(row.request_id, { type: 'live-trade-registration-failed', reason: 'token-upsert-failed' }).catch(() => {});
+    return null;
+  }
+
   if (row.side === 'buy') {
-    await store.insertLiveTrade({
+    const entryPrice = market?.priceUsd || row.payload?.priceUsd || null;
+    const state = initialProtectionState(entryPrice, protectionSettings());
+    const liveRow = {
       token_id: token.id,
       wallet_address: env.privyWalletAddress,
       status: 'open',
       entry_tx: execution.signature,
-      entry_price_usd: market?.priceUsd || row.payload?.priceUsd || null,
+      entry_price_usd: entryPrice,
       input_sol: row.amount_native,
       quantity_atomic: execution.outputAmountAtomic || row.payload?.quotedOutAtomic || null,
-      metadata: { request_id: row.request_id, manual_confirm: true, router: execution.router || null, mode: execution.mode || null }
-    }).catch(() => null);
-  } else {
-    const open = await store.findOpenLiveTrades(token.id).catch(() => []);
-    for (const trade of open) {
-      const metadata = { ...(trade.metadata || {}), last_manual_sell: { request_id: row.request_id, pct: row.payload?.sellPct, tx: execution.signature, at: isoNow() } };
-      const close = Number(row.payload?.sellPct || 0) >= 100;
-      await store.updateLiveTrade(trade.id, {
-        ...(close ? { status: 'closed', closed_at: isoNow(), exit_tx: execution.signature, exit_price_usd: market?.priceUsd || null, exit_reason: 'manual-confirm-sell' } : {}),
-        metadata
-      }).catch(() => null);
+      high_water_pnl_pct: state.highWaterPnlPct,
+      highest_price_usd: state.highestPriceUsd,
+      current_stop: state.currentStop,
+      stop_reason: state.stopReason,
+      protection_started_at: isoNow(),
+      last_protection_check_at: null,
+      metadata: {
+        request_id: row.request_id,
+        manual_confirm: true,
+        router: execution.router || null,
+        mode: execution.mode || null,
+        entry_liquidity_usd: market?.liquidityUsd || null,
+        remaining_cost_basis_sol: row.amount_native
+      }
+    };
+
+    let inserted = null;
+    for (let attempt = 0; attempt < 3 && !inserted; attempt += 1) {
+      try {
+        inserted = await store.insertLiveTrade(liveRow);
+      } catch (error) {
+        const existing = await store.findOpenLiveTrades(token.id).catch(() => []);
+        inserted = existing.find((trade) =>
+          String(trade.entry_tx || '') === String(execution.signature)
+          || String(trade?.metadata?.request_id || '') === String(row.request_id)
+        ) || null;
+        if (!inserted && attempt < 2) await new Promise((resolve) => setTimeout(resolve, 150 * (attempt + 1)));
+      }
     }
+    if (!inserted) {
+      await store.appendAuditEvent(row.request_id, {
+        type: 'live-trade-registration-failed',
+        reason: 'post-buy-protection-row-unavailable',
+        entryTx: execution.signature
+      }).catch(() => {});
+      console.error(`[manual-live:protection] BUY landed but live_trades registration failed request=${short(row.request_id)} tx=${short(execution.signature)}`);
+      return null;
+    }
+    return inserted;
   }
+
+  const open = await store.findOpenLiveTrades(token.id).catch(() => []);
+  for (const trade of open) {
+    const soldAtomic = /^\d+$/.test(String(row.payload?.amountAtomic || '')) ? BigInt(String(row.payload.amountAtomic)) : 0n;
+    const quantityBefore = /^\d+$/.test(String(trade.quantity_atomic || '')) ? BigInt(String(trade.quantity_atomic)) : 0n;
+    const remainingAtomic = quantityBefore > soldAtomic ? quantityBefore - soldAtomic : 0n;
+    const outputLamportsRaw = String(execution.outputAmountAtomic || execution.totalOutputAmount || row.payload?.quotedOutLamports || '0');
+    const outputSol = /^\d+$/.test(outputLamportsRaw) ? Number(BigInt(outputLamportsRaw)) / 1e9 : null;
+    const priorCost = finite(trade?.metadata?.remaining_cost_basis_sol, finite(trade.input_sol));
+    const soldFraction = quantityBefore > 0n ? Math.min(1, Number(soldAtomic) / Number(quantityBefore)) : Number(row.payload?.sellPct || 0) / 100;
+    const soldCost = priorCost > 0 ? priorCost * soldFraction : 0;
+    const realizedPnlSol = outputSol != null && soldCost > 0 ? outputSol - soldCost : null;
+    const realizedPnlPct = realizedPnlSol != null && soldCost > 0 ? realizedPnlSol / soldCost * 100 : null;
+    const close = Number(row.payload?.sellPct || 0) >= 100 || remainingAtomic === 0n;
+    const metadata = {
+      ...(trade.metadata || {}),
+      remaining_cost_basis_sol: close ? 0 : Math.max(0, priorCost - soldCost),
+      last_manual_sell: {
+        request_id: row.request_id,
+        pct: row.payload?.sellPct,
+        tx: execution.signature,
+        amount_atomic: soldAtomic.toString(),
+        output_sol: outputSol,
+        at: isoNow()
+      }
+    };
+    await store.updateLiveTrade(trade.id, {
+      quantity_atomic: remainingAtomic.toString(),
+      ...(close ? {
+        status: 'closed',
+        closed_at: isoNow(),
+        exit_tx: execution.signature,
+        exit_price_usd: market?.priceUsd || null,
+        exit_reason: 'manual-confirm-sell',
+        ...(outputSol != null ? { exit_amount_sol: outputSol } : {}),
+        ...(realizedPnlSol != null ? { realized_pnl_sol: realizedPnlSol } : {}),
+        ...(realizedPnlPct != null ? { realized_pnl_pct: realizedPnlPct } : {}),
+        sell_lock_request_id: null
+      } : {}),
+      metadata
+    }).catch(() => null);
+  }
+  return open[0] || null;
 }
 
 async function confirmIntent(requestId) {
@@ -374,7 +451,7 @@ async function confirmIntent(requestId) {
     const execution = await client.executeOrder(order);
     await store.updateAudit(requestId, {
       status: 'succeeded', tx_hash: String(execution.signature), error: null,
-      payload: { ...(locked.payload || {}), executionRequestId: order.requestId, executionFinishedAt: isoNow() }
+      payload: { ...(locked.payload || {}), executionRequestId: order.requestId, executionFinishedAt: isoNow(), executionInputAmountAtomic: String(execution.inputAmountAtomic || execution.totalInputAmount || amountAtomic), executionOutputAmountAtomic: String(execution.outputAmountAtomic || execution.totalOutputAmount || freshQuote?.outAmount || '0') }
     });
     await recordSuccessfulTrade({ ...row, payload: locked.payload || row.payload }, execution);
     return {

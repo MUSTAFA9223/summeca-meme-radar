@@ -44,27 +44,50 @@ export class JupiterSwapClient {
     // Jupiter explicitly recommends partial signing: JupiterZ RFQ routes can add
     // the market-maker signature during /execute.
     const signedTransaction = await this.wallet.signTransaction(order.transaction);
-    const response = await fetch(`${BASE_URL}/execute`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': this.apiKey,
-        accept: 'application/json'
-      },
-      body: JSON.stringify({
-        signedTransaction,
-        requestId: order.requestId,
-        ...(order.lastValidBlockHeight ? { lastValidBlockHeight: order.lastValidBlockHeight } : {})
-      })
-    });
-    const payload = await response.json().catch(() => null);
+    let response;
+    let payload = null;
+    try {
+      response = await fetch(`${BASE_URL}/execute`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': this.apiKey,
+          accept: 'application/json'
+        },
+        body: JSON.stringify({
+          signedTransaction,
+          requestId: order.requestId,
+          ...(order.lastValidBlockHeight ? { lastValidBlockHeight: order.lastValidBlockHeight } : {})
+        })
+      });
+      payload = await response.json().catch(() => null);
+    } catch (cause) {
+      const error = new Error(`Jupiter /execute transport failure: ${String(cause?.message ?? cause)}`, { cause });
+      error.broadcastAttempted = true;
+      error.requestId = order.requestId;
+      throw error;
+    }
+
     if (!response.ok) {
-      throw new Error(`Jupiter /execute HTTP ${response.status}: ${payload?.error ?? 'request failed'}`);
+      const error = new Error(`Jupiter /execute HTTP ${response.status}: ${payload?.error ?? 'request failed'}`);
+      error.broadcastAttempted = true;
+      error.requestId = order.requestId;
+      if (payload?.signature) error.signature = String(payload.signature);
+      throw error;
     }
     if (payload?.status !== 'Success' || Number(payload?.code ?? 0) !== 0) {
-      throw new Error(`Jupiter swap failed code=${payload?.code ?? 'unknown'}: ${payload?.error ?? payload?.status ?? 'failed'}`);
+      const error = new Error(`Jupiter swap failed code=${payload?.code ?? 'unknown'}: ${payload?.error ?? payload?.status ?? 'failed'}`);
+      error.broadcastAttempted = true;
+      error.requestId = order.requestId;
+      if (payload?.signature) error.signature = String(payload.signature);
+      throw error;
     }
-    if (!payload?.signature) throw new Error('Jupiter reported success without a transaction signature');
+    if (!payload?.signature) {
+      const error = new Error('Jupiter reported success without a transaction signature');
+      error.broadcastAttempted = true;
+      error.requestId = order.requestId;
+      throw error;
+    }
     return payload;
   }
 
