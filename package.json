@@ -1,9 +1,9 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.36.0",
+  "version": "0.37.0",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with Pump.fun-native early market fallback, triple-lane Solana read RPC resilience, durable Solana PAPER score-band performance analytics, isolated paper bankroll accounting, manual-confirm Solana live execution, and isolated live-position protection. Legacy automatic live entry remains disabled.",
+  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with Pump.fun-native early market fallback, triple-lane Solana read RPC resilience, probe-to-qualified PAPER lifecycle promotion, bounded probe holding time, durable score-band analytics, manual-confirm Solana live execution, and isolated live-position protection. Legacy automatic live entry remains disabled.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
