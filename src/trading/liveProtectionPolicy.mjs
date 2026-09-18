@@ -19,7 +19,7 @@ export function protectionSettings(source = process.env) {
     marketRefreshMs: Math.round(clamp(source.LIVE_PROTECTION_MARKET_REFRESH_MS ?? 3000, 1000, 30_000)),
     quoteRefreshMs: Math.round(clamp(source.LIVE_PROTECTION_QUOTE_REFRESH_MS ?? 3000, 1000, 30_000)),
     securityRefreshMs: Math.round(clamp(source.LIVE_PROTECTION_SECURITY_REFRESH_MS ?? 20_000, 5000, 300_000)),
-    uncertaintyGraceMs: Math.round(clamp(source.LIVE_PROTECTION_UNCERTAINTY_GRACE_MS ?? 12_000, 3000, 120_000)),
+    uncertaintyGraceMs: Math.round(clamp(source.LIVE_PROTECTION_UNCERTAINTY_GRACE_MS ?? 60_000, 3000, 120_000)),
     riskSignalMaxAgeMs: Math.round(clamp(source.LIVE_PROTECTION_RISK_SIGNAL_MAX_AGE_MS ?? 120_000, 15_000, 900_000)),
     stopLossPct,
     trailStartPct,
