@@ -176,6 +176,65 @@ export function extractSolanaWinnerBuyers(transactions, mint, limit = 12) {
   return [...out.values()];
 }
 
+export function extractSolanaRpcWinnerBuyers(transactions, mint, limit = 12) {
+  const out = new Map();
+  const rows = [...(Array.isArray(transactions) ? transactions : [])]
+    .sort((a, b) => finite(a?.blockTime) - finite(b?.blockTime));
+
+  for (const tx of rows) {
+    const preRows = Array.isArray(tx?.meta?.preTokenBalances) ? tx.meta.preTokenBalances : [];
+    const postRows = Array.isArray(tx?.meta?.postTokenBalances) ? tx.meta.postTokenBalances : [];
+    const owners = new Set([
+      ...preRows.filter((row) => String(row?.mint || '') === mint).map((row) => String(row?.owner || '')),
+      ...postRows.filter((row) => String(row?.mint || '') === mint).map((row) => String(row?.owner || ''))
+    ].filter(Boolean));
+
+    const amountMap = (rowsInput) => {
+      const map = new Map();
+      for (const row of rowsInput) {
+        if (String(row?.mint || '') !== mint) continue;
+        const owner = String(row?.owner || '');
+        const amount = String(row?.uiTokenAmount?.amount ?? '0');
+        if (owner && /^\d+$/.test(amount)) map.set(owner, BigInt(amount));
+      }
+      return map;
+    };
+    const pre = amountMap(preRows);
+    const post = amountMap(postRows);
+    const keys = (tx?.transaction?.message?.accountKeys || []).map((entry) =>
+      typeof entry === 'string' ? entry : String(entry?.pubkey || entry?.address || '')
+    );
+    const preSol = Array.isArray(tx?.meta?.preBalances) ? tx.meta.preBalances : [];
+    const postSol = Array.isArray(tx?.meta?.postBalances) ? tx.meta.postBalances : [];
+    const fee = finite(tx?.meta?.fee);
+    const logText = (tx?.meta?.logMessages || []).join('\n').toLowerCase();
+    const explicitTrade = /instruction:\s*(?:buy|buyexact|swap)\b|\bswap\b/.test(logText);
+
+    for (const owner of owners) {
+      if (!SOLANA.test(owner) || owner === mint) continue;
+      const delta = (post.get(owner) || 0n) - (pre.get(owner) || 0n);
+      if (delta <= 0n) continue;
+
+      const index = keys.indexOf(owner);
+      const nativeSpent = index >= 0
+        ? finite(preSol[index]) - finite(postSol[index]) - fee
+        : 0;
+      if (!explicitTrade && nativeSpent < 500_000) continue;
+
+      if (!out.has(owner)) {
+        out.set(owner, {
+          address: owner,
+          txHash: String(tx?._signature || tx?.signature || ''),
+          timestamp: finite(tx?.blockTime)
+        });
+      }
+      if (out.size >= limit) break;
+    }
+    if (out.size >= limit) break;
+  }
+  return [...out.values()];
+}
+
 export function extractEvmWinnerBuyers(logs, tokenAddress, pairAddress = '', limit = 20) {
   const token = low(tokenAddress);
   const pair = low(pairAddress);
@@ -362,26 +421,90 @@ async function findBlockNearTime(rpcUrl, targetMs, latest) {
   return Math.max(1, best - 2);
 }
 
-async function harvestSolana(token) {
-  if (!env.heliusApiKey || !SOLANA.test(String(token.address || ''))) return [];
-  const start = Date.parse(token.listed_at || '') || 0;
-  const qs = new URLSearchParams({
-    'api-key': env.heliusApiKey,
-    type: 'SWAP',
-    limit: '100',
-    'sort-order': 'asc',
-    commitment: 'confirmed'
-  });
-  if (start > 0) {
-    qs.set('gte-time', String(Math.floor(start / 1000)));
-    qs.set('lte-time', String(Math.floor((start + 12 * 60_000) / 1000)));
+async function solanaHistoryRpc(method, params = []) {
+  const endpoints = [
+    process.env.SOLANA_PROFILE_RPC_URL || '',
+    'https://solana-rpc.publicnode.com',
+    'https://api.mainnet-beta.solana.com'
+  ].filter(Boolean);
+  let last = null;
+  for (const endpoint of endpoints) {
+    try {
+      return await rpc(endpoint, method, params);
+    } catch (error) {
+      last = error;
+    }
   }
-  const url = `https://api.helius.xyz/v0/addresses/${encodeURIComponent(token.address)}/transactions?${qs}`;
-  const rows = await fetchJson(url, { headers: { accept: 'application/json' } }, 8_000).catch((error) => {
-    console.warn(`[auto-smart:solana-history] ${short(token.address)} ${error.message}`);
+  throw last || new Error(`Solana public RPC ${method} failed`);
+}
+
+async function harvestSolanaRpcFallback(token) {
+  const mint = String(token.address || '');
+  if (!SOLANA.test(mint)) return [];
+  const start = Date.parse(token.listed_at || '') || 0;
+  const signatures = await solanaHistoryRpc('getSignaturesForAddress', [
+    mint,
+    { limit: 80 },
+    'confirmed'
+  ]).catch((error) => {
+    console.warn(`[auto-smart:solana-rpc-history] ${short(mint)} signatures ${error.message}`);
     return [];
   });
-  return extractSolanaWinnerBuyers(rows, token.address, 12);
+  if (!Array.isArray(signatures) || !signatures.length) return [];
+
+  const startSec = start > 0 ? Math.floor(start / 1000) : 0;
+  let selected = signatures.filter((row) => {
+    if (!startSec) return true;
+    const at = finite(row?.blockTime);
+    return at >= startSec && at <= startSec + 12 * 60;
+  });
+  if (!selected.length) selected = signatures.slice(-30);
+  selected = selected.sort((a, b) => finite(a?.blockTime) - finite(b?.blockTime)).slice(0, 30);
+
+  const transactions = [];
+  for (const row of selected) {
+    const tx = await solanaHistoryRpc('getTransaction', [
+      row.signature,
+      { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }
+    ]).catch(() => null);
+    if (tx) transactions.push({ ...tx, _signature: row.signature });
+    if (transactions.length >= 24) break;
+    await sleep(110);
+  }
+  const buyers = extractSolanaRpcWinnerBuyers(transactions, mint, 12);
+  if (buyers.length) {
+    console.log(`[auto-smart:solana-rpc-fallback] mint=${short(mint)} txs=${transactions.length} buyers=${buyers.length}`);
+  }
+  return buyers;
+}
+
+async function harvestSolana(token) {
+  if (!SOLANA.test(String(token.address || ''))) return [];
+  const start = Date.parse(token.listed_at || '') || 0;
+  let buyers = [];
+
+  if (env.heliusApiKey) {
+    const qs = new URLSearchParams({
+      'api-key': env.heliusApiKey,
+      type: 'SWAP',
+      limit: '100',
+      'sort-order': 'asc',
+      commitment: 'confirmed'
+    });
+    if (start > 0) {
+      qs.set('gte-time', String(Math.floor(start / 1000)));
+      qs.set('lte-time', String(Math.floor((start + 12 * 60_000) / 1000)));
+    }
+    const url = `https://api.helius.xyz/v0/addresses/${encodeURIComponent(token.address)}/transactions?${qs}`;
+    const rows = await fetchJson(url, { headers: { accept: 'application/json' } }, 8_000).catch((error) => {
+      console.warn(`[auto-smart:solana-history] ${short(token.address)} ${error.message}`);
+      return [];
+    });
+    buyers = extractSolanaWinnerBuyers(rows, token.address, 12);
+  }
+
+  if (buyers.length) return buyers;
+  return harvestSolanaRpcFallback(token);
 }
 
 async function harvestEvm(token, network) {
