@@ -340,7 +340,7 @@ class NewPoolDiscovery {
     return false;
   }
   async scan(config) {
-    if (!config.enabled) return;
+    if (!config.enabled || config.discoveryEnabled === false) return;
     const rows = await geckoNewPools(config.geckoNetwork);
     for (const row of rows) {
       const market = geckoPool(row, config.geckoNetwork);
@@ -536,18 +536,29 @@ class SolanaLaunchWorker {
   }
 }
 
-const evmConfigs = [
+export const evmConfigs = [
   {
     key: 'bnb', label: 'BNB CHAIN', dexChain: 'bsc', geckoNetwork: 'bsc',
     rpc: process.env.BNB_RPC_URL || 'https://bsc-dataseed.bnbchain.org',
     walletEnv: 'BNB_WALLETS', enabled: boolEnv('BNB_RADAR_ENABLED', true),
+    discoveryEnabled: boolEnv('BNB_MARKET_DISCOVERY_ENABLED', true),
     pollMs: 3_500, maxBlocks: 8, minGapMs: 700
   },
   {
     key: 'robinhood', label: 'ROBINHOOD CHAIN', dexChain: 'robinhood', geckoNetwork: 'robinhood',
     rpc: process.env.ROBINHOOD_RPC_URL || 'https://rpc.mainnet.chain.robinhood.com',
     walletEnv: 'ROBINHOOD_WALLETS', enabled: boolEnv('ROBINHOOD_RADAR_ENABLED', true),
+    discoveryEnabled: boolEnv('ROBINHOOD_MARKET_DISCOVERY_ENABLED', true),
     pollMs: 3_500, maxBlocks: 20, minGapMs: 800
+  },
+  {
+    key: 'arc', label: 'ARC', dexChain: 'arc', geckoNetwork: 'arc',
+    rpc: process.env.ARC_RPC_URL || process.env.TRENCHES_RPC_URL || 'https://rpc.mainnet.arc.io',
+    walletEnv: 'ARC_WALLETS', enabled: boolEnv('ARC_RADAR_ENABLED', true),
+    // Arc mainnet is new; wallet-driven tracking is on, while public new-pool indexing
+    // can be enabled separately once the selected market-data provider exposes it reliably.
+    discoveryEnabled: boolEnv('ARC_MARKET_DISCOVERY_ENABLED', false),
+    pollMs: 3_500, maxBlocks: 20, minGapMs: 700
   }
 ];
 

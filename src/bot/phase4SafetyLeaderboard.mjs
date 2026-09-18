@@ -183,31 +183,51 @@ async function supabaseRows(path) {
 }
 
 function configuredWallets() {
-  return String(process.env.TRENCHES_WALLETS || '').split(',').map((x) => x.trim()).filter(Boolean).map((entry, index) => {
-    const [a, b] = entry.includes('|') ? entry.split('|', 2) : entry.includes('=') ? entry.split('=', 2) : [entry, ''];
-    const re = /^0x[0-9a-fA-F]{40}$/;
-    const address = re.test(a) ? a.toLowerCase() : re.test(b) ? b.toLowerCase() : '';
-    const label = address === String(a).toLowerCase() ? (b || `wallet-${index + 1}`) : (a || `wallet-${index + 1}`);
-    return address ? { address, label: String(label).trim() } : null;
-  }).filter(Boolean);
+  const re = /^0x[0-9a-fA-F]{40}$/;
+  const sources = [
+    ['bsc', process.env.BNB_WALLETS || process.env.TRENCHES_WALLETS],
+    ['robinhood', process.env.ROBINHOOD_WALLETS || process.env.TRENCHES_WALLETS],
+    ['arc', process.env.ARC_WALLETS || process.env.TRENCHES_WALLETS]
+  ];
+  const rows = [];
+  for (const [network, raw] of sources) {
+    for (const [index, entry] of String(raw || '').split(',').map((x) => x.trim()).filter(Boolean).entries()) {
+      const [a, b] = entry.includes('|') ? entry.split('|', 2) : entry.includes('=') ? entry.split('=', 2) : [entry, ''];
+      const address = re.test(a) ? a.toLowerCase() : re.test(b) ? b.toLowerCase() : '';
+      const label = address === String(a).toLowerCase() ? (b || `wallet-${index + 1}`) : (a || `wallet-${index + 1}`);
+      if (address) rows.push({ network, address, label: String(label).trim() });
+    }
+  }
+  return rows;
+}
+
+function walletKey(network, address) {
+  const net = String(network || '').toLowerCase();
+  const raw = String(address || '').trim();
+  const normalized = net === 'solana' || net === 'sol' ? raw : raw.toLowerCase();
+  return { network: net || 'unknown', address: normalized, key: `${net || 'unknown'}:${normalized}` };
 }
 
 async function walletLeaderboard() {
-  const base = new Map(configuredWallets().map((w) => [w.address, { ...w, signals: 0, clusters: 0, paidUsd: 0, scoreSum: 0, riskSum: 0 }]));
-  const rows = await supabaseRows('signals?select=created_at,entry_score,risk_score,reason&order=created_at.desc&limit=250');
+  const base = new Map(configuredWallets().map((w) => {
+    const id = walletKey(w.network, w.address);
+    return [id.key, { ...w, network: id.network, address: id.address, signals: 0, clusters: 0, paidUsd: 0, scoreSum: 0, riskSum: 0 }];
+  }));
+  const rows = await supabaseRows('signals?select=created_at,entry_score,risk_score,reason,tokens(chain)&order=created_at.desc&limit=250');
   for (const signal of rows) {
     const wallets = Array.isArray(signal?.reason?.wallets) ? signal.reason.wallets : [];
     const clusterSize = finite(signal?.reason?.confirming_wallets, wallets.length);
+    const tokenChain = String(signal?.tokens?.chain || signal?.reason?.network || '').toLowerCase();
     for (const w of wallets) {
-      const address = String(w?.address ?? '').toLowerCase();
-      if (!address) continue;
-      const item = base.get(address) ?? { address, label: w?.label || short(address), signals: 0, clusters: 0, paidUsd: 0, scoreSum: 0, riskSum: 0 };
+      const id = walletKey(w?.network || tokenChain, w?.address);
+      if (!id.address) continue;
+      const item = base.get(id.key) ?? { network: id.network, address: id.address, label: w?.label || short(id.address), signals: 0, clusters: 0, paidUsd: 0, scoreSum: 0, riskSum: 0 };
       item.signals += 1;
       if (clusterSize >= 2) item.clusters += 1;
       item.paidUsd += finite(w?.paid_usd);
       item.scoreSum += finite(signal?.entry_score);
       item.riskSum += finite(signal?.risk_score);
-      base.set(address, item);
+      base.set(id.key, item);
     }
   }
   const ranked = [...base.values()].map((w) => {
@@ -218,7 +238,7 @@ async function walletLeaderboard() {
   }).sort((a, b) => b.evidence - a.evidence || b.signals - a.signals);
   const lines = ['🧠 SMART-WALLET LEADERBOARD', '', 'الترتيب هنا Evidence Score فقط — ليس Win Rate أو ROI إلا بعد وجود نتائج أسعار كافية.', ''];
   for (const [i, w] of ranked.slice(0, 10).entries()) {
-    lines.push(`${i + 1}. ${w.label} • ${w.evidence}/100`, `   signals ${w.signals} | clusters ${w.clusters} | verified flow ${money(w.paidUsd)} | avg entry ${w.avgEntry.toFixed(0)}`);
+    lines.push(`${i + 1}. [${String(w.network || 'unknown').toUpperCase()}] ${w.label} • ${w.evidence}/100`, `   signals ${w.signals} | clusters ${w.clusters} | verified flow ${money(w.paidUsd)} | avg entry ${w.avgEntry.toFixed(0)}`);
   }
   if (!ranked.length) lines.push('لا توجد أدلة كافية حتى الآن.');
   lines.push('', '📈 Performance/ROI ranking سيُفعل تلقائيًا فقط عندما تتوفر عينات نتائج موثوقة كافية.');
