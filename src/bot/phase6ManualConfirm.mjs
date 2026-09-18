@@ -110,8 +110,8 @@ function routeNames(quote) {
 
 function gateText() {
   const gate = manualLiveGate();
-  if (gate.liveEnabled && gate.manualArmed) return '🟢 LIVE MANUAL GATE: ARMED';
-  if (!gate.liveEnabled && !gate.manualArmed) return '🔒 LIVE broadcast OFF + manual gate disarmed';
+  if (gate.liveEnabled && gate.manualArmed) return '🟢 بوابة التداول الحقيقي اليدوي: مفعّلة';
+  if (!gate.liveEnabled && !gate.manualArmed) return '🔒 إرسال التداول الحقيقي متوقف والبوابة اليدوية غير مفعّلة';
   if (!gate.liveEnabled) return '🔒 LIVE_TRADING_ENABLED=false';
   return '🔒 MANUAL_TRADING_ARMED=false';
 }
@@ -125,16 +125,16 @@ function existingIntentResult(row) {
   const canConfirm = row?.status === 'awaiting_confirm' && (!row.confirmation_expires_at || Date.parse(row.confirmation_expires_at) > Date.now());
   return {
     text: [
-      '🧷 MANUAL EXECUTION INTENT موجود بالفعل', '',
+      '🧷 طلب تنفيذ يدوي موجود بالفعل', '',
       `${String(row?.side || '').toUpperCase()} • ${short(row?.token_address)}`,
-      `Status: ${row?.status}`,
-      `Request: ${short(row?.request_id)}`,
+      `الحالة: ${row?.status}`,
+      `رقم الطلب: ${short(row?.request_id)}`,
       '',
       'تم منع إنشاء Intent مكرر لنفس العقد والاتجاه خلال النافذة القصيرة.'
     ].join('\n'),
     keyboard: canConfirm
       ? [[{ text: '✅ متابعة التأكيد', callback_data: `p6:c:${row.request_id}` }, { text: '❌ إلغاء', callback_data: `p6:x:${row.request_id}` }]]
-      : [[{ text: '📜 Audit', callback_data: 'p6:a' }]]
+      : [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]]
   };
 }
 
@@ -147,7 +147,7 @@ async function createBlockedAudit({ address, side, amountNative = null, payload 
 }
 
 async function prepareBuy(amountSol, address) {
-  if (!store.enabled) return { text: '❌ Execution Audit store غير متاح؛ تم إيقاف المسار الحقيقي للحماية.', keyboard: [] };
+  if (!store.enabled) return { text: '❌ سجل التنفيذ غير متاح؛ تم إيقاف التداول الحقيقي للحماية.', keyboard: [] };
   const amount = finite(amountSol);
   const caps = manualTradeCaps();
   const executionWallet = await getActiveTradingWallet();
@@ -156,7 +156,7 @@ async function prepareBuy(amountSol, address) {
   }
   if (!isTerminalAddress('sol', address) || !(amount > 0) || amount > caps.maxBuySol) {
     await createBlockedAudit({ address, side: 'buy', amountNative: amount || null, error: 'amount/address outside manual caps' });
-    return { text: `❌ الصفقة خارج حدود الحماية. Max Buy = ${caps.maxBuySol.toFixed(4)} SOL`, keyboard: [] };
+    return { text: `❌ الصفقة خارج حدود الحماية. الحد الأقصى للشراء = ${caps.maxBuySol.toFixed(4)} SOL`, keyboard: [] };
   }
   const duplicate = await activeDuplicate(address, 'buy');
   if (duplicate) return existingIntentResult(duplicate);
@@ -167,7 +167,7 @@ async function prepareBuy(amountSol, address) {
   const outAmount = String(quote?.outAmount || '0');
   if (!/^\d+$/.test(outAmount) || BigInt(outAmount) <= 0n || impact > caps.maxPriceImpactPct) {
     await createBlockedAudit({ address, side: 'buy', amountNative: amount, payload: { priceImpactPct: impact }, error: 'quote failed safety caps' });
-    return { text: `⛔ تم رفض Live Buy قبل التأكيد. Price impact ${impact.toFixed(3)}% / cap ${caps.maxPriceImpactPct.toFixed(2)}%`, keyboard: [] };
+    return { text: `⛔ تم رفض الشراء الحقيقي قبل التأكيد. تأثير السعر ${impact.toFixed(3)}% / cap ${caps.maxPriceImpactPct.toFixed(2)}%`, keyboard: [] };
   }
 
   const requestId = crypto.randomUUID();
@@ -188,28 +188,28 @@ async function prepareBuy(amountSol, address) {
   const live = manualLiveGate().liveEnabled && manualLiveGate().manualArmed;
   return {
     text: [
-      '🔐 MANUAL LIVE BUY — FINAL PREVIEW', '',
+      '🔐 شراء حقيقي يدوي — المعاينة النهائية', '',
       `${market ? `$${market.symbol}` : 'TOKEN'} • SOLANA`,
-      `Amount: ${amount.toFixed(4)} SOL`,
-      `Wallet: ${executionWallet.label} • ${short(executionWallet.address)}`,
+      `المبلغ: ${amount.toFixed(4)} SOL`,
+      `المحفظة: ${executionWallet.label} • ${short(executionWallet.address)}`,
       `Liquidity: ${market?.liquidityUsd ? money(market.liquidityUsd) : '—'}`,
-      `Price impact: ${impact.toFixed(3)}% / cap ${caps.maxPriceImpactPct.toFixed(2)}%`,
-      `Slippage cap: ${(caps.maxSlippageBps / 100).toFixed(2)}%`,
-      `Route: ${routeNames(quote).join(' → ') || 'Jupiter route'}`,
-      `Expires: ${Math.round(caps.confirmTtlMs / 1000)}s`,
+      `تأثير السعر: ${impact.toFixed(3)}% / cap ${caps.maxPriceImpactPct.toFixed(2)}%`,
+      `حد الانزلاق: ${(caps.maxSlippageBps / 100).toFixed(2)}%`,
+      `Route: ${routeNames(quote).join(' → ') || 'مسار Jupiter'}`,
+      `تنتهي المهلة خلال: ${Math.round(caps.confirmTtlMs / 1000)}s`,
       '', gateText(),
-      live ? '⚠️ الضغط على Confirm سيوقع ويرسل صفقة حقيقية مرة واحدة فقط.' : '🧪 الضغط على الزر سيختبر قفل التأكيد فقط؛ لن تُرسل أموال لأن البث مقفول.',
-      `Request: ${short(requestId)}`
+      live ? '⚠️ الضغط على «تأكيد» سيوقع ويرسل صفقة حقيقية مرة واحدة فقط.' : '🧪 الضغط على الزر سيختبر قفل التأكيد فقط؛ لن تُرسل أموال لأن البث مقفول.',
+      `رقم الطلب: ${short(requestId)}`
     ].join('\n'),
     keyboard: [[
-      { text: live ? '⚠️ CONFIRM LIVE BUY' : '🔒 اختبار التأكيد', callback_data: `p6:c:${requestId}` },
+      { text: live ? '⚠️ تأكيد الشراء الحقيقي' : '🔒 اختبار التأكيد', callback_data: `p6:c:${requestId}` },
       { text: '❌ إلغاء', callback_data: `p6:x:${requestId}` }
     ]]
   };
 }
 
 async function prepareSell(percent, address) {
-  if (!store.enabled) return { text: '❌ Execution Audit store غير متاح؛ تم إيقاف المسار الحقيقي للحماية.', keyboard: [] };
+  if (!store.enabled) return { text: '❌ سجل التنفيذ غير متاح؛ تم إيقاف التداول الحقيقي للحماية.', keyboard: [] };
   const pct = Math.max(1, Math.min(100, Math.round(finite(percent))));
   const executionWallet = await getActiveTradingWallet();
   if (!executionWallet?.id || !isTerminalAddress('sol', executionWallet?.address)) {
@@ -231,7 +231,7 @@ async function prepareSell(percent, address) {
   const impact = quoteImpactPct(quote);
   if (impact > caps.maxPriceImpactPct) {
     await createBlockedAudit({ address, side: 'sell', payload: { sellPct: pct, priceImpactPct: impact }, error: 'sell quote exceeds impact cap' });
-    return { text: `⛔ تم رفض Live Sell. Price impact ${impact.toFixed(3)}% أعلى من cap ${caps.maxPriceImpactPct.toFixed(2)}%`, keyboard: [] };
+    return { text: `⛔ تم رفض البيع الحقيقي. تأثير السعر ${impact.toFixed(3)}% أعلى من الحد ${caps.maxPriceImpactPct.toFixed(2)}%`, keyboard: [] };
   }
   const outLamports = /^\d+$/.test(String(quote?.outAmount || '')) ? BigInt(String(quote.outAmount)) : 0n;
   const requestId = crypto.randomUUID();
@@ -251,19 +251,19 @@ async function prepareSell(percent, address) {
   const live = manualLiveGate().liveEnabled && manualLiveGate().manualArmed;
   return {
     text: [
-      '🔐 MANUAL LIVE SELL — FINAL PREVIEW', '',
+      '🔐 بيع حقيقي يدوي — المعاينة النهائية', '',
       `${market ? `$${market.symbol}` : 'TOKEN'} • SOLANA`,
-      `Sell: ${pct}% من الرصيد الفعلي`,
-      `Wallet: ${executionWallet.label} • ${short(executionWallet.address)}`,
-      `Estimated output: ${(Number(outLamports) / 1e9).toFixed(6)} SOL`,
-      `Price impact: ${impact.toFixed(3)}% / cap ${caps.maxPriceImpactPct.toFixed(2)}%`,
-      `Slippage cap: ${(caps.maxSlippageBps / 100).toFixed(2)}%`,
-      `Expires: ${Math.round(caps.confirmTtlMs / 1000)}s`, '', gateText(),
-      live ? '⚠️ Confirm سيوقع ويرسل البيع الحقيقي مرة واحدة فقط.' : '🧪 البث مقفول؛ زر التأكيد يختبر الحماية ولن يرسل صفقة.',
-      `Request: ${short(requestId)}`
+      `البيع: ${pct}% من الرصيد الفعلي`,
+      `المحفظة: ${executionWallet.label} • ${short(executionWallet.address)}`,
+      `المبلغ المتوقع استلامه: ${(Number(outLamports) / 1e9).toFixed(6)} SOL`,
+      `تأثير السعر: ${impact.toFixed(3)}% / cap ${caps.maxPriceImpactPct.toFixed(2)}%`,
+      `حد الانزلاق: ${(caps.maxSlippageBps / 100).toFixed(2)}%`,
+      `تنتهي المهلة خلال: ${Math.round(caps.confirmTtlMs / 1000)}s`, '', gateText(),
+      live ? '⚠️ «تأكيد» سيوقع ويرسل البيع الحقيقي مرة واحدة فقط.' : '🧪 البث مقفول؛ زر التأكيد يختبر الحماية ولن يرسل صفقة.',
+      `رقم الطلب: ${short(requestId)}`
     ].join('\n'),
     keyboard: [[
-      { text: live ? '⚠️ CONFIRM LIVE SELL' : '🔒 اختبار التأكيد', callback_data: `p6:c:${requestId}` },
+      { text: live ? '⚠️ تأكيد البيع الحقيقي' : '🔒 اختبار التأكيد', callback_data: `p6:c:${requestId}` },
       { text: '❌ إلغاء', callback_data: `p6:x:${requestId}` }
     ]]
   };
@@ -392,52 +392,52 @@ async function recordSuccessfulTrade(row, execution) {
 }
 
 async function confirmIntent(requestId) {
-  if (!store.enabled) return { text: '❌ Audit/idempotency store غير متاح؛ التنفيذ موقوف.', keyboard: [] };
+  if (!store.enabled) return { text: '❌ سجل التنفيذ ومنع التكرار غير متاح؛ التنفيذ موقوف.', keyboard: [] };
   const row = await store.getAudit(requestId);
-  if (!row) return { text: '❌ Request غير موجود.', keyboard: [] };
+  if (!row) return { text: '❌ الطلب غير موجود.', keyboard: [] };
   if (row.status !== 'awaiting_confirm') {
-    return { text: `🧷 لم يتم التنفيذ. Request status = ${row.status}\n\nنفس Request لا يمكن تنفيذه مرتين.`, keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]] };
+    return { text: `🧷 لم يتم التنفيذ. حالة الطلب = ${row.status}\n\nنفس Request لا يمكن تنفيذه مرتين.`, keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]] };
   }
   if (row.confirmation_expires_at && Date.parse(row.confirmation_expires_at) <= Date.now()) {
     await store.transitionAudit(requestId, 'awaiting_confirm', 'expired', { error: 'confirmation TTL expired' });
-    return { text: '⌛ انتهت مهلة التأكيد. أنشئ Preview جديدًا للحصول على Quote حديث.', keyboard: [] };
+    return { text: '⌛ انتهت مهلة التأكيد. أنشئ معاينة جديدة للحصول على سعر حديث.', keyboard: [] };
   }
 
   const claimed = await store.transitionAudit(requestId, 'awaiting_confirm', 'confirmed', { payload: { ...(row.payload || {}), confirmedAt: isoNow() } });
-  if (!claimed) return { text: '🧷 تم استهلاك هذا التأكيد بالفعل أو تغيّرت حالته. لم تُرسل صفقة أخرى.', keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]] };
+  if (!claimed) return { text: '🧷 تم استهلاك هذا التأكيد بالفعل أو تغيّرت حالته. لم تُرسل صفقة أخرى.', keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]] };
 
   const gate = manualLiveGate();
   if (!gate.liveEnabled || !gate.manualArmed) {
     await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: !gate.liveEnabled ? 'LIVE_TRADING_ENABLED=false' : 'MANUAL_TRADING_ARMED=false' });
     return {
-      text: ['🔒 MANUAL CONFIRM GUARD — PASSED', '', 'تم استهلاك Request مرة واحدة ومنع التكرار بنجاح.', gateText(), '✅ لم يتم توقيع أو إرسال أي معاملة.'].join('\n'),
-      keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]]
+      text: ['🔒 تم اجتياز بوابة التأكيد اليدوي', '', 'تم استهلاك Request مرة واحدة ومنع التكرار بنجاح.', gateText(), '✅ لم يتم توقيع أو إرسال أي معاملة.'].join('\n'),
+      keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]]
     };
   }
   if (row.network !== 'sol') {
     await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: 'No production EVM signer/router configured' });
-    return { text: '🔒 التنفيذ الحقيقي لهذه الشبكة غير متصل بـ signer/router إنتاجي.', keyboard: [] };
+    return { text: '🔒 التنفيذ الحقيقي لهذه الشبكة غير متصل بنظام توقيع ومسار إنتاجي.', keyboard: [] };
   }
 
   const caps = manualTradeCaps();
   const executionWallet = auditExecutionWallet(row);
   if (!executionWallet?.id || !isTerminalAddress('sol', executionWallet?.address)) {
     await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: 'execution wallet missing from audit intent' });
-    return { text: '⛔ محفظة التنفيذ المرتبطة بالـPreview غير متاحة؛ تم إيقاف الصفقة.', keyboard: [] };
+    return { text: '⛔ محفظة التنفيذ المرتبطة بالمعاينة غير متاحة؛ تم إيقاف الصفقة.', keyboard: [] };
   }
   const inputMint = String(row.payload?.inputMint || '');
   const outputMint = String(row.payload?.outputMint || '');
   const amountAtomic = String(row.payload?.amountAtomic || '');
   if (!/^\d+$/.test(amountAtomic) || BigInt(amountAtomic) <= 0n) {
     await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: 'invalid atomic amount' });
-    return { text: '⛔ Atomic amount غير صالح؛ أوقفت الصفقة.', keyboard: [] };
+    return { text: '⛔ قيمة التنفيذ غير صالحة؛ تم إيقاف الصفقة.', keyboard: [] };
   }
 
   const freshQuote = await jupiterQuote(inputMint, outputMint, amountAtomic, caps.maxSlippageBps);
   const impact = quoteImpactPct(freshQuote);
   if (impact > caps.maxPriceImpactPct) {
     await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: `fresh price impact ${impact}% exceeds cap`, price_impact_pct: impact });
-    return { text: `⛔ تغيّر السوق قبل التنفيذ. Fresh price impact ${impact.toFixed(3)}% > cap ${caps.maxPriceImpactPct.toFixed(2)}%.`, keyboard: [] };
+    return { text: `⛔ تغيّر السوق قبل التنفيذ. تأثير السعر الجديد ${impact.toFixed(3)}% > cap ${caps.maxPriceImpactPct.toFixed(2)}%.`, keyboard: [] };
   }
 
   if (row.side === 'buy') {
@@ -459,7 +459,7 @@ async function confirmIntent(requestId) {
   const client = new JupiterSwapClient({ apiKey: env.jupiterApiKey, wallet });
   if (!client.configured) {
     await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: 'Privy/Jupiter client not configured' });
-    return { text: '🔒 Privy/Jupiter غير مكتمل الإعداد؛ لم يتم توقيع شيء.', keyboard: [] };
+    return { text: '🔒 إعداد Privy/Jupiter غير مكتمل؛ لم يتم توقيع شيء.', keyboard: [] };
   }
 
   let broadcasting = false;
@@ -468,13 +468,13 @@ async function confirmIntent(requestId) {
     const feeBps = finite(order?.feeBps);
     if (feeBps > caps.maxFeeBps) {
       await store.transitionAudit(requestId, 'confirmed', 'blocked', { error: `router fee ${feeBps}bps exceeds cap`, payload: { ...(claimed.payload || {}), feeBps } });
-      return { text: `⛔ Router fee ${feeBps} bps أعلى من cap ${caps.maxFeeBps} bps.`, keyboard: [] };
+      return { text: `⛔ رسوم المسار ${feeBps} bps أعلى من الحد ${caps.maxFeeBps} bps.`, keyboard: [] };
     }
     const locked = await store.transitionAudit(requestId, 'confirmed', 'broadcasting', {
       price_impact_pct: impact,
       payload: { ...(claimed.payload || {}), freshQuoteOutAtomic: String(freshQuote?.outAmount || ''), feeBps, router: order?.router || null, executionStartedAt: isoNow() }
     });
-    if (!locked) return { text: '🧷 لم أحصل على execution lock؛ لم يتم إرسال الصفقة.', keyboard: [] };
+    if (!locked) return { text: '🧷 لم يتم الحصول على قفل التنفيذ؛ لم يتم إرسال الصفقة.', keyboard: [] };
     broadcasting = true;
     const execution = await client.executeOrder(order);
     await store.updateAudit(requestId, {
@@ -484,13 +484,13 @@ async function confirmIntent(requestId) {
     await recordSuccessfulTrade({ ...row, payload: locked.payload || row.payload }, execution);
     return {
       text: [
-        '✅ LIVE MANUAL TRADE EXECUTED', '',
+        '✅ تم تنفيذ الصفقة الحقيقية اليدوية', '',
         `${row.side.toUpperCase()} • SOLANA • ${short(row.token_address)}`,
-        `TX: ${execution.signature}`,
-        '✅ Request idempotency lock consumed — نفس الطلب لن يُنفذ مرة ثانية.',
-        '', '⚠️ هذه صفقة حقيقية تمت فقط بعد Manual Confirm.'
+        `المعاملة: ${execution.signature}`,
+        '✅ تم استهلاك قفل منع التكرار — لن يُنفذ نفس الطلب مرة ثانية.',
+        '', '⚠️ هذه صفقة حقيقية تمت فقط بعد التأكيد اليدوي.'
       ].join('\n'),
-      keyboard: [[{ text: '🔎 Solscan TX', url: `https://solscan.io/tx/${encodeURIComponent(execution.signature)}` }, { text: '📜 Audit', callback_data: 'p6:a' }]]
+      keyboard: [[{ text: '🔎 عرض المعاملة في Solscan', url: `https://solscan.io/tx/${encodeURIComponent(execution.signature)}` }, { text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]]
     };
   } catch (error) {
     const message = String(error?.message ?? error).slice(0, 300);
@@ -500,48 +500,48 @@ async function confirmIntent(requestId) {
     }).catch(() => {});
     return {
       text: [
-        '❌ LIVE MANUAL EXECUTION FAILED', '',
+        '❌ فشل التنفيذ الحقيقي اليدوي', '',
         message,
-        broadcasting ? '⚠️ الخطأ حصل بعد دخول مرحلة broadcast. لا تعِد المحاولة تلقائيًا؛ افحص السلسلة/Audit أولًا لتجنب صفقة مكررة.' : '✅ لم ندخل مرحلة broadcast؛ لا يوجد retry تلقائي.',
-        `Request: ${short(requestId)}`
+        broadcasting ? '⚠️ حدث الخطأ بعد بدء الإرسال. لا تعِد المحاولة تلقائيًا؛ افحص السلسلة وسجل التنفيذ أولًا لتجنب صفقة مكررة.' : '✅ لم نبدأ الإرسال؛ لا توجد إعادة محاولة تلقائية.',
+        `رقم الطلب: ${short(requestId)}`
       ].join('\n'),
-      keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]]
+      keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]]
     };
   }
 }
 
 async function cancelIntent(requestId) {
-  if (!store.enabled) return { text: '❌ Audit store غير متاح.', keyboard: [] };
+  if (!store.enabled) return { text: '❌ سجل التنفيذ غير متاح.', keyboard: [] };
   const row = await store.transitionAudit(requestId, 'awaiting_confirm', 'cancelled', { error: 'cancelled by owner' });
   return row
-    ? { text: '✅ تم إلغاء Request. لن يمكن تنفيذه لاحقًا.', keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]] }
-    : { text: 'ℹ️ لم يتم الإلغاء لأن Request لم يعد في حالة awaiting_confirm.', keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]] };
+    ? { text: '✅ تم إلغاء الطلب ولن يمكن تنفيذه لاحقًا.', keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]] }
+    : { text: 'ℹ️ لم يتم الإلغاء لأن الطلب لم يعد في حالة انتظار التأكيد.', keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]] };
 }
 
 async function auditView() {
-  if (!store.enabled) return { text: '❌ Audit store غير متاح.', keyboard: [] };
+  if (!store.enabled) return { text: '❌ سجل التنفيذ غير متاح.', keyboard: [] };
   const rows = await store.recentAudits(10).catch(() => []);
-  const lines = ['📜 SUMMECA EXECUTION AUDIT', ''];
+  const lines = ['📜 سجل تنفيذ SUMMECA', ''];
   if (!rows.length) lines.push('لا توجد محاولات تنفيذ مسجلة بعد.');
   for (const row of rows) {
     const icon = row.status === 'succeeded' ? '✅' : row.status === 'broadcasting' ? '📡' : row.status === 'failed' ? '❌' : row.status === 'blocked' ? '🔒' : '•';
     lines.push(`${icon} ${row.side?.toUpperCase()} ${row.network?.toUpperCase()} ${short(row.token_address)} — ${row.status}`);
     lines.push(`  ${short(row.request_id)}${row.tx_hash ? ` • TX ${short(row.tx_hash)}` : ''}`);
   }
-  lines.push('', 'Audit لا يحتوي مفاتيح خاصة أو Secrets.');
+  lines.push('', 'سجل التنفيذ لا يحتوي مفاتيح خاصة أو أسرارًا.');
   return { text: lines.join('\n'), keyboard: [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]] };
 }
 
 async function liveReadiness() {
   const gate = manualLiveGate();
   if (gate.liveEnabled) {
-    return { text: `🧪 Live readiness smoke read-only يتطلب LIVE_TRADING_ENABLED=false.\n\n${gateText()}`, keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]] };
+    return { text: `🧪 Live readiness smoke read-only يتطلب LIVE_TRADING_ENABLED=false.\n\n${gateText()}`, keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]] };
   }
   try {
     await runLiveConfigSmoke(env);
-    return { text: ['✅ LIVE CONFIG READ-ONLY CHECK PASSED', '', 'Privy wallet + authorization key + Solana balance read + Jupiter quote تم التحقق منها بدون توقيع أو إرسال معاملة.', gateText()].join('\n'), keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]] };
+    return { text: ['✅ نجح فحص جاهزية التداول الحقيقي للقراءة فقط', '', 'تم التحقق من محفظة Privy وصلاحية التفويض ورصيد Solana وعرض Jupiter بدون توقيع أو إرسال معاملة.', gateText()].join('\n'), keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]] };
   } catch (error) {
-    return { text: `❌ Live readiness check failed:\n${String(error?.message ?? error).slice(0, 240)}\n\nلم يتم توقيع أو إرسال أي معاملة.`, keyboard: [] };
+    return { text: `❌ فشل فحص جاهزية التداول الحقيقي:\n${String(error?.message ?? error).slice(0, 240)}\n\nلم يتم توقيع أو إرسال أي معاملة.`, keyboard: [] };
   }
 }
 
@@ -568,10 +568,10 @@ export function installPhase6ManualConfirm() {
       const has = result.keyboard.some((row) => row.some((button) => String(button?.callback_data || '').startsWith('p6:')));
       if (!has) {
         if (key === 'sol') result.keyboard.push([
-          { text: '🔐 Manual Live Buy', callback_data: `p6:b:sol:${address}` },
-          { text: '🔐 Manual Live Sell', callback_data: `p6:s:sol:${address}` }
+          { text: '🔐 شراء حقيقي يدوي', callback_data: `p6:b:sol:${address}` },
+          { text: '🔐 بيع حقيقي يدوي', callback_data: `p6:s:sol:${address}` }
         ]);
-        else result.keyboard.push([{ text: '🔒 EVM Live signer غير متصل', callback_data: `p6:u:${key}` }]);
+        else result.keyboard.push([{ text: '🔒 التوقيع الحقيقي على EVM غير متصل', callback_data: `p6:u:${key}` }]);
       }
     }
     return result;
@@ -582,7 +582,7 @@ export function installPhase6ManualConfirm() {
     const result = await previousBuyPreview.call(this, network, address);
     const key = normalizeTerminalNetwork(network);
     if (key === 'sol' && result?.keyboard && isTerminalAddress(key, address)) {
-      result.keyboard.push([{ text: '🔐 فتح Manual Live Buy', callback_data: `p6:b:sol:${address}` }]);
+      result.keyboard.push([{ text: '🔐 فتح الشراء الحقيقي اليدوي', callback_data: `p6:b:sol:${address}` }]);
     }
     return result;
   };
@@ -595,23 +595,23 @@ export function installPhase6ManualConfirm() {
     try {
       if (parts[1] === 'b' && parts[2] === 'sol' && parts.length >= 4) {
         const address = parts.slice(3).join(':');
-        return { handled: true, text: ['🔐 MANUAL LIVE BUY', '', `SOLANA • ${short(address)}`, `Max buy: ${manualTradeCaps().maxBuySol.toFixed(4)} SOL`, `Price-impact cap: ${manualTradeCaps().maxPriceImpactPct.toFixed(2)}%`, `Slippage cap: ${(manualTradeCaps().maxSlippageBps / 100).toFixed(2)}%`, '', gateText(), 'اختر الحجم. سيتم أخذ Quote جديد قبل زر التأكيد النهائي.'].join('\n'), keyboard: buySizeKeyboard(address) };
+        return { handled: true, text: ['🔐 الشراء الحقيقي اليدوي', '', `SOLANA • ${short(address)}`, `الحد الأقصى للشراء: ${manualTradeCaps().maxBuySol.toFixed(4)} SOL`, `حد تأثير السعر: ${manualTradeCaps().maxPriceImpactPct.toFixed(2)}%`, `حد الانزلاق: ${(manualTradeCaps().maxSlippageBps / 100).toFixed(2)}%`, '', gateText(), 'اختر الحجم. سيتم أخذ Quote جديد قبل زر التأكيد النهائي.'].join('\n'), keyboard: buySizeKeyboard(address) };
       }
       if (parts[1] === 'bp' && parts.length >= 5) return { handled: true, ...(await prepareBuy(parts[2], parts.slice(4).join(':'))) };
       if (parts[1] === 's' && parts[2] === 'sol' && parts.length >= 4) {
         const address = parts.slice(3).join(':');
-        return { handled: true, text: `🔐 MANUAL LIVE SELL\n\nSOLANA • ${short(address)}\nاختر نسبة البيع من الرصيد الفعلي. سيتم أخذ Quote جديد قبل التأكيد.\n\n${gateText()}`, keyboard: [[25, 50, 100].map((p) => ({ text: `${p}%`, callback_data: `p6:sp:${p}:sol:${address}` }))] };
+        return { handled: true, text: `🔐 البيع الحقيقي اليدوي\n\nSOLANA • ${short(address)}\nاختر نسبة البيع من الرصيد الفعلي. سيتم أخذ Quote جديد قبل التأكيد.\n\n${gateText()}`, keyboard: [[25, 50, 100].map((p) => ({ text: `${p}%`, callback_data: `p6:sp:${p}:sol:${address}` }))] };
       }
       if (parts[1] === 'sp' && parts.length >= 5) return { handled: true, ...(await prepareSell(parts[2], parts.slice(4).join(':'))) };
       if (parts[1] === 'c' && parts[2]) return { handled: true, ...(await confirmIntent(parts[2])) };
       if (parts[1] === 'x' && parts[2]) return { handled: true, ...(await cancelIntent(parts[2])) };
       if (parts[1] === 'a') return { handled: true, ...(await auditView()) };
       if (parts[1] === 'r') return { handled: true, ...(await liveReadiness()) };
-      if (parts[1] === 'u') return { handled: true, text: '🔒 Arc / BNB / Robinhood: التحليل وPreflight جاهزان، لكن لا يوجد signer/router إنتاجي متصل بهذه الشبكات بعد. لن يتم استخدام مسار Solana لتوقيع EVM.', keyboard: [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]] };
+      if (parts[1] === 'u') return { handled: true, text: '🔒 Arc وBNB وRobinhood: التحليل وفحص ما قبل التنفيذ جاهزان، لكن التوقيع والتنفيذ الحقيقي غير متصلين لهذه الشبكات بعد.', keyboard: [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]] };
     } catch (error) {
-      return { handled: true, text: `❌ Phase 6 error: ${String(error?.message ?? error).slice(0, 220)}`, keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]] };
+      return { handled: true, text: `❌ خطأ في التداول الحقيقي: ${String(error?.message ?? error).slice(0, 220)}`, keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]] };
     }
-    return { handled: true, text: 'ℹ️ أمر Phase 6 غير معروف.', keyboard: [] };
+    return { handled: true, text: 'ℹ️ أمر غير معروف في التداول الحقيقي.', keyboard: [] };
   };
 
   const gate = manualLiveGate();
