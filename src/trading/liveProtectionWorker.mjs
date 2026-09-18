@@ -121,6 +121,7 @@ export class LiveProtectionEngine {
     this.lastRecoveryScanAt = 0;
     this.appSettings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
     this.stopLadderConfig = normalizeStopLadderConfig(DEFAULT_STOP_LADDER_CONFIG);
+    this.manualStopLadderConfigured = false;
     this.lastStopLadderRefreshAt = 0;
     this.running = false;
     this.timer = null;
@@ -139,6 +140,7 @@ export class LiveProtectionEngine {
     if (this.now() - this.lastStopLadderRefreshAt < 10_000) return this.stopLadderConfig;
     this.lastStopLadderRefreshAt = this.now();
     const raw = await this.appSettings.get(STOP_LADDER_KEY).catch(() => '');
+    this.manualStopLadderConfigured = Boolean(String(raw || '').trim());
     this.stopLadderConfig = normalizeStopLadderConfig(raw || DEFAULT_STOP_LADDER_CONFIG);
     return this.stopLadderConfig;
   }
@@ -475,7 +477,8 @@ export class LiveProtectionEngine {
     }, {
       ...this.settings,
       stopLossPct: ladderConfig.initialStopLossPct,
-      stopLadder: ladderConfig.levels
+      stopLadder: ladderConfig.levels,
+      manualStopLadder: this.manualStopLadderConfigured
     });
     const nextStopReason = state.stopReason === 'hold-stop'
       ? (trade.stop_reason || 'initial-stop')
