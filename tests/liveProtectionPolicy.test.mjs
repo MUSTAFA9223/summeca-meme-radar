@@ -92,6 +92,7 @@ test('profit lock and tighter trailing raise the floor progressively', () => {
 test('manual stop ladder locks +50% after +100% and +200% after +300%', () => {
   const ladderSettings = {
     ...settings,
+    manualStopLadder: true,
     stopLadder: [
       { triggerPct: 100, stopPct: 50 },
       { triggerPct: 300, stopPct: 200 }
@@ -105,7 +106,7 @@ test('manual stop ladder locks +50% after +100% and +200% after +300%', () => {
     previousHighWaterPnlPct: 0,
     previousCurrentStop: -15
   }, ladderSettings);
-  assert.ok(at100.currentStop >= 50);
+  assert.equal(at100.currentStop, 50);
 
   const at300 = advanceProtectionState({
     entryPriceUsd: 1,
@@ -114,7 +115,7 @@ test('manual stop ladder locks +50% after +100% and +200% after +300%', () => {
     previousHighWaterPnlPct: at100.highWaterPnlPct,
     previousCurrentStop: at100.currentStop
   }, ladderSettings);
-  assert.ok(at300.currentStop >= 200);
+  assert.equal(at300.currentStop, 200);
 
   const retrace = advanceProtectionState({
     entryPriceUsd: 1,
