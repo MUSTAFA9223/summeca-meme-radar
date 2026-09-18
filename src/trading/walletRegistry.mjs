@@ -23,7 +23,7 @@ function defaultWallet() {
   return {
     id: String(env.privyWalletId),
     address: String(env.privyWalletAddress),
-    label: 'SUMMECA Primary',
+    label: 'محفظة SUMMECA الرئيسية',
     source: 'env',
     createdAt: null
   };
@@ -36,18 +36,18 @@ async function storedWallets() {
     .map((row) => ({
       id: String(row.id),
       address: String(row.address),
-      label: String(row.label || 'SUMMECA Wallet').slice(0, 80),
+      label: String(row.label || 'محفظة SUMMECA').slice(0, 80),
       source: 'privy',
       createdAt: row.createdAt || null
     }));
 }
 
 async function saveStoredWallets(rows) {
-  if (!settings.enabled) throw new Error('App settings store is required for dynamic wallets');
+  if (!settings.enabled) throw new Error('مخزن إعدادات التطبيق مطلوب لإدارة المحافظ');
   const safe = (Array.isArray(rows) ? rows : []).slice(0, 12).map((row) => ({
     id: String(row.id),
     address: String(row.address),
-    label: String(row.label || 'SUMMECA Wallet').slice(0, 80),
+    label: String(row.label || 'محفظة SUMMECA').slice(0, 80),
     createdAt: row.createdAt || new Date().toISOString()
   }));
   await settings.set(WALLETS_KEY, JSON.stringify(safe));
@@ -71,18 +71,18 @@ export async function getActiveTradingWallet() {
 export async function setActiveTradingWallet(walletId) {
   const wallets = await listTradingWallets();
   const wallet = wallets.find((row) => row.id === String(walletId || ''));
-  if (!wallet) throw new Error('Trading wallet was not found');
+  if (!wallet) throw new Error('لم يتم العثور على محفظة التداول');
   if (!settings.enabled) {
-    if (wallet.source !== 'env') throw new Error('App settings store is required for dynamic wallets');
+    if (wallet.source !== 'env') throw new Error('مخزن إعدادات التطبيق مطلوب لإدارة المحافظ');
     return wallet;
   }
   await settings.set(ACTIVE_KEY, wallet.id);
   return wallet;
 }
 
-export async function createPrivyTradingWallet({ label = 'SUMMECA Trading Wallet' } = {}) {
-  if (!env.privyAppId || !env.privyAppSecret) throw new Error('Privy app credentials are not configured');
-  if (!settings.enabled) throw new Error('App settings store is required before creating a wallet');
+export async function createPrivyTradingWallet({ label = 'محفظة تداول SUMMECA' } = {}) {
+  if (!env.privyAppId || !env.privyAppSecret) throw new Error('بيانات Privy غير مهيأة لإنشاء محفظة');
+  if (!settings.enabled) throw new Error('مخزن إعدادات التطبيق مطلوب قبل إنشاء المحفظة');
 
   const externalId = `summeca_bot_${crypto.randomUUID().replaceAll('-', '').slice(0, 28)}`;
   const response = await fetch(`${PRIVY_API}/v1/wallets`, {
@@ -96,25 +96,25 @@ export async function createPrivyTradingWallet({ label = 'SUMMECA Trading Wallet
     body: JSON.stringify({
       chain_type: 'solana',
       external_id: externalId,
-      display_name: String(label || 'SUMMECA Trading Wallet').slice(0, 100)
+      display_name: String(label || 'محفظة تداول SUMMECA').slice(0, 100)
     })
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) {
     const message = payload?.message ?? payload?.error ?? payload?.detail ?? `HTTP ${response.status}`;
-    throw new Error(`Privy wallet create failed: ${message}`);
+    throw new Error(`فشل إنشاء المحفظة عبر Privy: ${message}`);
   }
 
   const wallet = payload?.wallet || payload;
   const id = String(wallet?.id || '');
   const address = String(wallet?.address || '');
-  if (!id || !SOLANA.test(address)) throw new Error('Privy returned an invalid Solana wallet');
+  if (!id || !SOLANA.test(address)) throw new Error('أعاد Privy محفظة Solana غير صالحة');
 
   const rows = await storedWallets();
   const record = {
     id,
     address,
-    label: String(label || `SUMMECA Wallet ${rows.length + 2}`).slice(0, 80),
+    label: String(label || `محفظة SUMMECA ${rows.length + 2}`).slice(0, 80),
     source: 'privy',
     createdAt: new Date().toISOString()
   };
@@ -142,7 +142,7 @@ export function walletFromAuditPayload(payload = {}) {
   return {
     id,
     address,
-    label: String(payload?.walletLabel || 'SUMMECA Trading Wallet'),
+    label: String(payload?.walletLabel || 'محفظة تداول SUMMECA'),
     source: 'audit'
   };
 }
