@@ -8,6 +8,29 @@ const BRIDGE_STRATEGIES = new Set(['solana-ultra-qualified', 'solana-ultra-probe
 const rowStrategy = (row = {}) => String(row?.metadata?.sizing?.strategy ?? row?.metadata?.strategy ?? '');
 export const isSolanaBridgePaperTrade = (row = {}) => BRIDGE_STRATEGIES.has(rowStrategy(row));
 
+const positionLifecycle = (position = {}) => String(
+  position?.lifecycleStrategy
+  ?? position?.sizing?.promotedTo
+  ?? position?.strategy
+  ?? ''
+);
+
+export function selectProbeCapacityExits(positions = [], maxProbes = 1) {
+  const cap = Math.max(0, Math.floor(finite(maxProbes, 1)));
+  const probes = (Array.isArray(positions) ? positions : [])
+    .filter((position) => positionLifecycle(position) === 'solana-ultra-probe')
+    .sort((a, b) => finite(a?.entryAt, 0) - finite(b?.entryAt, 0));
+  const excess = Math.max(0, probes.length - cap);
+  return probes.slice(0, excess);
+}
+
+export function countOpenProbePositions(positions = []) {
+  return (Array.isArray(positions) ? positions : [])
+    .filter((position) => positionLifecycle(position) === 'solana-ultra-probe')
+    .length;
+}
+
+
 function scoreFromUltra(score, profile = {}, market = {}) {
   const top10 = finite(profile?.top10UsersPct, 0);
   const limitedPenalty = profile?.limitedEvidence ? 6 : 0;
@@ -81,6 +104,10 @@ export class SolanaTradeCandidateBridge {
     enabled = String(process.env.SOLANA_PAPER_BRIDGE_ENABLED ?? 'true').toLowerCase() !== 'false',
     paperMinScore = Math.max(50, Math.min(95, finite(process.env.SOLANA_PAPER_MIN_SCORE, 72))),
     paperProbeMinScore = Math.max(50, Math.min(95, finite(process.env.SOLANA_PAPER_PROBE_MIN_SCORE, 68))),
+    maxProbeOpen = Math.max(0, Math.min(
+      env.maxOpenPositions,
+      Math.floor(finite(process.env.SOLANA_PAPER_MAX_PROBES, Math.max(0, env.maxOpenPositions - 1)))
+    )),
     logger = console
   } = {}) {
     this.store = store;
@@ -88,6 +115,7 @@ export class SolanaTradeCandidateBridge {
     this.enabled = enabled;
     this.paperMinScore = paperMinScore;
     this.paperProbeMinScore = paperProbeMinScore;
+    this.maxProbeOpen = maxProbeOpen;
     this.logger = logger;
     this.initialized = false;
     this.initializing = null;
@@ -119,6 +147,14 @@ export class SolanaTradeCandidateBridge {
           restored += 1;
         }
         this.logger.log(`[solana:paper-bridge] bankroll=isolated realized=${Number(realized).toFixed(4)} restored=${restored}`);
+        const capacityExits = selectProbeCapacityExits(this.trader.openPositions, this.maxProbeOpen);
+        let requested = 0;
+        for (const position of capacityExits) {
+          if (typeof this.trader.requestExit !== 'function') break;
+          const result = this.trader.requestExit(position.address, 'paper probe capacity reserve');
+          if (result?.ok) requested += 1;
+        }
+        this.logger.log(`[solana:paper-capacity] maxOpen=${env.maxOpenPositions} maxProbes=${this.maxProbeOpen} probeExitsRequested=${requested}`);
         if (typeof this.store.listSolanaPaperPerformance === 'function') {
           const performance = await this.store.listSolanaPaperPerformance().catch(() => []);
           if (performance.length) {
@@ -290,6 +326,23 @@ export class SolanaTradeCandidateBridge {
 
     const paperThreshold = qualified ? this.paperMinScore : this.paperProbeMinScore;
     const candidateStage = qualified ? 'qualified' : 'paper_probe_candidate';
+
+    if (isProbe && countOpenProbePositions(this.trader.openPositions) >= this.maxProbeOpen) {
+      await this.recordStage({
+        mint,
+        state,
+        stage: candidateStage,
+        score: scores.entry,
+        reason: 'paper-probe-cap',
+        metadata: {
+          maxProbes: this.maxProbeOpen,
+          openProbes: countOpenProbePositions(this.trader.openPositions),
+          reservedForQualified: Math.max(0, env.maxOpenPositions - this.maxProbeOpen)
+        }
+      });
+      return { paperOpened: false, scores, snapshot, reason: 'probe-cap' };
+    }
+
     if (!this.enabled || scores.entry < paperThreshold || this.trader.getPosition(mint)) {
       await this.recordStage({ mint, state, stage: candidateStage, score: scores.entry, reason: isProbe ? rejectionReason : null });
       return { paperOpened: false, scores, snapshot };
