@@ -3,6 +3,7 @@ import { PUMP_FUN_PROGRAM_ID, resolvePumpCreateMint } from '../feeds/heliusDirec
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { fetchTokenOverview, fetchTokenSecurity } from '../feeds/birdeye.mjs';
+import { fetchPumpNativeMarkets } from '../feeds/pumpFunNative.mjs';
 import { SolanaTradeCandidateBridge } from './solanaTradeCandidateBridge.mjs';
 
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -147,14 +148,16 @@ function normalizeMarket(pair, mint) {
     priceChange5mPct: finite(pair?.priceChange?.m5),
     pairCreatedAt: finite(pair?.pairCreatedAt),
     url: pair?.url || '',
-    dexId: String(pair?.dexId ?? '')
+    dexId: String(pair?.dexId ?? ''),
+    source: 'dexscreener',
+    hasFlow: true
   };
 }
 
 class SolanaProfileRpc {
   constructor() {
     const custom = String(process.env.SOLANA_PROFILE_RPC_URL ?? '').trim();
-    this.endpoints = [custom, 'https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'].filter(Boolean);
+    this.endpoints = [custom, 'https://rpc.solanatracker.io/public', 'https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'].filter(Boolean);
     this.index = 0;
     this.id = 0;
     this.tail = Promise.resolve();
@@ -297,6 +300,7 @@ export class SolanaUltraEarlyWorker {
     this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
     this.pendingMaxAgeMs = numEnv('SOLANA_PENDING_MAX_AGE_MS', 8 * 60_000, 4 * 60_000, 20 * 60_000);
+    this.pumpNativeMaxPerCycle = numEnv('PUMP_NATIVE_MAX_PER_CYCLE', 4, 1, 8);
     this.ws = null;
     this.active = false;
     this.reconnectAttempt = 0;
@@ -659,28 +663,66 @@ export class SolanaUltraEarlyWorker {
       if (!selected.length) return;
       for (const [, state] of selected) state.lastMarketAt = now;
       const mints = selected.map(([mint]) => mint);
-      const rows = await fetchMarkets(mints);
       const best = new Map();
-      for (const pair of rows) {
-        const mint = mints.find((candidate) => String(pair?.baseToken?.address ?? '') === candidate || String(pair?.quoteToken?.address ?? '') === candidate);
-        if (!mint) continue;
-        const market = normalizeMarket(pair, mint);
-        if (!market) continue;
-        const prior = best.get(mint);
-        if (!prior || market.liquidityUsd > prior.liquidityUsd || market.volume5mUsd > prior.volume5mUsd) best.set(mint, market);
+      try {
+        const rows = await fetchMarkets(mints);
+        for (const pair of rows) {
+          const mint = mints.find((candidate) => String(pair?.baseToken?.address ?? '') === candidate || String(pair?.quoteToken?.address ?? '') === candidate);
+          if (!mint) continue;
+          const market = normalizeMarket(pair, mint);
+          if (!market) continue;
+          const prior = best.get(mint);
+          if (!prior || market.liquidityUsd > prior.liquidityUsd || market.volume5mUsd > prior.volume5mUsd) best.set(mint, market);
+        }
+      } catch (error) {
+        console.warn('[solana:dex-market]', error?.message ?? error);
       }
+
+      const missing = selected.filter(([mint]) => !best.has(mint));
+      const pumpRows = await fetchPumpNativeMarkets(missing.map(([mint]) => mint), {
+        limit: this.pumpNativeMaxPerCycle
+      });
+      const pumpByMint = new Map(pumpRows.map((market) => [market.mint, market]));
+
       for (const [mint, state] of selected) {
         const market = best.get(mint);
         if (market) {
           await this.handleMarket(mint, state, market);
-        } else {
-          await this.bridge.recordStage({
-            mint,
-            state,
-            stage: 'market_pending',
-            reason: 'market-not-indexed-yet'
-          });
+          continue;
         }
+
+        const pumpMarket = pumpByMint.get(mint);
+        if (pumpMarket) {
+          state.lastPumpMarket = pumpMarket;
+          if (openPaperAddresses.has(String(mint))) {
+            await this.handleMarket(mint, state, pumpMarket);
+          } else {
+            await this.bridge.recordStage({
+              mint,
+              state,
+              stage: 'pump_indexed',
+              reason: 'awaiting-flow-index',
+              metadata: {
+                marketSource: 'pump-native',
+                symbol: pumpMarket.symbol,
+                priceUsd: pumpMarket.priceUsd,
+                marketCapUsd: pumpMarket.marketCapUsd,
+                creator: pumpMarket.creator,
+                complete: pumpMarket.complete,
+                bondingCurve: pumpMarket.bondingCurve,
+                lastTradeAt: pumpMarket.lastTradeAt
+              }
+            });
+          }
+          continue;
+        }
+
+        await this.bridge.recordStage({
+          mint,
+          state,
+          stage: 'market_pending',
+          reason: 'market-not-indexed-yet'
+        });
       }
       this.logFunnel();
     } catch (error) {
