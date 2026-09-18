@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSolanaCopyTrade } from '../src/bot/phase8OwnerFlows.mjs';
+import { buildLegacySolTransferTransaction, parseSolanaCopyTrade } from '../src/bot/phase8OwnerFlows.mjs';
 
 const WALLET = 'BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
 const MINT = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
@@ -66,4 +66,28 @@ test('copy parser ignores transactions without a wallet token delta', () => {
     postToken: 1_000_000
   }), WALLET);
   assert.equal(trade, null);
+});
+
+
+test('wallet SOL transfer builder creates a legacy transaction with one signer', () => {
+  const base64 = buildLegacySolTransferTransaction({
+    from: 'So11111111111111111111111111111111111111112',
+    to: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    lamports: 10_000_000n,
+    recentBlockhash: '11111111111111111111111111111111'
+  });
+  const bytes = Buffer.from(base64, 'base64');
+  assert.equal(bytes[0], 1); // one signature slot
+  assert.equal(bytes.subarray(1, 65).every((value) => value === 0), true);
+  assert.deepEqual([...bytes.subarray(65, 69)], [1, 0, 1, 3]); // message header + 3 accounts
+  assert.ok(bytes.length > 200);
+});
+
+test('wallet SOL transfer builder rejects non-positive amounts', () => {
+  assert.throws(() => buildLegacySolTransferTransaction({
+    from: 'So11111111111111111111111111111111111111112',
+    to: 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    lamports: 0n,
+    recentBlockhash: '11111111111111111111111111111111'
+  }), /مبلغ الإرسال غير صالح/);
 });

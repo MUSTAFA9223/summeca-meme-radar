@@ -8,7 +8,8 @@ import {
   createPrivyTradingWallet,
   getActiveTradingWallet,
   listTradingWallets,
-  setActiveTradingWallet
+  setActiveTradingWallet,
+  privyClientForTradingWallet
 } from '../trading/walletRegistry.mjs';
 
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -18,6 +19,7 @@ const WALLET_CREATE_REQUEST_KEY = 'telegram_wallet_create_request_v1';
 const settings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
 const pendingInput = new Map();
 const copyEvents = new Map();
+const transferEvents = new Map();
 const state = {
   started: false,
   watchRunning: false,
@@ -434,6 +436,223 @@ async function walletBalanceSol(address) {
   return finite(result?.value) / 1e9;
 }
 
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+function decodeBase58(value) {
+  const text = String(value || '').trim();
+  if (!text) throw new Error('قيمة Base58 فارغة');
+  let n = 0n;
+  for (const ch of text) {
+    const i = BASE58_ALPHABET.indexOf(ch);
+    if (i < 0) throw new Error('قيمة Base58 غير صالحة');
+    n = n * 58n + BigInt(i);
+  }
+  const bytes = [];
+  while (n > 0n) {
+    bytes.push(Number(n & 255n));
+    n >>= 8n;
+  }
+  bytes.reverse();
+  let leading = 0;
+  while (leading < text.length && text[leading] === '1') leading += 1;
+  return Buffer.concat([Buffer.alloc(leading), Buffer.from(bytes)]);
+}
+
+function encodeShortVec(n) {
+  let value = Number(n);
+  const out = [];
+  while (true) {
+    let elem = value & 0x7f;
+    value >>= 7;
+    if (value) elem |= 0x80;
+    out.push(elem);
+    if (!value) break;
+  }
+  return Buffer.from(out);
+}
+
+export function buildLegacySolTransferTransaction({ from, to, lamports, recentBlockhash }) {
+  const fromKey = decodeBase58(from);
+  const toKey = decodeBase58(to);
+  const systemKey = decodeBase58('11111111111111111111111111111111');
+  const blockhash = decodeBase58(recentBlockhash);
+  if (fromKey.length !== 32 || toKey.length !== 32 || systemKey.length !== 32 || blockhash.length !== 32) {
+    throw new Error('تعذر بناء معاملة Solana: طول المفتاح أو blockhash غير صالح');
+  }
+  const amount = BigInt(lamports);
+  if (amount <= 0n) throw new Error('مبلغ الإرسال غير صالح');
+  const transferData = Buffer.alloc(12);
+  transferData.writeUInt32LE(2, 0);
+  transferData.writeBigUInt64LE(amount, 4);
+
+  const message = Buffer.concat([
+    Buffer.from([1, 0, 1]),
+    encodeShortVec(3),
+    fromKey,
+    toKey,
+    systemKey,
+    blockhash,
+    encodeShortVec(1),
+    Buffer.from([2]),
+    encodeShortVec(2),
+    Buffer.from([0, 1]),
+    encodeShortVec(transferData.length),
+    transferData
+  ]);
+  return Buffer.concat([
+    encodeShortVec(1),
+    Buffer.alloc(64),
+    message
+  ]).toString('base64');
+}
+
+function rememberTransferIntent(intent) {
+  const id = crypto.randomBytes(6).toString('hex');
+  transferEvents.set(id, { ...intent, id, status: 'awaiting_confirm', expiresAt: Date.now() + 10 * 60_000 });
+  if (transferEvents.size > 50) {
+    for (const [key, value] of [...transferEvents.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt).slice(0, 10)) {
+      transferEvents.delete(key);
+    }
+  }
+  return id;
+}
+
+async function walletDetails(index) {
+  const wallets = await listTradingWallets();
+  const active = await getActiveTradingWallet();
+  const row = wallets[index];
+  if (!Number.isInteger(index) || !row) return { text: '❌ المحفظة غير موجودة.', keyboard: [] };
+  const balance = await walletBalanceSol(row.address);
+  return {
+    text: [
+      '👛 تفاصيل المحفظة',
+      '',
+      `الاسم: ${row.label}`,
+      `الحالة: ${row.id === active?.id ? '🟢 نشطة للتداول' : '⚪ غير نشطة'}`,
+      `الرصيد: ${balance.toFixed(6)} SOL`,
+      '',
+      '📥 عنوان الاستلام:',
+      row.address,
+      '',
+      'يمكن استقبال SOL وعملات SPL على شبكة Solana فقط.',
+      '🔐 المفتاح الخاص وعبارة الاسترداد لا يظهران داخل تيليجرام.'
+    ].join('\n'),
+    keyboard: [
+      [
+        { text: '📥 استلام', callback_data: `p8:wrecv:${index}` },
+        { text: '📤 إرسال SOL', callback_data: `p8:wsend:${index}` }
+      ],
+      [
+        { text: '📋 نسخ العنوان', copy_text: { text: row.address } },
+        { text: row.id === active?.id ? '✅ المحفظة النشطة' : '✅ جعلها نشطة', callback_data: `p8:wsel:${index}` }
+      ],
+      [{ text: '⬅️ محافظي', callback_data: 'p8:wallets' }]
+    ]
+  };
+}
+
+async function walletReceive(index) {
+  const wallets = await listTradingWallets();
+  const row = wallets[index];
+  if (!Number.isInteger(index) || !row) return { text: '❌ المحفظة غير موجودة.', keyboard: [] };
+  return {
+    text: [
+      '📥 استلام إلى المحفظة',
+      '',
+      `الاسم: ${row.label}`,
+      'الشبكة: Solana',
+      '',
+      'العنوان:',
+      row.address,
+      '',
+      'أرسل إلى هذا العنوان SOL أو توكنات SPL على شبكة Solana فقط.'
+    ].join('\n'),
+    keyboard: [
+      [{ text: '📋 نسخ عنوان الاستلام', copy_text: { text: row.address } }],
+      [{ text: '👛 تفاصيل المحفظة', callback_data: `p8:wview:${index}` }]
+    ]
+  };
+}
+
+async function prepareWalletSend(chatId, index) {
+  const wallets = await listTradingWallets();
+  const row = wallets[index];
+  if (!Number.isInteger(index) || !row) return result('❌ المحفظة غير موجودة.');
+  pendingInput.set(chatId, {
+    type: 'wallet-send-recipient',
+    walletId: row.id,
+    walletAddress: row.address,
+    walletLabel: row.label,
+    expiresAt: Date.now() + 5 * 60_000
+  });
+  return result([
+    '📤 إرسال SOL',
+    '',
+    `من: ${row.label}`,
+    `العنوان: ${row.address}`,
+    '',
+    'أرسل الآن عنوان محفظة Solana المستلمة.',
+    'لن يتم إرسال أي شيء قبل عرض المبلغ والتأكيد النهائي.'
+  ].join('\n'), [[{ text: '❌ إلغاء', callback_data: `p8:wview:${index}` }]]);
+}
+
+async function confirmWalletTransfer(intentId) {
+  const intent = transferEvents.get(intentId);
+  if (!intent || intent.expiresAt <= Date.now()) return result('⌛ انتهت مهلة طلب الإرسال. ابدأ من جديد.');
+  if (intent.status !== 'awaiting_confirm') return result('🧷 تم استهلاك طلب الإرسال أو إلغاؤه بالفعل.');
+
+  const wallets = await listTradingWallets();
+  const wallet = wallets.find((row) => row.id === intent.walletId && row.address === intent.from);
+  if (!wallet) return result('❌ محفظة الإرسال لم تعد متاحة.');
+  const balance = await walletBalanceSol(wallet.address);
+  const amount = finite(intent.amountSol);
+  const maxSend = clamp(process.env.WALLET_TRANSFER_MAX_SOL ?? 1, 0.001, 100);
+  const reserve = clamp(process.env.WALLET_TRANSFER_RESERVE_SOL ?? 0.002, 0.001, 0.1);
+  if (!(amount >= 0.0005 && amount <= maxSend)) return result(`⛔ المبلغ خارج حد الإرسال الآمن (الحد الأقصى ${maxSend} SOL).`);
+  if (balance < amount + reserve) return result(`⛔ الرصيد غير كافٍ مع إبقاء احتياطي ${reserve} SOL للرسوم.`);
+
+  intent.status = 'broadcasting';
+  intent.attemptedAt = new Date().toISOString();
+  try {
+    const latest = await solanaRpc('getLatestBlockhash', [{ commitment: 'confirmed' }]);
+    const blockhash = String(latest?.value?.blockhash || '');
+    if (!blockhash) throw new Error('تعذر جلب blockhash حديث');
+    const transaction = buildLegacySolTransferTransaction({
+      from: wallet.address,
+      to: intent.to,
+      lamports: BigInt(Math.round(amount * 1e9)),
+      recentBlockhash: blockhash
+    });
+    const client = privyClientForTradingWallet(wallet);
+    const sent = await client.signAndSendTransaction(transaction, { referenceId: `wallet-send-${intentId}` });
+    intent.status = 'succeeded';
+    intent.txHash = sent.hash;
+    intent.completedAt = new Date().toISOString();
+    return result([
+      '✅ تم إرسال SOL بنجاح',
+      '',
+      `من: ${wallet.label}`,
+      `إلى: ${intent.to}`,
+      `المبلغ: ${amount.toFixed(6)} SOL`,
+      `المعاملة: ${sent.hash}`,
+      '',
+      '🧷 تم استهلاك طلب التأكيد ولن يُرسل مرة ثانية.'
+    ].join('\n'), [
+      [{ text: '🔎 عرض المعاملة في Solscan', url: `https://solscan.io/tx/${encodeURIComponent(sent.hash)}` }],
+      [{ text: '👛 محافظي', callback_data: 'p8:wallets' }]
+    ]);
+  } catch (error) {
+    intent.status = 'attempted_failed';
+    intent.error = String(error?.message ?? error).slice(0, 220);
+    return result([
+      '❌ تعذر تأكيد إرسال SOL.',
+      '',
+      'تم إيقاف إعادة المحاولة التلقائية لتجنب إرسال مكرر.',
+      'افحص المحفظة والسلسلة قبل إنشاء طلب جديد.',
+      `السبب: ${intent.error}`
+    ].join('\n'), [[{ text: '👛 محافظي', callback_data: 'p8:wallets' }]]);
+  }
+}
+
 async function tradingWalletDashboard() {
   const wallets = await listTradingWallets();
   const active = await getActiveTradingWallet();
@@ -452,7 +671,7 @@ async function tradingWalletDashboard() {
     [{ text: '➕ إنشاء محفظة', callback_data: 'p8:wcreate' }, { text: '🔄 تحديث', callback_data: 'p8:wallets' }]
   ];
   wallets.slice(0, 8).forEach((row, i) => keyboard.push([
-    { text: row.id === active?.id ? `✅ ${row.label}` : `اختيار ${row.label}`, callback_data: `p8:wsel:${i}` },
+    { text: row.id === active?.id ? `🟢 ${row.label}` : `👛 ${row.label}`, callback_data: `p8:wview:${i}` },
     { text: '📋 نسخ العنوان', copy_text: { text: row.address } }
   ]));
   return { text: lines.join('\n'), keyboard };
@@ -649,6 +868,27 @@ export async function handlePhase8Callback(callback, terminal) {
     return result(`🗑 تم حذف ${removed?.label || 'المحفظة'} من نسخ التداول.`, [[{ text: '🧠 نسخ التداول', callback_data: 'p8:copy' }]]);
   }
   if (data === 'p8:wallets') return { handled: true, ...(await tradingWalletDashboard()) };
+  if (data.startsWith('p8:wview:')) {
+    const index = Number(data.split(':')[2]);
+    return { handled: true, ...(await walletDetails(index)) };
+  }
+  if (data.startsWith('p8:wrecv:')) {
+    const index = Number(data.split(':')[2]);
+    return { handled: true, ...(await walletReceive(index)) };
+  }
+  if (data.startsWith('p8:wsend:')) {
+    const index = Number(data.split(':')[2]);
+    return prepareWalletSend(chatId, index);
+  }
+  if (data.startsWith('p8:wsconf:')) {
+    return confirmWalletTransfer(data.slice('p8:wsconf:'.length));
+  }
+  if (data.startsWith('p8:wscancel:')) {
+    const id = data.slice('p8:wscancel:'.length);
+    const intent = transferEvents.get(id);
+    if (intent && intent.status === 'awaiting_confirm') intent.status = 'cancelled';
+    return result('✅ تم إلغاء طلب الإرسال. لم يتم إرسال أي معاملة.', [[{ text: '👛 محافظي', callback_data: 'p8:wallets' }]]);
+  }
   if (data === 'p8:wcreate') {
     const wallets = await listTradingWallets();
     const wallet = await createPrivyTradingWallet({ label: `محفظة تداول ${wallets.length + 1}` });
@@ -703,6 +943,54 @@ export async function handlePhase8Message(message, terminal) {
   const text = String(message?.text || '').trim();
   const pending = pendingInput.get(chatId);
   if (pending && pending.expiresAt <= Date.now()) pendingInput.delete(chatId);
+  if (pendingInput.get(chatId)?.type === 'wallet-send-recipient' && !text.startsWith('/')) {
+    const row = pendingInput.get(chatId);
+    if (!SOLANA.test(text)) return result('❌ عنوان المستلم ليس عنوان Solana صالحًا. أرسل عنوانًا صحيحًا أو اضغط إلغاء.');
+    if (text === row.walletAddress) return result('❌ لا يمكن الإرسال إلى نفس المحفظة.');
+    pendingInput.set(chatId, { ...row, type: 'wallet-send-amount', recipient: text, expiresAt: Date.now() + 5 * 60_000 });
+    const balance = await walletBalanceSol(row.walletAddress);
+    return result([
+      '📤 إرسال SOL',
+      '',
+      `المستلم: ${text}`,
+      `الرصيد الحالي: ${balance.toFixed(6)} SOL`,
+      '',
+      'أرسل الآن المبلغ بوحدة SOL، مثال: 0.01'
+    ].join('\n'));
+  }
+  if (pendingInput.get(chatId)?.type === 'wallet-send-amount' && !text.startsWith('/')) {
+    const row = pendingInput.get(chatId);
+    const amount = Number(String(text).replace(',', '.'));
+    const maxSend = clamp(process.env.WALLET_TRANSFER_MAX_SOL ?? 1, 0.001, 100);
+    if (!Number.isFinite(amount) || amount < 0.0005 || amount > maxSend) {
+      return result(`❌ أدخل مبلغًا بين 0.0005 و${maxSend} SOL.`);
+    }
+    const balance = await walletBalanceSol(row.walletAddress);
+    const reserve = clamp(process.env.WALLET_TRANSFER_RESERVE_SOL ?? 0.002, 0.001, 0.1);
+    if (balance < amount + reserve) return result(`⛔ الرصيد غير كافٍ. يجب إبقاء ${reserve} SOL احتياطيًا للرسوم.`);
+    pendingInput.delete(chatId);
+    const id = rememberTransferIntent({
+      walletId: row.walletId,
+      walletLabel: row.walletLabel,
+      from: row.walletAddress,
+      to: row.recipient,
+      amountSol: amount
+    });
+    return result([
+      '⚠️ تأكيد إرسال SOL',
+      '',
+      `من: ${row.walletLabel}`,
+      `عنوان الإرسال: ${row.walletAddress}`,
+      `إلى: ${row.recipient}`,
+      `المبلغ: ${amount.toFixed(6)} SOL`,
+      '',
+      'هذه معاملة حقيقية على شبكة Solana.',
+      'لن يتم الإرسال إلا بعد الضغط على زر التأكيد أدناه.'
+    ].join('\n'), [
+      [{ text: '⚠️ تأكيد الإرسال الحقيقي', callback_data: `p8:wsconf:${id}` }],
+      [{ text: '❌ إلغاء', callback_data: `p8:wscancel:${id}` }]
+    ]);
+  }
   if (pendingInput.get(chatId)?.type === 'copy-wallet' && !text.startsWith('/')) {
     pendingInput.delete(chatId);
     if (!SOLANA.test(text)) return result('❌ هذا ليس عنوان Solana صالحًا. اضغط إضافة محفظة وحاول مرة أخرى.');
