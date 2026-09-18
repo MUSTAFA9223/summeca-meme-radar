@@ -36,7 +36,9 @@ export function peakExitDecision({
 
   const trail = scores.moon >= 92 ? 38 : scores.moon >= 84 ? 28 : scores.moon >= 72 ? 20 : 13;
   const drawdown = highWaterPnlPct - pnlPct;
-  const buySell = (s.buys30s ?? 0) / Math.max(1, s.sells30s ?? 0);
+  const buys = Number.isFinite(Number(s.buys30s)) ? Number(s.buys30s) : Number(s.buys5m ?? 0);
+  const sells = Number.isFinite(Number(s.sells30s)) ? Number(s.sells30s) : Number(s.sells5m ?? 0);
+  const buySell = buys / Math.max(1, sells);
   const momentumBreaking = scores.moon < 70 || buySell < 1.15 || (s.buyerAcceleration ?? 1) < 0.8;
 
   if (momentumBreaking && drawdown >= Math.min(trail, 16)) {
