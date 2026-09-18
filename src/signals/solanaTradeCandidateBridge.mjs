@@ -105,7 +105,7 @@ export class SolanaTradeCandidateBridge {
       }
       try {
         const [allOpenRows, realized] = await Promise.all([
-          this.store.listOpenPaperTrades(Math.max(10, env.maxOpenPositions * 4)),
+          this.store.listOpenPaperTrades(100),
           this.store.paperRealizedPnlUsdForStrategies([...BRIDGE_STRATEGIES])
         ]);
         const rows = allOpenRows.filter(isSolanaBridgePaperTrade);
