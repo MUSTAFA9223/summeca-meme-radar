@@ -115,6 +115,7 @@ export class LiveProtectionEngine {
     this.securityCache = new Map();
     this.sellabilityFailures = new Map();
     this.dryTriggerCache = new Map();
+    this.walletJupiter = new Map();
     this.lastRecoveryScanAt = 0;
     this.running = false;
     this.timer = null;
@@ -128,13 +129,13 @@ export class LiveProtectionEngine {
     ].filter(Boolean);
   }
 
-  async readTokenBalance(mint) {
-    if (this.balanceReader) return BigInt(await this.balanceReader(mint));
+  async readTokenBalance(mint, walletAddress = env.privyWalletAddress) {
+    if (this.balanceReader) return BigInt(await this.balanceReader(mint, walletAddress));
     let lastError = null;
     for (const endpoint of this.rpcEndpoints()) {
       try {
         const result = await rawSolanaRpc(endpoint, 'getTokenAccountsByOwner', [
-          env.privyWalletAddress,
+          String(walletAddress),
           { mint: String(mint) },
           { encoding: 'jsonParsed', commitment: 'confirmed' }
         ]);
@@ -149,6 +150,34 @@ export class LiveProtectionEngine {
       }
     }
     throw lastError || new Error('all Solana RPC balance providers failed');
+  }
+
+  executionWalletForTrade(trade) {
+    return {
+      id: String(trade?.metadata?.wallet_id || env.privyWalletId || ''),
+      address: String(trade?.wallet_address || env.privyWalletAddress || ''),
+      label: String(trade?.metadata?.wallet_label || 'SUMMECA Trading Wallet')
+    };
+  }
+
+  jupiterForTrade(trade) {
+    const walletInfo = this.executionWalletForTrade(trade);
+    if (!walletInfo.id || !walletInfo.address) return this.jupiter;
+    if (walletInfo.id === String(env.privyWalletId || '') && walletInfo.address === String(env.privyWalletAddress || '')) {
+      return this.jupiter;
+    }
+    const cached = this.walletJupiter.get(walletInfo.id);
+    if (cached) return cached;
+    const wallet = new PrivySolanaWallet({
+      appId: env.privyAppId,
+      appSecret: env.privyAppSecret,
+      walletId: walletInfo.id,
+      walletAddress: walletInfo.address,
+      authorizationPrivateKey: env.privyAuthorizationPrivateKey
+    });
+    const client = new JupiterSwapClient({ apiKey: env.jupiterApiKey, wallet });
+    this.walletJupiter.set(walletInfo.id, client);
+    return client;
   }
 
   async signatureStatus(signature) {
@@ -397,7 +426,7 @@ export class LiveProtectionEngine {
     try { security = await this.securitySnapshot(token.address); }
     catch (error) { console.warn(`[live-protect:security] mint=${short(token.address)} ${String(error?.message ?? error)}`); }
 
-    const balance = await this.readTokenBalance(token.address).catch((error) => {
+    const balance = await this.readTokenBalance(token.address, trade.wallet_address).catch((error) => {
       console.warn(`[live-protect:balance] mint=${short(token.address)} ${String(error?.message ?? error)}`);
       return null;
     });
@@ -476,7 +505,7 @@ export class LiveProtectionEngine {
 
     let balance;
     try {
-      balance = context.balance != null ? BigInt(context.balance) : await this.readTokenBalance(token.address);
+      balance = context.balance != null ? BigInt(context.balance) : await this.readTokenBalance(token.address, trade.wallet_address);
     } catch (error) {
       await this.store.releaseLiveTradeSell(trade.id, requestId, { exit_reason: `protection-balance-read-failed: ${String(error?.message ?? error).slice(0, 180)}` });
       return { locked: true, broadcast: false, error };
@@ -528,9 +557,16 @@ export class LiveProtectionEngine {
       return { locked: true, broadcast: false };
     }
 
+    const executionClient = this.jupiterForTrade(trade);
+    if (!executionClient?.configured) {
+      await this.store.updateAudit(requestId, { status: 'failed', error: 'wallet-specific Jupiter/Privy client is not configured' }).catch(() => {});
+      await this.store.releaseLiveTradeSell(trade.id, requestId, { exit_reason: 'wallet-specific-protection-client-unavailable' });
+      return { locked: true, broadcast: false };
+    }
+
     let order;
     try {
-      order = await this.jupiter.getOrder({ inputMint: token.address, outputMint: SOL_MINT, amount: target.toString() });
+      order = await executionClient.getOrder({ inputMint: token.address, outputMint: SOL_MINT, amount: target.toString() });
     } catch (error) {
       await this.store.updateAudit(requestId, {
         status: 'failed',
@@ -557,7 +593,7 @@ export class LiveProtectionEngine {
     await this.store.updateLiveTrade(trade.id, { sell_broadcast_at: isoNow() });
 
     try {
-      const execution = await this.jupiter.executeOrder(order);
+      const execution = await executionClient.executeOrder(order);
       const outputAtomic = String(execution?.totalOutputAmount ?? execution?.outputAmountResult ?? order?.outAmount ?? '0');
       await this.store.updateAudit(requestId, {
         status: 'succeeded',
@@ -714,7 +750,7 @@ export class LiveProtectionEngine {
 
     let currentBalance;
     try {
-      currentBalance = await this.readTokenBalance(trade.tokens.address);
+      currentBalance = await this.readTokenBalance(trade.tokens.address, trade.wallet_address);
     } catch (error) {
       console.warn(`[live-protect:reconcile-balance] trade=${trade.id} ${String(error?.message ?? error)}`);
       return;
@@ -778,10 +814,13 @@ export class LiveProtectionEngine {
       const tx = String(audit.tx_hash || '');
       const address = String(audit.token_address || '');
       if (!tx || !address) continue;
-      const existing = await this.store.findLiveTradeByEntryTx(tx, env.privyWalletAddress);
-      if (existing) continue;
-
       const payload = audit.payload || {};
+      const walletAddress = String(payload.walletAddress || env.privyWalletAddress || '');
+      const walletId = String(payload.walletId || env.privyWalletId || '');
+      const walletLabel = String(payload.walletLabel || 'SUMMECA Trading Wallet');
+      if (!walletAddress) continue;
+      const existing = await this.store.findLiveTradeByEntryTx(tx, walletAddress);
+      if (existing) continue;
       const quantityAtomic = String(
         payload.executionOutputAmountAtomic
         || payload.freshQuoteOutAtomic
@@ -800,7 +839,7 @@ export class LiveProtectionEngine {
       try {
         await this.store.insertLiveTrade({
           token_id: token.id,
-          wallet_address: env.privyWalletAddress,
+          wallet_address: walletAddress,
           status: 'open',
           entry_tx: tx,
           entry_price_usd: state.entryPriceUsd,
@@ -814,6 +853,8 @@ export class LiveProtectionEngine {
           metadata: {
             request_id: audit.request_id,
             manual_confirm: true,
+            wallet_id: walletId,
+            wallet_label: walletLabel,
             recovered_from_execution_audit: true,
             remaining_cost_basis_sol: audit.amount_native
           }
@@ -824,7 +865,7 @@ export class LiveProtectionEngine {
         }).catch(() => {});
         console.warn(`[live-protect:recovery] restored missing live_trade from successful manual buy tx=${short(tx)}`);
       } catch (error) {
-        const raced = await this.store.findLiveTradeByEntryTx(tx, env.privyWalletAddress).catch(() => null);
+        const raced = await this.store.findLiveTradeByEntryTx(tx, walletAddress).catch(() => null);
         if (!raced) console.warn(`[live-protect:recovery] could not restore tx=${short(tx)} ${String(error?.message ?? error)}`);
       }
     }
@@ -835,7 +876,7 @@ export class LiveProtectionEngine {
     this.running = true;
     try {
       await this.recoverManualBuyRows();
-      const trades = await this.store.openLiveTradesForProtection(env.privyWalletAddress);
+      const trades = await this.store.openLiveTradesForProtection();
       await Promise.allSettled(trades.map((trade) => trade.status === 'closing'
         ? this.reconcileClosingTrade(trade)
         : this.monitorOpenTrade(trade)));

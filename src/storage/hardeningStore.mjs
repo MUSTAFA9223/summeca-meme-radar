@@ -129,19 +129,24 @@ export class HardeningStore {
     return Array.isArray(rows) ? rows[0] ?? null : null;
   }
 
-  async findOpenLiveTrades(tokenId) {
-    const rows = await this.request(`live_trades?select=*&token_id=eq.${encodeURIComponent(tokenId)}&status=in.(pending,open)&order=opened_at.asc`);
+  async findOpenLiveTrades(tokenId, walletAddress = '') {
+    const parts = [
+      'live_trades?select=*',
+      `token_id=eq.${encodeURIComponent(tokenId)}`
+    ];
+    if (walletAddress) parts.push(`wallet_address=eq.${encodeURIComponent(walletAddress)}`);
+    parts.push('status=in.(pending,open)', 'order=opened_at.asc');
+    const rows = await this.request(parts.join('&'));
     return Array.isArray(rows) ? rows : [];
   }
 
-  async openLiveTradesForProtection(walletAddress) {
-    const path = [
-      'live_trades?select=*,tokens(address,symbol,name,source,listed_at)',
-      `wallet_address=eq.${encodeURIComponent(walletAddress)}`,
-      'status=in.(open,closing)',
-      'order=opened_at.asc'
-    ].join('&');
-    const rows = await this.request(path);
+  async openLiveTradesForProtection(walletAddress = '') {
+    const parts = [
+      'live_trades?select=*,tokens(address,symbol,name,source,listed_at)'
+    ];
+    if (walletAddress) parts.push(`wallet_address=eq.${encodeURIComponent(walletAddress)}`);
+    parts.push('status=in.(open,closing)', 'order=opened_at.asc');
+    const rows = await this.request(parts.join('&'));
     return Array.isArray(rows) ? rows : [];
   }
 

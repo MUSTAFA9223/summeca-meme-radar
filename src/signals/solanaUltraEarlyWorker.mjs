@@ -312,7 +312,7 @@ export class SolanaUltraEarlyWorker {
     this.rawLaunchAlerts = boolEnv('SOLANA_RAW_LAUNCH_ALERTS', false);
     this.marketPollMs = numEnv('SOLANA_ULTRA_MARKET_POLL_MS', 1_500, 1_000, 5_000);
     this.minScore = numEnv('SOLANA_QUALIFIED_MIN_SCORE', 72, 50, 95);
-    this.paperProbeMinScore = numEnv('SOLANA_PAPER_PROBE_MIN_SCORE', 68, 55, 90);
+    this.paperProbeMinScore = numEnv('SOLANA_PAPER_PROBE_MIN_SCORE', 60, 55, 90);
     this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
     this.pendingMaxAgeMs = numEnv('SOLANA_PENDING_MAX_AGE_MS', 8 * 60_000, 4 * 60_000, 20 * 60_000);
