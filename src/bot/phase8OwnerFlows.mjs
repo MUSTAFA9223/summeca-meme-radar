@@ -14,6 +14,7 @@ import {
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const WATCH_KEY = 'telegram_manual_watchlist_v1';
 const COPY_KEY = 'telegram_copy_wallets_v2';
+const WALLET_CREATE_REQUEST_KEY = 'telegram_wallet_create_request_v1';
 const settings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
 const pendingInput = new Map();
 const copyEvents = new Map();
@@ -147,11 +148,11 @@ function watchKeyboard(mint) {
   return [
     [
       { text: '🔎 تحليل', callback_data: `term:a:sol:${mint}` },
-      { text: '🔐 Live Buy', callback_data: `p6:b:sol:${mint}` }
+      { text: '🔐 شراء حقيقي', callback_data: `p6:b:sol:${mint}` }
     ],
     [
       { text: '⏹ إيقاف المتابعة', callback_data: `p8:woff:${mint}` },
-      { text: '📋 CA', copy_text: { text: mint } }
+      { text: '📋 نسخ العقد', copy_text: { text: mint } }
     ]
   ];
 }
@@ -191,12 +192,12 @@ async function removeManualWatch(mint) {
 
 async function watchDashboard() {
   const rows = (await loadList(WATCH_KEY)).filter((row) => row.active);
-  const lines = ['👀 WATCHLIST — متابعة العملات', ''];
+  const lines = ['👀 قائمة متابعة العملات', ''];
   if (!rows.length) lines.push('لا توجد عملات تحت المتابعة الآن.');
   for (const row of rows.slice(0, 12)) {
     lines.push(`• $${row.symbol || 'TOKEN'} • ${short(row.mint)} • ${pctText(row.lastReturnPct)}`);
   }
-  lines.push('', 'كل تحديث جديد يرسل كـ Reply على رسالة العملة الأصلية.');
+  lines.push('', 'كل تحديث جديد يصل كرد على رسالة العملة الأصلية.');
   return {
     text: lines.join('\n'),
     keyboard: rows.slice(0, 6).map((row) => [
@@ -250,9 +251,9 @@ async function watchCycle() {
           '',
           `من بداية المتابعة: ${pctText(ret)}`,
           `السعر: ${priceText(market.priceUsd)}`,
-          `MC: ${money(market.marketCapUsd)} • Liquidity: ${money(market.liquidityUsd)}`,
-          `5m: Buy ${market.buys5m} / Sell ${market.sells5m} • Ratio ${ratio.toFixed(2)}x`,
-          `Vol 5m: ${money(market.volume5mUsd)} • Move 5m: ${pctText(market.priceChange5mPct)}`,
+          `القيمة السوقية: ${money(market.marketCapUsd)} • السيولة: ${money(market.liquidityUsd)}`,
+          `5 دقائق: شراء ${market.buys5m} / بيع ${market.sells5m} • النسبة ${ratio.toFixed(2)}x`,
+          `حجم 5 دقائق: ${money(market.volume5mUsd)} • الحركة: ${pctText(market.priceChange5mPct)}`,
           '',
           '↩️ هذا التحديث مرتبط برسالة العملة الأصلية.'
         ].join('\n'), watchKeyboard(row.mint), {
@@ -418,7 +419,7 @@ async function copyDashboard() {
   rows.slice(0, 10).forEach((row, i) => {
     lines.push(`${row.enabled ? '🟢' : '⚪'} ${i + 1}. ${row.label || 'Trader'} • ${short(row.address)}`);
   });
-  lines.push('', 'عند اكتشاف Buy/Sell سترى أزرار مبلغ ثابت أو نسبة من صفقة المتداول. التنفيذ الحقيقي يمر دائمًا بـ Manual Confirm.');
+  lines.push('', 'عند اكتشاف شراء/بيع سترى أزرار مبلغ ثابت أو نسبة من صفقة المتداول. التنفيذ الحقيقي يمر دائمًا بـ التأكيد اليدوي.');
   const keyboard = [[{ text: '➕ إضافة محفظة', callback_data: 'p8:cadd' }, { text: '🔄 تحديث', callback_data: 'p8:copy' }]];
   rows.slice(0, 8).forEach((row, i) => keyboard.push([
     { text: `${row.enabled ? '⏸' : '▶️'} ${row.label || `Trader ${i + 1}`}`, callback_data: `p8:ctoggle:${i}` },
@@ -436,25 +437,79 @@ async function walletBalanceSol(address) {
 async function tradingWalletDashboard() {
   const wallets = await listTradingWallets();
   const active = await getActiveTradingWallet();
-  const lines = ['👛 SUMMECA TRADING WALLETS', ''];
+  const lines = ['👛 محافظ التداول في SUMMECA', ''];
   if (!wallets.length) lines.push('لا توجد محفظة تداول مهيأة.');
   for (let i = 0; i < wallets.length; i += 1) {
     const row = wallets[i];
     const balance = i < 4 ? await walletBalanceSol(row.address) : null;
     lines.push(`${row.id === active?.id ? '🟢' : '⚪'} ${i + 1}. ${row.label} • ${short(row.address)}${balance != null ? ` • ${balance.toFixed(4)} SOL` : ''}`);
   }
-  lines.push('', 'يمكنك إنشاء محفظة Solana داخل البوت عبر Privy ثم إرسال SOL إليها. لا يتم حفظ private key في Supabase.');
+  lines.push('', 'يمكنك إنشاء محفظة Solana داخل البوت عبر Privy ثم إرسال SOL أو العملات إليها. المفتاح الخاص لا يُعرض في تيليجرام ولا يُحفظ في Supabase.');
   if (active) {
-    lines.push('', `المحفظة النشطة: ${active.label}`, `Address: ${active.address}`);
+    lines.push('', `المحفظة النشطة: ${active.label}`, `العنوان: ${active.address}`);
   }
   const keyboard = [
     [{ text: '➕ إنشاء محفظة', callback_data: 'p8:wcreate' }, { text: '🔄 تحديث', callback_data: 'p8:wallets' }]
   ];
   wallets.slice(0, 8).forEach((row, i) => keyboard.push([
     { text: row.id === active?.id ? `✅ ${row.label}` : `اختيار ${row.label}`, callback_data: `p8:wsel:${i}` },
-    { text: '📋 العنوان', copy_text: { text: row.address } }
+    { text: '📋 نسخ العنوان', copy_text: { text: row.address } }
   ]));
   return { text: lines.join('\n'), keyboard };
+}
+
+async function processWalletCreateRequest() {
+  if (!settings.enabled) return null;
+  const raw = await settings.get(WALLET_CREATE_REQUEST_KEY).catch(() => '');
+  const request = parseJson(raw, null);
+  if (!request || typeof request !== 'object' || request.status !== 'pending' || !request.id) return null;
+
+  const processing = {
+    ...request,
+    status: 'processing',
+    processingAt: new Date().toISOString()
+  };
+  await settings.set(WALLET_CREATE_REQUEST_KEY, JSON.stringify(processing));
+
+  try {
+    const wallets = await listTradingWallets();
+    const label = String(request.label || `محفظة تداول ${wallets.length + 1}`).slice(0, 80);
+    const wallet = await createPrivyTradingWallet({ label });
+    const completed = {
+      ...processing,
+      status: 'completed',
+      completedAt: new Date().toISOString(),
+      walletId: wallet.id,
+      walletAddress: wallet.address,
+      walletLabel: wallet.label
+    };
+    await settings.set(WALLET_CREATE_REQUEST_KEY, JSON.stringify(completed));
+    await send([
+      '✅ تم إنشاء محفظة التداول الجديدة',
+      '',
+      `الاسم: ${wallet.label}`,
+      `العنوان: ${wallet.address}`,
+      '',
+      'أصبحت هذه المحفظة هي المحفظة النشطة داخل البوت.',
+      'يمكنك الآن إرسال SOL أو العملات إلى هذا العنوان، ثم استخدام أزرار الشراء والبيع من داخل SUMMECA.',
+      '',
+      '🔐 لا يتم عرض المفتاح الخاص أو عبارة الاسترداد داخل تيليجرام أو Supabase.'
+    ].join('\n'), [
+      [{ text: '📋 نسخ عنوان المحفظة', copy_text: { text: wallet.address } }],
+      [{ text: '👛 فتح محافظي', callback_data: 'p8:wallets' }]
+    ]).catch(() => {});
+    return wallet;
+  } catch (error) {
+    const failed = {
+      ...processing,
+      status: 'failed',
+      failedAt: new Date().toISOString(),
+      error: String(error?.message ?? error).slice(0, 220)
+    };
+    await settings.set(WALLET_CREATE_REQUEST_KEY, JSON.stringify(failed)).catch(() => {});
+    await send('❌ تعذر إنشاء محفظة التداول الجديدة. لم يتم تغيير أي محفظة أو مفتاح.').catch(() => {});
+    throw error;
+  }
 }
 
 async function copyCycle() {
@@ -506,14 +561,14 @@ async function copyCycle() {
 
         if (trade.side === 'buy') {
           await send([
-            '🧠 COPY SIGNAL — BUY detected',
+            '🧠 إشارة نسخ — تم رصد شراء',
             '',
             `${row.label} • ${short(row.address)}`,
-            `Token: ${short(trade.mint)}`,
-            `Source size ≈ ${sourceSol.toFixed(4)} SOL`,
+            `العملة: ${short(trade.mint)}`,
+            `حجم صفقة المصدر ≈ ${sourceSol.toFixed(4)} SOL`,
             '',
             'اختر مبلغًا ثابتًا أو نسبة من حجم صفقة المصدر.',
-            '⚠️ لن يتم التنفيذ مباشرة؛ ستفتح شاشة Quote ثم Manual Confirm.'
+            '⚠️ لن يتم التنفيذ مباشرة؛ ستفتح شاشة Quote ثم التأكيد اليدوي.'
           ].join('\n'), [
             copyFixedButtons(trade.mint),
             [25, 50, 100].map((p) => ({ text: `${p}% من المصدر`, callback_data: `p8p:${p}:${eventId}` })),
@@ -524,14 +579,14 @@ async function copyCycle() {
           ]).catch(() => {});
         } else {
           await send([
-            '🧠 COPY SIGNAL — SELL detected',
+            '🧠 إشارة نسخ — تم رصد بيع',
             '',
             `${row.label} • ${short(row.address)}`,
-            `Token: ${short(trade.mint)}`,
-            `Source received ≈ ${sourceSol.toFixed(4)} SOL`,
+            `العملة: ${short(trade.mint)}`,
+            `ما استلمه المصدر ≈ ${sourceSol.toFixed(4)} SOL`,
             '',
             'إذا كنت تملك نفس العملة في محفظة SUMMECA، اختر نسبة البيع.',
-            '⚠️ ستظهر شاشة Quote وManual Confirm قبل أي تنفيذ.'
+            '⚠️ ستظهر شاشة Quote والتأكيد اليدوي قبل أي تنفيذ.'
           ].join('\n'), [
             [25, 50, 100].map((p) => ({ text: `Sell ${p}%`, callback_data: `p8s:${p}:${trade.mint}` })),
             [
@@ -591,20 +646,20 @@ export async function handlePhase8Callback(callback, terminal) {
     if (!Number.isInteger(index) || !rows[index]) return result('❌ المحفظة غير موجودة.');
     const [removed] = rows.splice(index, 1);
     await saveList(COPY_KEY, rows);
-    return result(`🗑 تم حذف ${removed?.label || 'المحفظة'} من Copy Trading.`, [[{ text: '🧠 Copy Trading', callback_data: 'p8:copy' }]]);
+    return result(`🗑 تم حذف ${removed?.label || 'المحفظة'} من نسخ التداول.`, [[{ text: '🧠 نسخ التداول', callback_data: 'p8:copy' }]]);
   }
   if (data === 'p8:wallets') return { handled: true, ...(await tradingWalletDashboard()) };
   if (data === 'p8:wcreate') {
     const wallets = await listTradingWallets();
-    const wallet = await createPrivyTradingWallet({ label: `SUMMECA Wallet ${wallets.length + 1}` });
+    const wallet = await createPrivyTradingWallet({ label: `محفظة تداول ${wallets.length + 1}` });
     return result([
-      '✅ تم إنشاء محفظة Solana داخل SUMMECA',
+      '✅ تم إنشاء محفظة تداول Solana داخل SUMMECA',
       '',
       `${wallet.label}`,
-      `Address: ${wallet.address}`,
+      `العنوان: ${wallet.address}`,
       '',
-      'أرسل SOL لهذا العنوان ثم استخدمها كمحفظة التداول النشطة.',
-      '🔐 المفتاح الخاص لا يُعرض في البوت ولا يُحفظ في Supabase.'
+      'أرسل SOL أو العملات لهذا العنوان؛ وتم تعيينها تلقائيًا كمحفظة التداول النشطة.',
+      '🔐 المفتاح الخاص وعبارة الاسترداد لا يُعرضان في البوت ولا يُحفظان في Supabase.'
     ].join('\n'), [
       [{ text: '📋 نسخ العنوان', copy_text: { text: wallet.address } }],
       [{ text: '👛 المحافظ', callback_data: 'p8:wallets' }]
@@ -626,7 +681,7 @@ export async function handlePhase8Callback(callback, terminal) {
   if (data.startsWith('p8p:')) {
     const [, pctRaw, eventId] = data.split(':');
     const event = copyEvents.get(eventId);
-    if (!event || event.expiresAt <= Date.now() || event.side !== 'buy') return result('⌛ انتهت صلاحية Copy Signal. انتظر الإشارة التالية.');
+    if (!event || event.expiresAt <= Date.now() || event.side !== 'buy') return result('⌛ انتهت صلاحية إشارة النسخ. انتظر الإشارة التالية.');
     const pct = clamp(pctRaw, 1, 100);
     const amount = event.sourceSol * pct / 100;
     const cap = manualTradeCaps().maxBuySol;
@@ -637,7 +692,7 @@ export async function handlePhase8Callback(callback, terminal) {
   if (data.startsWith('p8s:')) {
     const [, pctRaw, mint] = data.split(':');
     const pct = Math.round(clamp(pctRaw, 1, 100));
-    if (!SOLANA.test(mint) || ![25, 50, 100].includes(pct)) return result('❌ بيانات Copy Sell غير صالحة.');
+    if (!SOLANA.test(mint) || ![25, 50, 100].includes(pct)) return result('❌ بيانات بيع بالنسخ غير صالحة.');
     return terminal.handle(`p6:sp:${pct}:sol:${mint}`);
   }
   return { handled: false };
@@ -657,8 +712,8 @@ export async function handlePhase8Message(message, terminal) {
       '',
       `${row.label} • ${row.address}`,
       'بدأت المتابعة من آخر Transaction الآن؛ لن نعيد تشغيل التاريخ القديم.',
-      'عند اكتشاف Buy/Sell ستظهر لك خيارات مبلغ ثابت أو نسبة.'
-    ].join('\n'), [[{ text: '🧠 Copy Trading', callback_data: 'p8:copy' }]]);
+      'عند اكتشاف شراء/بيع ستظهر لك خيارات مبلغ ثابت أو نسبة.'
+    ].join('\n'), [[{ text: '🧠 نسخ التداول', callback_data: 'p8:copy' }]]);
   }
 
   if (/^\/watch(?:@\w+)?\b/i.test(text)) return { handled: true, ...(await watchDashboard()) };
@@ -672,7 +727,8 @@ export function installPhase8OwnerFlows() {
   state.started = true;
   const watchMs = clamp(process.env.WATCH_UPDATE_INTERVAL_MS ?? 20_000, 10_000, 120_000);
   const copyMs = clamp(process.env.COPY_WALLET_POLL_MS ?? 10_000, 5_000, 120_000);
+  setTimeout(() => void processWalletCreateRequest().catch((error) => console.warn('[phase8:wallet-create]', error.message)), 3_000).unref?.();
   setInterval(() => void watchCycle().catch((error) => console.warn('[phase8:watch]', error.message)), watchMs).unref?.();
   setInterval(() => void copyCycle().catch((error) => console.warn('[phase8:copy]', error.message)), copyMs).unref?.();
-  console.log(`SUMMECA PHASE 8: manual watch threads + dynamic copy wallets + Privy wallet manager active; watch=${watchMs}ms copy=${copyMs}ms`);
+  console.log(`SUMMECA PHASE 8: متابعة + نسخ تداول + مدير محافظ Privy; watch=${watchMs}ms copy=${copyMs}ms`);
 }
