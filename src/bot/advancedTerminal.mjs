@@ -2,6 +2,7 @@ import { env } from '../config/env.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { TradingTerminal, normalizeTerminalNetwork, isTerminalAddress } from './tradingTerminal.mjs';
+import { DEFAULT_STOP_LADDER_CONFIG, STOP_LADDER_KEY, formatStopLadder, normalizeStopLadderConfig, stopFloorForHighWater } from '../trading/stopLadder.mjs';
 
 const POSITIONS_KEY = 'terminal_paper_positions_v1';
 const PRESET_KEY = 'terminal_buy_preset_v1';
@@ -113,6 +114,33 @@ function amountKeyboard(code, key, address, action = 'term:bp') {
   return [buttons.slice(0, 2), buttons.slice(2)];
 }
 
+async function ladderConfig(instance) {
+  if (!instance?.settings?.enabled) return normalizeStopLadderConfig(DEFAULT_STOP_LADDER_CONFIG);
+  const raw = await instance.settings.get(STOP_LADDER_KEY).catch(() => '');
+  return normalizeStopLadderConfig(raw || DEFAULT_STOP_LADDER_CONFIG);
+}
+
+async function toggleRiskLadder(instance, network, address) {
+  const key = normalizeTerminalNetwork(network);
+  if (!isTerminalAddress(key, address)) return { text: '❌ عنوان العقد أو الشبكة غير صالحين.', keyboard: [] };
+  const rows = await loadRows(instance);
+  const id = `${key}:${String(address).toLowerCase()}`;
+  const position = rows.find((row) => row.id === id && row.status === 'open');
+  if (!position) return { text: '❌ لا يوجد مركز مفتوح لهذا العقد.', keyboard: [] };
+  const config = await ladderConfig(instance);
+  position.dynamicStopLadder = !position.dynamicStopLadder;
+  position.ladderStopPct = position.dynamicStopLadder ? null : position.ladderStopPct;
+  position.ladderHighWaterPct = position.dynamicStopLadder ? 0 : position.ladderHighWaterPct;
+  if (position.dynamicStopLadder) {
+    position.takeProfitPct = 0;
+    position.trailingPct = 0;
+    position.stopLossPct = config.initialStopLossPct;
+  }
+  position.riskUpdatedAt = new Date().toISOString();
+  await saveRows(instance, rows);
+  return riskMenu(instance, key, address);
+}
+
 async function riskMenu(instance, network, address) {
   const key = normalizeTerminalNetwork(network);
   if (!isTerminalAddress(key, address)) return { text: '❌ عنوان العقد أو الشبكة غير صالحين.', keyboard: [] };
@@ -132,8 +160,11 @@ async function riskMenu(instance, network, address) {
       `$${position.symbol || 'TOKEN'} • ${short(address)}`,
       `سعر الدخول: ${priceText(position.entryPrice)}`,
       `جني الربح: ${finite(position.takeProfitPct)}% | وقف الخسارة: ${finite(position.stopLossPct)}% | الوقف المتحرك: ${finite(position.trailingPct)}%`,
+      `🪜 سُلّم الوقف: ${position.dynamicStopLadder ? 'مفعّل ✅' : 'متوقف'}${Number.isFinite(Number(position.ladderStopPct)) ? ` • الوقف الحالي +${finite(position.ladderStopPct)}%` : ''}`,
       '',
-      'اختر خطة. المراقب الآلي يعمل على المركز التجريبي فقط.'
+      position.dynamicStopLadder
+        ? 'السُلّم الديناميكي هو المسؤول الآن؛ تم تعطيل جني الربح الثابت والوقف المتحرك التقليدي لهذا المركز.'
+        : 'اختر خطة عادية أو فعّل سُلّم الوقف الديناميكي.'
     ].join('\n'),
     keyboard: [
       [
@@ -143,6 +174,10 @@ async function riskMenu(instance, network, address) {
       [
         { text: '🚀 هجومي 200/20/25', callback_data: `adv:rp:m:${key}:${address}` },
         { text: '⏸ إيقاف', callback_data: `adv:rp:o:${key}:${address}` }
+      ],
+      [
+        { text: position.dynamicStopLadder ? '⏸ إيقاف سُلّم الوقف' : '🪜 تفعيل سُلّم الوقف', callback_data: `adv:rl:${key}:${address}` },
+        { text: '✏️ تعديل السُلّم', callback_data: 'p8:ladder' }
       ],
       [{ text: '📊 المراكز', callback_data: 'term:p' }]
     ]
@@ -160,6 +195,7 @@ async function applyRiskPreset(instance, code, network, address) {
   position.takeProfitPct = preset.takeProfitPct;
   position.stopLossPct = preset.stopLossPct;
   position.trailingPct = preset.trailingPct;
+  position.dynamicStopLadder = false;
   position.peakPrice = Math.max(finite(position.peakPrice), finite(position.entryPrice));
   position.riskUpdatedAt = new Date().toISOString();
   await saveRows(instance, rows);
@@ -300,6 +336,31 @@ async function notifyAutoExit(position, price, reason, pnl) {
   }).catch(() => {});
 }
 
+async function notifyStopRaised(position, triggerPct, stopPct, pnlPct) {
+  if (!env.telegramBotToken) return;
+  let chatId = String(env.telegramChatId || '');
+  if (!chatId && monitorSettings.enabled) chatId = String(await monitorSettings.get('telegram_chat_id').catch(() => '') || '');
+  if (!chatId) return;
+  await telegramApi(env.telegramBotToken, 'sendMessage', {
+    chat_id: chatId,
+    text: [
+      '🪜⬆️ تم رفع وقف الربح',
+      '',
+      `${position.symbol || 'TOKEN'} • ${NETWORKS[position.network]?.label || position.network}`,
+      `وصلت القمة إلى +${finite(triggerPct).toFixed(0)}% أو أكثر`,
+      `الوقف الجديد: +${finite(stopPct).toFixed(0)}%`,
+      `الربح الحالي: +${Math.max(0, finite(pnlPct)).toFixed(1)}%`,
+      '',
+      '✅ لن يعود الوقف إلى مستوى أقل بعد الآن.',
+      `العقد: ${position.address}`
+    ].join('\n'),
+    reply_markup: { inline_keyboard: [[
+      { text: '🎯 إدارة المخاطر', callback_data: `adv:r:${position.network}:${position.address}` },
+      { text: '📊 المراكز', callback_data: 'term:p' }
+    ]] }
+  }).catch(() => {});
+}
+
 async function paperRiskCycle() {
   if (monitorRunning || !monitorSettings.enabled) return;
   monitorRunning = true;
@@ -310,7 +371,8 @@ async function paperRiskCycle() {
       const tp = finite(position.takeProfitPct);
       const sl = finite(position.stopLossPct);
       const trail = finite(position.trailingPct);
-      if (!(tp > 0 || sl > 0 || trail > 0)) continue;
+      const ladderEnabled = position.dynamicStopLadder === true;
+      if (!(tp > 0 || sl > 0 || trail > 0 || ladderEnabled)) continue;
       const market = await marketFor(position.network, position.address).catch(() => null);
       const price = finite(market?.priceUsd);
       const entry = finite(position.entryPrice);
@@ -321,10 +383,28 @@ async function paperRiskCycle() {
         changed = true;
       }
       const pnlPct = (price / entry - 1) * 100;
+      const peakPnlPct = (peak / entry - 1) * 100;
       let reason = '';
-      if (sl > 0 && pnlPct <= -sl) reason = `STOP LOSS -${sl}%`;
-      else if (tp > 0 && pnlPct >= tp) reason = `TAKE PROFIT +${tp}%`;
-      else if (trail > 0 && peak >= entry * 1.10 && price <= peak * (1 - trail / 100)) reason = `TRAILING STOP ${trail}%`;
+
+      if (ladderEnabled) {
+        const config = normalizeStopLadderConfig(await monitorSettings.get(STOP_LADDER_KEY).catch(() => '') || DEFAULT_STOP_LADDER_CONFIG);
+        const priorFloor = Number.isFinite(Number(position.ladderStopPct)) ? Number(position.ladderStopPct) : null;
+        const { floorPct, triggerPct } = stopFloorForHighWater(peakPnlPct, config);
+        const nextFloor = floorPct == null ? priorFloor : priorFloor == null ? floorPct : Math.max(priorFloor, floorPct);
+        position.ladderHighWaterPct = Math.max(finite(position.ladderHighWaterPct), peakPnlPct);
+        if (nextFloor != null && nextFloor !== priorFloor) {
+          position.ladderStopPct = nextFloor;
+          changed = true;
+          await notifyStopRaised(position, triggerPct, nextFloor, pnlPct);
+        }
+        const effectiveSl = finite(config.initialStopLossPct, sl || 15);
+        if (pnlPct <= -effectiveSl) reason = `وقف خسارة -${effectiveSl}%`;
+        else if (nextFloor != null && pnlPct <= nextFloor) reason = `سُلّم الوقف +${nextFloor}% بعد قمة +${finite(position.ladderHighWaterPct).toFixed(1)}%`;
+      } else {
+        if (sl > 0 && pnlPct <= -sl) reason = `وقف خسارة -${sl}%`;
+        else if (tp > 0 && pnlPct >= tp) reason = `جني ربح +${tp}%`;
+        else if (trail > 0 && peak >= entry * 1.10 && price <= peak * (1 - trail / 100)) reason = `وقف متحرك ${trail}%`;
+      }
       if (!reason) continue;
 
       const qty = finite(position.qty);
@@ -407,6 +487,7 @@ export function installAdvancedTerminal() {
       if (action === 'pre' && parts.length === 3) return { handled: true, ...(await setPreset(this, parts[2])) };
       if (action === 'r' && parts.length >= 4) return { handled: true, ...(await riskMenu(this, parts[2], parts.slice(3).join(':'))) };
       if (action === 'rp' && parts.length >= 5) return { handled: true, ...(await applyRiskPreset(this, parts[2], parts[3], parts.slice(4).join(':'))) };
+      if (action === 'rl' && parts.length >= 4) return { handled: true, ...(await toggleRiskLadder(this, parts[2], parts.slice(3).join(':'))) };
       if (action === 'cp' && parts.length >= 4) return { handled: true, ...(await copyPreview(this, parts[2], parts.slice(3).join(':'))) };
       if (action === 'cb' && parts.length >= 5) return { handled: true, ...(await this.paperBuyConfirm(parts[2], parts[3], parts.slice(4).join(':'))) };
     } catch (error) {
