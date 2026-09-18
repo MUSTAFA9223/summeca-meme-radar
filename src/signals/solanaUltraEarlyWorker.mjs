@@ -2,10 +2,13 @@ import { env } from '../config/env.mjs';
 import { PUMP_FUN_PROGRAM_ID, resolvePumpCreateMint } from '../feeds/heliusDirectCreate.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
+import { fetchTokenOverview, fetchTokenSecurity } from '../feeds/birdeye.mjs';
+import { SolanaTradeCandidateBridge } from './solanaTradeCandidateBridge.mjs';
 
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+const optionalFinite = (value) => value == null || value === '' ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
 const short = (value) => {
   const text = String(value ?? '');
   return text.length > 14 ? `${text.slice(0, 7)}…${text.slice(-5)}` : text;
@@ -187,6 +190,8 @@ async function fetchHolderProfile(mint) {
 
   return {
     pass,
+    provider: 'solana-rpc',
+    limitedEvidence: false,
     curveExcluded,
     curveSharePct: curveExcluded ? shares[0] : 0,
     observedAccounts,
@@ -194,6 +199,29 @@ async function fetchHolderProfile(mint) {
     top5UsersPct,
     top10UsersPct,
     meaningfulWallets
+  };
+}
+
+async function fetchBirdeyeHolderProfile(mint) {
+  if (!env.birdeyeApiKey) return null;
+  const [overview, security] = await Promise.all([
+    fetchTokenOverview(env.birdeyeApiKey, mint),
+    fetchTokenSecurity(env.birdeyeApiKey, mint)
+  ]);
+  const holderCount = optionalFinite(overview?.holderCount);
+  const top10 = optionalFinite(security?.top10HolderPct);
+  if (!(holderCount > 0) || !(top10 > 0)) return null;
+  return {
+    pass: holderCount >= 20 && top10 <= 45,
+    provider: 'birdeye',
+    limitedEvidence: true,
+    curveExcluded: false,
+    curveSharePct: null,
+    observedAccounts: holderCount,
+    topUserPct: null,
+    top5UsersPct: null,
+    top10UsersPct: top10,
+    meaningfulWallets: null
   };
 }
 
@@ -233,6 +261,17 @@ export class SolanaUltraEarlyWorker {
     this.seenSignatures = new Set();
     this.pending = new Map();
     this.marketRunning = false;
+    this.bridge = new SolanaTradeCandidateBridge();
+    this.funnel = {
+      detected: 0,
+      market: 0,
+      plausible: 0,
+      profilePass: 0,
+      qualified: 0,
+      paperOpened: 0,
+      rejectionReasons: new Map(),
+      lastLogAt: 0
+    };
   }
 
   isCreate(logs) {
@@ -261,6 +300,7 @@ export class SolanaUltraEarlyWorker {
       topSent: false
     };
     if (initialBuy) state.initialBuy = true;
+    if (!prior) this.funnel.detected += 1;
     this.pending.set(mint, state);
     if (this.pending.size > 700) {
       const oldest = [...this.pending.entries()].sort((a, b) => a[1].createdAt - b[1].createdAt).slice(0, 100);
@@ -299,10 +339,11 @@ export class SolanaUltraEarlyWorker {
       `💧 السيولة: $${money(market.liquidityUsd)} | MC: $${money(market.marketCapUsd)}`,
       `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | Ratio ${ratio.toFixed(2)}x`,
       `Vol: $${money(market.volume5mUsd)}`,
-      `👥 حسابات حيازة بارزة مرصودة: ${profile.observedAccounts}`,
-      `🐋 محافظ بحيازة مؤثرة: ${profile.meaningfulWallets}`,
-      `🔝 أكبر حامل خارج حساب المنحنى: ${profile.topUserPct.toFixed(1)}%`,
-      `Top 5 خارج المنحنى: ${profile.top5UsersPct.toFixed(1)}%`,
+      `👥 الحائزون/الحسابات المرصودة: ${profile.observedAccounts ?? '—'}`,
+      `🐋 محافظ بحيازة مؤثرة: ${profile.meaningfulWallets ?? '—'}`,
+      `🔝 أكبر حامل خارج حساب المنحنى: ${profile.topUserPct == null ? '—' : `${profile.topUserPct.toFixed(1)}%`}`,
+      `Top 5 خارج المنحنى: ${profile.top5UsersPct == null ? '—' : `${profile.top5UsersPct.toFixed(1)}%`}`,
+      `مصدر الحيازة: ${profile.provider || 'solana-rpc'}${profile.limitedEvidence ? ' (fallback)' : ''}`,
       '🛡️ توزيع الحيازة: PASSED',
       '',
       '⚠️ اجتياز الفلتر لا يضمن استمرار الصعود.',
@@ -386,39 +427,149 @@ export class SolanaUltraEarlyWorker {
     const now = Date.now();
     if (state.profile && now - state.lastProfileAt < this.profileRefreshMs) return state.profile;
     state.lastProfileAt = now;
+    const prior = state.profile;
     try {
-      state.profile = await fetchHolderProfile(mint);
+      const direct = await fetchHolderProfile(mint);
+      if (direct) {
+        state.profile = direct;
+        return direct;
+      }
     } catch (error) {
       console.warn(`[solana:holder-profile] mint=${short(mint)} ${error.message}`);
     }
-    return state.profile;
+
+    try {
+      const fallback = await fetchBirdeyeHolderProfile(mint);
+      if (fallback) {
+        state.profile = fallback;
+        console.log(`[solana:holder-fallback] mint=${short(mint)} provider=birdeye holders=${fallback.observedAccounts} top10=${fallback.top10UsersPct.toFixed(1)}%`);
+        return fallback;
+      }
+    } catch (error) {
+      console.warn(`[solana:holder-fallback] mint=${short(mint)} ${error.message}`);
+    }
+
+    return prior || null;
+  }
+
+  rejectionReason(state, market) {
+    const ageMs = Date.now() - state.createdAt;
+    const ratio = market.buys5m / Math.max(1, market.sells5m);
+    if (!state.initialBuy) return 'no-initial-buy';
+    if (ageMs > 4 * 60_000) return 'candidate-too-old';
+    if (!(market.marketCapUsd > 0)) return 'market-cap-unavailable';
+    if (market.marketCapUsd > 1_800_000) return 'market-cap-too-high';
+    if (market.buys5m < 4) return 'insufficient-buys-5m';
+    if (market.volume5mUsd < 250) return 'insufficient-volume-5m';
+    if (ratio < 1.2) return 'weak-buy-sell-ratio';
+    if (market.priceChange5mPct > 55) return 'move-overextended';
+    return null;
+  }
+
+  noteRejection(reason) {
+    const key = String(reason || 'unknown');
+    this.funnel.rejectionReasons.set(key, (this.funnel.rejectionReasons.get(key) || 0) + 1);
+  }
+
+  logFunnel() {
+    const now = Date.now();
+    if (now - this.funnel.lastLogAt < 60_000) return;
+    this.funnel.lastLogAt = now;
+    const rejected = [...this.funnel.rejectionReasons.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([reason, count]) => `${reason}=${count}`)
+      .join(',');
+    console.log(`[solana:funnel] detected=${this.funnel.detected} market=${this.funnel.market} plausible=${this.funnel.plausible} profilePass=${this.funnel.profilePass} qualified=${this.funnel.qualified} paper=${this.funnel.paperOpened} rejects=[${rejected}]`);
   }
 
   async handleMarket(mint, state, market) {
     const ageMs = Date.now() - state.createdAt;
-    if (ageMs > 8 * 60_000) return;
-    const ratio = market.buys5m / Math.max(1, market.sells5m);
+    this.funnel.market += 1;
 
-    const plausible = state.initialBuy
-      && ageMs <= 4 * 60_000
-      && market.marketCapUsd > 0
-      && market.marketCapUsd <= 1_800_000
-      && market.buys5m >= 4
-      && market.volume5mUsd >= 250
-      && ratio >= 1.2
-      && market.priceChange5mPct <= 55;
-    if (!plausible) return;
+    const existingPaper = this.bridge.hasOpenPaperPosition(mint);
+    const reject = this.rejectionReason(state, market);
+    if (reject) {
+      this.noteRejection(reject);
+      await this.bridge.observe({
+        mint,
+        state,
+        market,
+        profile: state.profile,
+        score: state.lastScore || 0,
+        qualified: false,
+        rejectionReason: reject
+      });
+      if (!existingPaper) return;
+    } else {
+      this.funnel.plausible += 1;
+    }
+
+    if (ageMs > 8 * 60_000 && !existingPaper) return;
 
     const profile = await this.profileFor(mint, state);
-    if (!profile?.pass) return;
-    const score = qualityScore(state, market, profile);
+    if (!profile) {
+      this.noteRejection('profile-provider-pending');
+      await this.bridge.observe({
+        mint,
+        state,
+        market,
+        profile: null,
+        score: state.lastScore || 0,
+        qualified: false,
+        rejectionReason: 'profile-provider-pending'
+      });
+      return;
+    }
 
-    const qualified = score >= this.minScore
+    if (!profile.pass) {
+      this.noteRejection('holder-profile-failed');
+      await this.bridge.observe({
+        mint,
+        state,
+        market,
+        profile,
+        score: state.lastScore || 0,
+        qualified: false,
+        rejectionReason: 'holder-profile-failed'
+      });
+      return;
+    }
+    this.funnel.profilePass += 1;
+
+    const score = qualityScore(state, market, profile);
+    state.lastScore = score;
+    const ratio = market.buys5m / Math.max(1, market.sells5m);
+    const qualified = !reject
+      && score >= this.minScore
       && market.buys5m >= 5
       && market.volume5mUsd >= 400
       && ratio >= 1.3;
-    if (qualified && !state.qualifiedSent) {
-      await this.sendQualified(mint, state, market, profile, score);
+
+    let rejectionReason = null;
+    if (!qualified) {
+      if (score < this.minScore) rejectionReason = 'quality-score-below-threshold';
+      else if (market.buys5m < 5) rejectionReason = 'qualified-buys-below-threshold';
+      else if (market.volume5mUsd < 400) rejectionReason = 'qualified-volume-below-threshold';
+      else if (ratio < 1.3) rejectionReason = 'qualified-ratio-below-threshold';
+      else rejectionReason = reject || 'qualification-pending';
+      this.noteRejection(rejectionReason);
+    }
+
+    const bridgeResult = await this.bridge.observe({
+      mint,
+      state,
+      market,
+      profile,
+      score,
+      qualified,
+      rejectionReason
+    });
+    if (bridgeResult?.paperOpened) this.funnel.paperOpened += 1;
+
+    if (qualified) {
+      this.funnel.qualified += 1;
+      if (!state.qualifiedSent) await this.sendQualified(mint, state, market, profile, score);
     }
 
     const top = state.qualifiedSent
@@ -438,7 +589,7 @@ export class SolanaUltraEarlyWorker {
     try {
       const now = Date.now();
       for (const [mint, state] of this.pending) {
-        if (now - state.createdAt > 20 * 60_000) this.pending.delete(mint);
+        if (now - state.createdAt > 20 * 60_000 && !this.bridge.hasOpenPaperPosition(mint)) this.pending.delete(mint);
       }
       const selected = [...this.pending.entries()]
         .filter(([, state]) => now - state.lastMarketAt >= this.marketPollMs)
@@ -458,8 +609,18 @@ export class SolanaUltraEarlyWorker {
       }
       for (const [mint, state] of selected) {
         const market = best.get(mint);
-        if (market) await this.handleMarket(mint, state, market);
+        if (market) {
+          await this.handleMarket(mint, state, market);
+        } else {
+          await this.bridge.recordStage({
+            mint,
+            state,
+            stage: 'market_pending',
+            reason: 'market-not-indexed-yet'
+          });
+        }
       }
+      this.logFunnel();
     } catch (error) {
       console.warn('[solana:ultra-market]', error.message);
     } finally {
@@ -477,6 +638,15 @@ export class SolanaUltraEarlyWorker {
       return false;
     }
     this.active = true;
+    void this.bridge.initialize().then((positions) => {
+      for (const position of positions || []) {
+        const state = this.rememberMint(position.address, 'restored-paper', true);
+        if (!state) continue;
+        state.createdAt = Number(position.entryAt) || Date.now();
+        state.qualifiedSent = true;
+        state.lastScore = 72;
+      }
+    }).catch((error) => console.warn('[solana:paper-bridge:init]', error?.message ?? error));
     this.connect();
     setInterval(() => void this.marketCycle(), this.marketPollMs).unref?.();
     return true;
