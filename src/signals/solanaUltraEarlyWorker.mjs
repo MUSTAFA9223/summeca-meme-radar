@@ -207,22 +207,22 @@ class SolanaTelegramSink {
     const token = String(mint ?? '');
     const rows = [
       [
-        { text: '🔎 تحليل / Analyze', callback_data: `term:a:sol:${token}` },
-        { text: '📋 نسخ العقد / CA', copy_text: { text: token } }
+        { text: '🔎 تحليل', callback_data: `term:a:sol:${token}` },
+        { text: '📋 نسخ العقد', copy_text: { text: token } }
       ],
       [
-        { text: '🟢 Buy', callback_data: `term:b:sol:${token}` },
-        { text: '🔴 Sell', callback_data: `term:s:sol:${token}` },
+        { text: '🟢 شراء', callback_data: `term:b:sol:${token}` },
+        { text: '🔴 بيع', callback_data: `term:s:sol:${token}` },
         { text: '👀 متابعة', callback_data: `watch:add:${token}` }
       ],
-      [{ text: '📊 Positions', callback_data: 'term:p' }],
+      [{ text: '📊 المراكز', callback_data: 'term:p' }],
       [
         { text: '🚀 Pump.fun', url: `https://pump.fun/coin/${encodeURIComponent(token)}` },
         { text: '🟢 GMGN', url: `https://gmgn.ai/sol/token/${encodeURIComponent(token)}` }
       ],
       [{ text: '🔥 FOMO', url: `https://fomo.family/tokens/solana/${encodeURIComponent(token)}` }]
     ];
-    if (marketUrl) rows.push([{ text: '📊 فتح السوق / Open market', url: marketUrl }]);
+    if (marketUrl) rows.push([{ text: '📊 فتح السوق', url: marketUrl }]);
     return { inline_keyboard: rows };
   }
 
@@ -785,7 +785,7 @@ export class SolanaUltraEarlyWorker {
     const ageMs = Date.now() - state.createdAt;
     this.funnel.market += 1;
 
-    if (this.breakoutEnabled && !state.breakoutSent && !state.earlySent) {
+    if (this.breakoutEnabled && !state.breakoutSent) {
       const breakoutEligible = isSolanaBreakoutEligible({
         ageMs,
         minLiquidityUsd: this.breakoutMinLiquidityUsd,
