@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SolanaTradeCandidateBridge } from '../src/signals/solanaTradeCandidateBridge.mjs';
+import { isSolanaBridgePaperTrade, SolanaTradeCandidateBridge } from '../src/signals/solanaTradeCandidateBridge.mjs';
 
 class FakeStore {
   constructor() {
@@ -13,7 +13,7 @@ class FakeStore {
     this.closed = [];
   }
   async listOpenPaperTrades() { return []; }
-  async paperRealizedPnlUsd() { return 0; }
+  async paperRealizedPnlUsdForStrategies(strategies) { this.requestedStrategies = strategies; return 0; }
   bindPaperTrade() {}
   async upsertCandidateFunnel(row) { this.funnel.push(row); return row; }
   async saveSnapshot(snapshot, scores) {
@@ -157,4 +157,20 @@ test('paper-only probe opens for a strong provider-pending candidate without cre
   assert.equal(store.signals.filter((row) => row.type === 'entry').length, 0);
   assert.equal(store.opened[0].position.strategy, 'solana-ultra-probe');
   assert.ok(store.funnel.some((row) => row.stage === 'paper_probe_open'));
+});
+
+
+test('strategy isolation excludes legacy paper trades from the Solana bridge bankroll', async () => {
+  assert.equal(isSolanaBridgePaperTrade({ metadata: { sizing: { strategy: 'solana-ultra-probe' } } }), true);
+  assert.equal(isSolanaBridgePaperTrade({ metadata: { sizing: { strategy: 'solana-ultra-qualified' } } }), true);
+  assert.equal(isSolanaBridgePaperTrade({ metadata: { sizing: { strategy: 'legacy-paper-entry' } } }), false);
+  assert.equal(isSolanaBridgePaperTrade({ metadata: { manual: true } }), false);
+
+  const store = new FakeStore();
+  const trader = new FakeTrader();
+  const bridge = new SolanaTradeCandidateBridge({ store, trader, logger: { log() {}, warn() {} } });
+  await bridge.initialize();
+
+  assert.deepEqual(new Set(store.requestedStrategies), new Set(['solana-ultra-qualified', 'solana-ultra-probe']));
+  assert.equal(trader.realized, 0);
 });

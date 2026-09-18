@@ -4,6 +4,9 @@ import { PaperTrader } from '../trading/paperTrader.mjs';
 
 const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const clamp = (value, min = 0, max = 100) => Math.max(min, Math.min(max, finite(value)));
+const BRIDGE_STRATEGIES = new Set(['solana-ultra-qualified', 'solana-ultra-probe']);
+const rowStrategy = (row = {}) => String(row?.metadata?.sizing?.strategy ?? row?.metadata?.strategy ?? '');
+export const isSolanaBridgePaperTrade = (row = {}) => BRIDGE_STRATEGIES.has(rowStrategy(row));
 
 function scoreFromUltra(score, profile = {}, market = {}) {
   const top10 = finite(profile?.top10UsersPct, 0);
@@ -101,10 +104,11 @@ export class SolanaTradeCandidateBridge {
         return [];
       }
       try {
-        const [rows, realized] = await Promise.all([
-          this.store.listOpenPaperTrades(Math.max(10, env.maxOpenPositions * 4)),
-          this.store.paperRealizedPnlUsd()
+        const [allOpenRows, realized] = await Promise.all([
+          this.store.listOpenPaperTrades(100),
+          this.store.paperRealizedPnlUsdForStrategies([...BRIDGE_STRATEGIES])
         ]);
+        const rows = allOpenRows.filter(isSolanaBridgePaperTrade);
         this.trader.setRealizedPnlUsd(realized);
         let restored = 0;
         for (const row of rows) {
@@ -113,7 +117,7 @@ export class SolanaTradeCandidateBridge {
           this.store.bindPaperTrade(result.position.address, row.id);
           restored += 1;
         }
-        if (restored) this.logger.log(`[solana:paper-bridge] restored=${restored}`);
+        this.logger.log(`[solana:paper-bridge] bankroll=isolated realized=${Number(realized).toFixed(4)} restored=${restored}`);
       } catch (error) {
         this.logger.warn?.('[solana:paper-bridge:init]', error?.message ?? error);
       }

@@ -322,6 +322,18 @@ export class SupabaseStore {
     return (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + (finite(row?.pnl_usd) ?? 0), 0);
   }
 
+  async paperRealizedPnlUsdForStrategies(strategies = [], limit = 5000) {
+    if (!this.enabled) return 0;
+    const wanted = new Set((Array.isArray(strategies) ? strategies : [strategies]).map(String).filter(Boolean));
+    if (!wanted.size) return 0;
+    const safeLimit = Math.max(1, Math.min(5000, Number(limit) || 5000));
+    const rows = await this.#request(`paper_trades?select=pnl_usd,metadata&status=eq.closed&pnl_usd=not.is.null&order=closed_at.desc&limit=${safeLimit}`);
+    return (Array.isArray(rows) ? rows : []).reduce((sum, row) => {
+      const strategy = String(row?.metadata?.sizing?.strategy ?? row?.metadata?.strategy ?? '');
+      return wanted.has(strategy) ? sum + (finite(row?.pnl_usd) ?? 0) : sum;
+    }, 0);
+  }
+
   async saveSignalThread({ tokenId, chatId, rootMessageId, snapshot }) {
     if (!this.enabled || !tokenId || !chatId || !rootMessageId) return null;
     const reference = positive(snapshot?.priceUsd);
