@@ -253,6 +253,7 @@ export class SolanaUltraEarlyWorker {
     this.rawLaunchAlerts = boolEnv('SOLANA_RAW_LAUNCH_ALERTS', false);
     this.marketPollMs = numEnv('SOLANA_ULTRA_MARKET_POLL_MS', 1_500, 1_000, 5_000);
     this.minScore = numEnv('SOLANA_QUALIFIED_MIN_SCORE', 72, 50, 95);
+    this.paperProbeMinScore = numEnv('SOLANA_PAPER_PROBE_MIN_SCORE', 68, 55, 90);
     this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
     this.ws = null;
@@ -510,15 +511,26 @@ export class SolanaUltraEarlyWorker {
     const profile = await this.profileFor(mint, state);
     if (!profile) {
       this.noteRejection('profile-provider-pending');
-      await this.bridge.observe({
+      const score = qualityScore(state, market, null);
+      state.lastScore = score;
+      const ratio = market.buys5m / Math.max(1, market.sells5m);
+      const paperEligible = !reject
+        && score >= this.paperProbeMinScore
+        && market.buys5m >= 5
+        && market.volume5mUsd >= 400
+        && ratio >= 1.3
+        && market.priceChange5mPct <= 45;
+      const bridgeResult = await this.bridge.observe({
         mint,
         state,
         market,
         profile: null,
-        score: state.lastScore || 0,
+        score,
         qualified: false,
+        paperEligible,
         rejectionReason: 'profile-provider-pending'
       });
+      if (bridgeResult?.paperOpened) this.funnel.paperOpened += 1;
       return;
     }
 

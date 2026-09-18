@@ -106,13 +106,14 @@ test('qualified Solana candidate persists a signal and opens one paper trade onl
 test('provider-pending candidates are tracked without opening a paper position', async () => {
   const store = new FakeStore();
   const trader = new FakeTrader();
-  const bridge = new SolanaTradeCandidateBridge({ store, trader, enabled: true, paperMinScore: 72, logger: { log() {}, warn() {} } });
+  const bridge = new SolanaTradeCandidateBridge({ store, trader, enabled: true, paperMinScore: 72, paperProbeMinScore: 68, logger: { log() {}, warn() {} } });
 
   const result = await bridge.observe({
     ...candidate,
     profile: null,
     score: 0,
     qualified: false,
+    paperEligible: false,
     rejectionReason: 'profile-provider-pending'
   });
 
@@ -133,4 +134,27 @@ test('score below the paper threshold remains a durable qualified candidate with
   assert.equal(trader.enterCalls, 0);
   assert.equal(store.signals.length, 1);
   assert.ok(store.funnel.some((row) => row.stage === 'qualified'));
+});
+
+
+test('paper-only probe opens for a strong provider-pending candidate without creating a normal entry signal', async () => {
+  const store = new FakeStore();
+  const trader = new FakeTrader();
+  const bridge = new SolanaTradeCandidateBridge({ store, trader, enabled: true, paperMinScore: 72, paperProbeMinScore: 68, logger: { log() {}, warn() {} } });
+
+  const result = await bridge.observe({
+    ...candidate,
+    profile: null,
+    score: 74,
+    qualified: false,
+    paperEligible: true,
+    rejectionReason: 'profile-provider-pending'
+  });
+
+  assert.equal(result.paperOpened, true);
+  assert.equal(trader.enterCalls, 1);
+  assert.equal(store.opened.length, 1);
+  assert.equal(store.signals.filter((row) => row.type === 'entry').length, 0);
+  assert.equal(store.opened[0].position.strategy, 'solana-ultra-probe');
+  assert.ok(store.funnel.some((row) => row.stage === 'paper_probe_open'));
 });
