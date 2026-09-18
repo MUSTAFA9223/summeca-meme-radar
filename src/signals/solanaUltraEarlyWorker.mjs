@@ -317,6 +317,7 @@ export class SolanaUltraEarlyWorker {
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
     this.pendingMaxAgeMs = numEnv('SOLANA_PENDING_MAX_AGE_MS', 8 * 60_000, 4 * 60_000, 20 * 60_000);
     this.pumpNativeMaxPerCycle = numEnv('PUMP_NATIVE_MAX_PER_CYCLE', 4, 1, 8);
+    this.pumpNativeFlowMaxPerCycle = numEnv('PUMP_NATIVE_FLOW_MAX_PER_CYCLE', 2, 0, 4);
     this.ws = null;
     this.active = false;
     this.reconnectAttempt = 0;
@@ -721,7 +722,8 @@ export class SolanaUltraEarlyWorker {
 
       const missing = selected.filter(([mint]) => !best.has(mint));
       const pumpRows = await fetchPumpNativeMarkets(missing.map(([mint]) => mint), {
-        limit: this.pumpNativeMaxPerCycle
+        limit: this.pumpNativeMaxPerCycle,
+        flowLimit: this.pumpNativeFlowMaxPerCycle
       });
       const pumpByMint = new Map(pumpRows.map((market) => [market.mint, market]));
 
@@ -735,7 +737,10 @@ export class SolanaUltraEarlyWorker {
         const pumpMarket = pumpByMint.get(mint);
         if (pumpMarket) {
           state.lastPumpMarket = pumpMarket;
-          if (openPaperAddresses.has(String(mint))) {
+          if (openPaperAddresses.has(String(mint)) || pumpMarket.hasFlow) {
+            if (pumpMarket.hasFlow && !openPaperAddresses.has(String(mint))) {
+              console.log(`[solana:pump-flow] mint=${short(mint)} buys=${pumpMarket.buys5m} sells=${pumpMarket.sells5m} vol=${money(pumpMarket.volume5mUsd)} change=${finite(pumpMarket.priceChange5mPct).toFixed(1)}%`);
+            }
             await this.handleMarket(mint, state, pumpMarket);
           } else {
             await this.bridge.recordStage({
