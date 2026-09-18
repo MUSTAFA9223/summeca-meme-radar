@@ -12,6 +12,7 @@ import { installPhase4PerformanceOverlay } from './bot/phase4PerformanceOverlay.
 import { installPhase5RiskQuote } from './bot/phase5RiskQuote.mjs';
 import { installPhase6ManualConfirm } from './bot/phase6ManualConfirm.mjs';
 import { installPhase7FinalGuard } from './bot/phase7FinalGuard.mjs';
+import { installPhase8OwnerFlows } from './bot/phase8OwnerFlows.mjs';
 import { startLiveProtectionSupervisor } from './trading/liveProtectionSupervisor.mjs';
 
 installArcRpcGuard();
@@ -26,6 +27,7 @@ installPhase4PerformanceOverlay();
 installPhase5RiskQuote();
 installPhase6ManualConfirm();
 installPhase7FinalGuard();
+installPhase8OwnerFlows();
 
 // Exit protection is isolated from radar/Telegram event-loop pressure. This does
 // not load the legacy liveAutomation auto-buy engine; manual entry remains Phase 6/7 only.
