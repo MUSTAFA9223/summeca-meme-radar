@@ -57,9 +57,20 @@ class FakeTrader {
       realizedPnlUsd: 0,
       soldPct: 0,
       status: 'open',
-      strategy: options.strategy
+      strategy: options.strategy,
+      lifecycleStrategy: options.strategy,
+      sizing: { strategy: options.strategy, sizeMultiplier: options.sizeMultiplier }
     };
     return { ok: true, position: this.position };
+  }
+  promoteLifecycle(address, next) {
+    const position = this.getPosition(address);
+    if (!position) return { ok: false, reason: 'no-open-position' };
+    const previous = position.lifecycleStrategy;
+    position.lifecycleStrategy = next;
+    position.sizing = { ...(position.sizing || {}), promotedFrom: previous, promotedTo: next };
+    this.promoteCalls = (this.promoteCalls || 0) + 1;
+    return { ok: true, changed: previous !== next, previous, next, position };
   }
   update() { return { pnlPct: 1 }; }
 }
@@ -173,4 +184,35 @@ test('strategy isolation excludes legacy paper trades from the Solana bridge ban
 
   assert.deepEqual(new Set(store.requestedStrategies), new Set(['solana-ultra-qualified', 'solana-ultra-probe']));
   assert.equal(trader.realized, 0);
+});
+
+
+test('existing probe is promoted when holder profile later qualifies without opening a duplicate trade', async () => {
+  const store = new FakeStore();
+  const trader = new FakeTrader();
+  const bridge = new SolanaTradeCandidateBridge({ store, trader, enabled: true, paperMinScore: 72, paperProbeMinScore: 68, logger: { log() {}, warn() {} } });
+
+  const probe = await bridge.observe({
+    ...candidate,
+    profile: null,
+    score: 74,
+    qualified: false,
+    paperEligible: true,
+    rejectionReason: 'profile-provider-pending'
+  });
+  assert.equal(probe.paperOpened, true);
+
+  const qualified = await bridge.observe({
+    ...candidate,
+    score: 82,
+    qualified: true,
+    paperEligible: true,
+    rejectionReason: null
+  });
+
+  assert.equal(qualified.paperOpened, false);
+  assert.equal(trader.enterCalls, 1);
+  assert.equal(trader.promoteCalls, 1);
+  assert.equal(trader.position.lifecycleStrategy, 'solana-ultra-qualified');
+  assert.ok(store.funnel.some((row) => row.stage === 'paper_promoted'));
 });

@@ -75,6 +75,7 @@ export class PaperTrader {
       manual,
       sizing: metadata.sizing ?? null,
       strategy: String(metadata.strategy ?? metadata.sizing?.strategy ?? (manual ? 'manual' : 'standard')),
+      lifecycleStrategy: String(metadata.sizing?.promotedTo ?? metadata.strategy ?? metadata.sizing?.strategy ?? (manual ? 'manual' : 'standard')),
       declineConfirmations: 0,
       persistenceId: row.id ?? null,
       restored: true
@@ -88,6 +89,25 @@ export class PaperTrader {
   getPosition(address) {
     const p = this.#positions.get(String(address ?? ''));
     return p?.status === 'open' ? p : null;
+  }
+
+  promoteLifecycle(address, nextStrategy = 'solana-ultra-qualified') {
+    const p = this.getPosition(address);
+    if (!p) return { ok: false, reason: 'no-open-position' };
+    const next = String(nextStrategy || '').trim();
+    if (!next) return { ok: false, reason: 'invalid-strategy' };
+    if (p.lifecycleStrategy === next) return { ok: true, changed: false, position: p };
+
+    const previous = p.lifecycleStrategy || p.strategy;
+    p.lifecycleStrategy = next;
+    p.sizing = {
+      ...(p.sizing && typeof p.sizing === 'object' ? p.sizing : {}),
+      promotedFrom: previous,
+      promotedTo: next,
+      promotedAt: Date.now()
+    };
+    this.#log({ type: 'LIFECYCLE_PROMOTION', address: p.address, previous, next });
+    return { ok: true, changed: true, previous, next, position: p };
   }
 
   #openPosition(s, scores, usdSize, { manual = false, sizing = null, strategy = 'standard' } = {}) {
@@ -124,6 +144,7 @@ export class PaperTrader {
       manual,
       sizing,
       strategy,
+      lifecycleStrategy: strategy,
       declineConfirmations: 0,
       persistenceId: null,
       restored: false
@@ -371,16 +392,32 @@ export class PaperTrader {
     if (s.priceUsd > p.highWaterPriceUsd) p.highWaterPriceUsd = s.priceUsd;
     p.highWaterPnlPct = Math.max(p.highWaterPnlPct, pnlPct);
 
-    const d = p.strategy === 'ultra-early-momentum'
-      ? this.#ultraEarlyExitDecision(s, p, scores, pnlPct)
-      : peakExitDecision({
-          snapshot: s,
-          scores,
-          pnlPct,
-          highWaterPnlPct: p.highWaterPnlPct,
-          stopLossPct: this.cfg.stopLossPct,
-          peakHunterStartPct: this.cfg.peakHunterStartPct
-        });
+    const observedAt = finite(s?.observedAt, Date.now()) ?? Date.now();
+    const holdMs = Math.max(0, observedAt - (finite(p.entryAt, observedAt) ?? observedAt));
+    const probeMaxHoldMs = Math.max(60_000, finite(this.cfg.probeMaxHoldMs, 20 * 60_000) ?? 20 * 60_000);
+    const lifecycleStrategy = String(p.lifecycleStrategy ?? p.strategy ?? '');
+
+    let d = null;
+    if (lifecycleStrategy === 'solana-ultra-probe' && holdMs >= probeMaxHoldMs) {
+      d = {
+        exit: true,
+        reason: `paper probe max-hold (${Math.round(probeMaxHoldMs / 60_000)}m)`,
+        holdMs,
+        probeMaxHoldMs
+      };
+    }
+    if (!d) {
+      d = p.strategy === 'ultra-early-momentum'
+        ? this.#ultraEarlyExitDecision(s, p, scores, pnlPct)
+        : peakExitDecision({
+            snapshot: s,
+            scores,
+            pnlPct,
+            highWaterPnlPct: p.highWaterPnlPct,
+            stopLossPct: this.cfg.stopLossPct,
+            peakHunterStartPct: this.cfg.peakHunterStartPct
+          });
+    }
     if (!d?.exit) return { pnlPct };
 
     const remainingPnlUsd = Number(p.usdSize) * (pnlPct / 100);
