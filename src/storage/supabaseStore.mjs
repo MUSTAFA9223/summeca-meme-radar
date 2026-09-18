@@ -278,6 +278,35 @@ export class SupabaseStore {
     return id;
   }
 
+  async upsertCandidateFunnel({
+    network,
+    tokenAddress,
+    source = null,
+    stage,
+    score = null,
+    rejectionReason = null,
+    firstSeenAt = null,
+    metadata = {}
+  }) {
+    if (!this.enabled || !network || !tokenAddress || !stage) return null;
+    const rows = await this.#request('candidate_funnel?on_conflict=network,token_address', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=representation',
+      body: {
+        network: String(network),
+        token_address: String(tokenAddress),
+        source: source ? String(source) : null,
+        stage: String(stage),
+        score: finite(score),
+        rejection_reason: rejectionReason ? String(rejectionReason) : null,
+        first_seen_at: iso(firstSeenAt) ?? new Date().toISOString(),
+        last_seen_at: new Date().toISOString(),
+        metadata: metadata && typeof metadata === 'object' ? metadata : {}
+      }
+    });
+    return Array.isArray(rows) ? rows[0] ?? null : null;
+  }
+
   async listOpenPaperTrades(limit = 20) {
     if (!this.enabled) return [];
     const safeLimit = Math.max(1, Math.min(100, Number(limit) || 20));
