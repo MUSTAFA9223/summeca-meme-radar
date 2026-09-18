@@ -155,6 +155,23 @@ export class PaperTrader {
     return result.ok ? result.position : null;
   }
 
+  enterQualified(s, scores, {
+    strategy = 'qualified',
+    sizeMultiplier = 1
+  } = {}) {
+    const multiplier = Math.max(0.05, Math.min(1, Number(sizeMultiplier) || 1));
+    const requestedUsd = Number(this.cfg.tradeSizeUsd) * multiplier;
+    return this.#openPosition(s, scores, requestedUsd, {
+      manual: false,
+      strategy,
+      sizing: {
+        mode: 'strategy',
+        strategy,
+        sizeMultiplier: multiplier
+      }
+    });
+  }
+
   enterManual(s, scores, sizing) {
     const mode = String(sizing?.mode ?? 'usd');
     const value = Number(sizing?.value);
