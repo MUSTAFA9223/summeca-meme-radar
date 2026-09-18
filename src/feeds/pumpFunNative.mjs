@@ -232,7 +232,24 @@ export async function fetchPumpNativeMarket(mint, { includeFlow = false } = {}) 
 
   const prior = coinCache.get(address);
   const now = Date.now();
-  if (prior && now - prior.at < cacheMs()) return prior.value;
+  if (prior && now - prior.at < cacheMs()) {
+    if (!includeFlow || prior.value?.hasFlow) return prior.value;
+    const solPriceUsd = positive(prior.value?.solPriceUsd) ?? await fetchSolPriceUsd();
+    const flow = await fetchPumpNativeTradeFlow(address, solPriceUsd);
+    if (!flow?.hasFlow) return prior.value;
+    const enriched = {
+      ...prior.value,
+      buys5m: flow.buys5m,
+      sells5m: flow.sells5m,
+      volume5mUsd: flow.volume5mUsd,
+      priceChange5mPct: flow.priceChange5mPct,
+      tradeCount5m: flow.tradeCount5m,
+      hasFlow: true,
+      flowSource: 'pump-native-trades'
+    };
+    coinCache.set(address, { value: enriched, at: prior.at });
+    return enriched;
+  }
 
   try {
     const coin = await queuedJson(`/coins-v2/${encodeURIComponent(address)}`);
