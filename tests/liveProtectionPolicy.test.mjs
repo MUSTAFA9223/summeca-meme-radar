@@ -87,3 +87,42 @@ test('profit lock and tighter trailing raise the floor progressively', () => {
   assert.equal(retrace.currentStop, locked.currentStop);
   assert.equal(retrace.triggered, true);
 });
+
+
+test('manual stop ladder locks +50% after +100% and +200% after +300%', () => {
+  const ladderSettings = {
+    ...settings,
+    stopLadder: [
+      { triggerPct: 100, stopPct: 50 },
+      { triggerPct: 300, stopPct: 200 }
+    ]
+  };
+
+  const at100 = advanceProtectionState({
+    entryPriceUsd: 1,
+    currentPriceUsd: 2,
+    previousHighestPriceUsd: 1,
+    previousHighWaterPnlPct: 0,
+    previousCurrentStop: -15
+  }, ladderSettings);
+  assert.ok(at100.currentStop >= 50);
+
+  const at300 = advanceProtectionState({
+    entryPriceUsd: 1,
+    currentPriceUsd: 4,
+    previousHighestPriceUsd: at100.highestPriceUsd,
+    previousHighWaterPnlPct: at100.highWaterPnlPct,
+    previousCurrentStop: at100.currentStop
+  }, ladderSettings);
+  assert.ok(at300.currentStop >= 200);
+
+  const retrace = advanceProtectionState({
+    entryPriceUsd: 1,
+    currentPriceUsd: 2.9,
+    previousHighestPriceUsd: at300.highestPriceUsd,
+    previousHighWaterPnlPct: at300.highWaterPnlPct,
+    previousCurrentStop: at300.currentStop
+  }, ladderSettings);
+  assert.equal(retrace.currentStop, at300.currentStop);
+  assert.equal(retrace.triggered, true);
+});
