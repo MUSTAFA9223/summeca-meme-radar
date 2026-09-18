@@ -75,7 +75,8 @@ export class SolanaTradeCandidateBridge {
       tradeSizeUsd: env.paperTradeSizeUsd,
       maxOpen: env.maxOpenPositions,
       stopLossPct: env.paperStopLossPct,
-      peakHunterStartPct: env.peakHunterStartPct
+      peakHunterStartPct: env.peakHunterStartPct,
+      probeMaxHoldMs: Math.max(60_000, finite(process.env.SOLANA_PAPER_PROBE_MAX_HOLD_MS, 20 * 60_000))
     }),
     enabled = String(process.env.SOLANA_PAPER_BRIDGE_ENABLED ?? 'true').toLowerCase() !== 'false',
     paperMinScore = Math.max(50, Math.min(95, finite(process.env.SOLANA_PAPER_MIN_SCORE, 72))),
@@ -175,6 +176,15 @@ export class SolanaTradeCandidateBridge {
     const existing = this.trader.getPosition(mint);
 
     if (existing) {
+      const currentLifecycle = String(existing.lifecycleStrategy ?? existing.sizing?.promotedTo ?? existing.strategy ?? '');
+      let promoted = null;
+      if (qualified && currentLifecycle === 'solana-ultra-probe' && typeof this.trader.promoteLifecycle === 'function') {
+        promoted = this.trader.promoteLifecycle(mint, 'solana-ultra-qualified');
+        if (promoted?.changed) {
+          this.logger.log(`[solana:paper-promote] mint=${String(mint).slice(0, 8)}… probe->qualified score=${scores.entry}`);
+        }
+      }
+
       const result = this.trader.update(snapshot, scores);
       try {
         if (result?.closed) {
@@ -195,6 +205,19 @@ export class SolanaTradeCandidateBridge {
           return { paperClosed: true, position: result.closed, scores, snapshot };
         }
         await this.store.updateOpenPaperTrade(snapshot, existing);
+        if (promoted?.changed) {
+          await this.recordStage({
+            mint,
+            state,
+            stage: 'paper_promoted',
+            score: scores.entry,
+            metadata: {
+              from: promoted.previous,
+              to: promoted.next,
+              profileProvider: profile?.provider || null
+            }
+          });
+        }
       } catch (error) {
         this.logger.warn?.(`[solana:paper-bridge:update] mint=${String(mint).slice(0, 8)}… ${error?.message ?? error}`);
       }
