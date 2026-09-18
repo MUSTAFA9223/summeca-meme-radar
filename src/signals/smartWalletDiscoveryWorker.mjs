@@ -444,8 +444,7 @@ async function harvestSolanaRpcFallback(token) {
   const start = Date.parse(token.listed_at || '') || 0;
   const signatures = await solanaHistoryRpc('getSignaturesForAddress', [
     mint,
-    { limit: 80 },
-    'confirmed'
+    { limit: 80, commitment: 'confirmed' }
   ]).catch((error) => {
     console.warn(`[auto-smart:solana-rpc-history] ${short(mint)} signatures ${error.message}`);
     return [];
@@ -641,7 +640,8 @@ export class SmartWalletDiscoveryWorker {
           const prior = this.state.processed[key];
           if (!prior) return true;
           if (prior.buyers > 0) return false;
-          return now - finite(prior.at) >= 15 * 60_000;
+          const emptyRetryMs = Math.max(60_000, finite(process.env.AUTO_SMART_EMPTY_RETRY_MS, 120_000));
+          return now - finite(prior.at) >= emptyRetryMs;
         })
         .sort((a, b) => b.roi - a.roi)
         .slice(0, this.winnersPerCycle);
