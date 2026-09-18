@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceSolanaEarlyConfirmation, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates } from '../src/signals/solanaUltraEarlyWorker.mjs';
+import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates } from '../src/signals/solanaUltraEarlyWorker.mjs';
 
 test('fresh initial-buy candidates outrank restored backlog', () => {
   const now = 1_000_000;
@@ -171,4 +171,34 @@ test('early momentum requires two separated confirmations and resets on price re
   });
   assert.equal(reversal.count, 1);
   assert.equal(reversal.confirmed, false);
+});
+
+
+test('breakout lane catches strong sustained moves that strict early lane rejects as overextended', () => {
+  const market = {
+    priceUsd: 0.0015,
+    liquidityUsd: 18_000,
+    marketCapUsd: 220_000,
+    buys5m: 42,
+    sells5m: 12,
+    volume5mUsd: 9_000,
+    priceChange5mPct: 88
+  };
+  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: 'move-overextended', score: 90, ageMs: 80_000, market }), false);
+  assert.equal(isSolanaBreakoutEligible({ ageMs: 80_000, market }), true);
+});
+
+test('breakout lane rejects one-way, low-liquidity, or weak-volume spikes', () => {
+  const base = {
+    priceUsd: 0.0015,
+    liquidityUsd: 18_000,
+    marketCapUsd: 220_000,
+    buys5m: 42,
+    sells5m: 12,
+    volume5mUsd: 9_000,
+    priceChange5mPct: 88
+  };
+  assert.equal(isSolanaBreakoutEligible({ ageMs: 80_000, market: { ...base, liquidityUsd: 2_000 } }), false);
+  assert.equal(isSolanaBreakoutEligible({ ageMs: 80_000, market: { ...base, sells5m: 0 } }), false);
+  assert.equal(isSolanaBreakoutEligible({ ageMs: 80_000, market: { ...base, volume5mUsd: 500 } }), false);
 });
