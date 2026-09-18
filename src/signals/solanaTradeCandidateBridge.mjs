@@ -21,6 +21,20 @@ function scoreFromUltra(score, profile = {}, market = {}) {
   };
 }
 
+function marketTelemetry(market = {}) {
+  const buys5m = finite(market?.buys5m);
+  const sells5m = finite(market?.sells5m);
+  return {
+    marketCapUsd: finite(market?.marketCapUsd),
+    liquidityUsd: finite(market?.liquidityUsd),
+    buys5m,
+    sells5m,
+    volume5mUsd: finite(market?.volume5mUsd),
+    buySellRatio: buys5m / Math.max(1, sells5m),
+    priceChange5mPct: finite(market?.priceChange5mPct)
+  };
+}
+
 function snapshotFromUltra({ mint, state, market, profile }) {
   return {
     address: mint,
@@ -183,7 +197,8 @@ export class SolanaTradeCandidateBridge {
         reason: rejectionReason,
         metadata: {
           profileProvider: profile?.provider || null,
-          limitedEvidence: profile?.limitedEvidence === true
+          limitedEvidence: profile?.limitedEvidence === true,
+          market: marketTelemetry(market)
         }
       });
       return { paperOpened: false, scores, snapshot };
@@ -199,7 +214,8 @@ export class SolanaTradeCandidateBridge {
         metadata: {
           profileProvider: profile?.provider || null,
           limitedEvidence: true,
-          liveEligible: false
+          liveEligible: false,
+          market: marketTelemetry(market)
         }
       });
     }
