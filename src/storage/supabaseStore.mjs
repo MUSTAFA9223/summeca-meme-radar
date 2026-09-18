@@ -334,6 +334,12 @@ export class SupabaseStore {
     }, 0);
   }
 
+  async listSolanaPaperPerformance() {
+    if (!this.enabled) return [];
+    const rows = await this.#request('solana_paper_performance?select=strategy,score_band,closed_trades,winners,win_rate_pct,avg_pnl_pct,total_pnl_usd,avg_peak_pnl_pct,latest_closed_at&order=strategy.asc,score_band.asc');
+    return Array.isArray(rows) ? rows : [];
+  }
+
   async saveSignalThread({ tokenId, chatId, rootMessageId, snapshot }) {
     if (!this.enabled || !tokenId || !chatId || !rootMessageId) return null;
     const reference = positive(snapshot?.priceUsd);
