@@ -4,27 +4,50 @@ const EVM = /^0x[0-9a-fA-F]{40}$/;
 const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const low = (value) => String(value ?? '').trim().toLowerCase();
 
-function walletsByLabel() {
-  const map = new Map();
-  for (const [index, entry] of String(process.env.TRENCHES_WALLETS || '').split(',').map((x) => x.trim()).filter(Boolean).entries()) {
+const NETWORK_WALLETS = {
+  bsc: 'BNB_WALLETS',
+  robinhood: 'ROBINHOOD_WALLETS',
+  arc: 'ARC_WALLETS'
+};
+
+function parseWalletEntries(raw, network) {
+  const rows = [];
+  for (const [index, entry] of String(raw || '').split(',').map((x) => x.trim()).filter(Boolean).entries()) {
     const [a, b] = entry.includes('|') ? entry.split('|', 2) : entry.includes('=') ? entry.split('=', 2) : [entry, ''];
     const address = EVM.test(a) ? low(a) : EVM.test(b) ? low(b) : '';
     const label = address === low(a) ? String(b || `wallet-${index + 1}`).trim() : String(a || `wallet-${index + 1}`).trim();
-    if (address) map.set(label.toLowerCase(), { address, label });
+    if (address) rows.push({ network, address, label });
+  }
+  return rows;
+}
+
+function walletsByNetworkAndLabel() {
+  const map = new Map();
+  for (const [network, envName] of Object.entries(NETWORK_WALLETS)) {
+    const raw = String(process.env[envName] || process.env.TRENCHES_WALLETS || '');
+    for (const wallet of parseWalletEntries(raw, network)) {
+      map.set(`${network}:${wallet.label.toLowerCase()}`, wallet);
+    }
   }
   return map;
 }
 
-const walletMap = walletsByLabel();
+const walletMap = walletsByNetworkAndLabel();
 
-function detect(text) {
+export function detectTrackedWalletAlert(text) {
   const value = String(text || '');
   if (!/SUMMECA EARLY WATCH/i.test(value) || !/محفظة متتبعة:|tracked wallet:/i.test(value)) return null;
-  const network = /BNB CHAIN/i.test(value) ? 'bsc' : /ROBINHOOD CHAIN/i.test(value) ? 'robinhood' : '';
+  const network = /BNB CHAIN/i.test(value)
+    ? 'bsc'
+    : /ROBINHOOD CHAIN/i.test(value)
+      ? 'robinhood'
+      : /(?:^|—|\s)ARC(?:\s|$)/i.test(value)
+        ? 'arc'
+        : '';
   if (!network) return null;
   const ca = String(value.match(/(?:^|\n)CA:\s*(0x[0-9a-fA-F]{40})/i)?.[1] || '').toLowerCase();
   const label = String(value.match(/(?:محفظة متتبعة|tracked wallet):\s*([^\n]+)/i)?.[1] || '').trim();
-  const wallet = walletMap.get(label.toLowerCase());
+  const wallet = walletMap.get(`${network}:${label.toLowerCase()}`);
   if (!ca || !wallet) return null;
   return { network, ca, wallet };
 }
@@ -87,7 +110,8 @@ async function persist(info) {
         token_id: token.id, signal_type: 'entry', entry_score: entryScore, risk_score: 25,
         reason: {
           trigger: `${info.network}-tracked-wallet-early-watch`, origin: 'telegram-smart-wallet-recorder',
-          wallets: [{ address: info.wallet.address, label: info.wallet.label, paid_usd: 0 }],
+          network: info.network,
+          wallets: [{ address: info.wallet.address, label: info.wallet.label, network: info.network, paid_usd: 0 }],
           confirming_wallets: 1, market_cap_usd: snap.marketCapUsd, liquidity_usd: snap.liquidityUsd,
           buys_5m: snap.buys5m, sells_5m: snap.sells5m, payer_verified: true
         }
@@ -109,11 +133,11 @@ export function installSmartWalletSignalRecorder() {
     const isTelegramSend = /https:\/\/api\.telegram\.org\/bot[^/]+\/sendMessage$/i.test(url);
     let info = null;
     if (isTelegramSend && typeof init?.body === 'string') {
-      try { info = detect(JSON.parse(init.body)?.text); } catch {}
+      try { info = detectTrackedWalletAlert(JSON.parse(init.body)?.text); } catch {}
     }
     const response = await previousFetch(input, init);
     if (response.ok && info) setTimeout(() => void persist(info), 0).unref?.();
     return response;
   };
-  console.log('SMART WALLET SIGNAL RECORDER: BNB + Robinhood wallet evidence persistence active');
+  console.log('SMART WALLET SIGNAL RECORDER: BNB + Robinhood + Arc wallet evidence persistence active');
 }
