@@ -93,6 +93,28 @@ function tradeSolAmount(trade = {}) {
   return raw > 10_000 ? raw / 1_000_000_000 : raw;
 }
 
+function tradeWalletAddress(trade = {}) {
+  const candidates = [
+    trade.user,
+    trade.user_address,
+    trade.userAddress,
+    trade.trader,
+    trade.trader_address,
+    trade.traderAddress,
+    trade.wallet,
+    trade.owner,
+    trade.pubkey,
+    trade.publicKey,
+    trade.user_public_key,
+    trade.userPublicKey
+  ];
+  for (const value of candidates) {
+    const address = String(value ?? '').trim();
+    if (SOLANA_ADDRESS.test(address)) return address;
+  }
+  return '';
+}
+
 function tradeTokenAmount(trade = {}) {
   const raw = positive(trade.token_amount ?? trade.tokenAmount ?? trade.tokens);
   if (!raw) return null;
@@ -105,6 +127,7 @@ export function summarizePumpTradeFlow(trades = [], {
   solPriceUsd = null
 } = {}) {
   const recent = [];
+  const buyerWallets = new Map();
   let buys5m = 0;
   let sells5m = 0;
   let volume5mUsd = 0;
@@ -122,8 +145,19 @@ export function summarizePumpTradeFlow(trades = [], {
       ? (sol * Number(solPriceUsd)) / tokens
       : null;
 
-    if (isBuy) buys5m += 1;
-    else sells5m += 1;
+    if (isBuy) {
+      buys5m += 1;
+      const wallet = tradeWalletAddress(trade);
+      if (wallet && !buyerWallets.has(wallet)) {
+        buyerWallets.set(wallet, {
+          address: wallet,
+          at,
+          solAmount: sol || 0
+        });
+      }
+    } else {
+      sells5m += 1;
+    }
     volume5mUsd += usd;
     recent.push({ at, priceUsd });
   }
@@ -142,6 +176,7 @@ export function summarizePumpTradeFlow(trades = [], {
     volume5mUsd,
     priceChange5mPct,
     tradeCount5m: recent.length,
+    buyerWallets: [...buyerWallets.values()].sort((a, b) => a.at - b.at).slice(0, 30),
     hasFlow: recent.length >= 2 && (buys5m + sells5m) >= 2 && Number.isFinite(priceChange5mPct)
   };
 }
@@ -244,6 +279,7 @@ export async function fetchPumpNativeMarket(mint, { includeFlow = false } = {}) 
       volume5mUsd: flow.volume5mUsd,
       priceChange5mPct: flow.priceChange5mPct,
       tradeCount5m: flow.tradeCount5m,
+      buyerWallets: flow.buyerWallets || [],
       hasFlow: true,
       flowSource: 'pump-native-trades'
     };
@@ -265,6 +301,7 @@ export async function fetchPumpNativeMarket(mint, { includeFlow = false } = {}) 
         market.volume5mUsd = flow.volume5mUsd;
         market.priceChange5mPct = flow.priceChange5mPct;
         market.tradeCount5m = flow.tradeCount5m;
+        market.buyerWallets = flow.buyerWallets || [];
         market.hasFlow = true;
         market.flowSource = 'pump-native-trades';
       }
