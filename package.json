@@ -1,9 +1,9 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.32.0",
+  "version": "0.33.0",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with durable Solana candidate-funnel telemetry, qualified PAPER entries plus small PAPER-only probes for provider-pending strong candidates, manual-confirm Solana live execution, and isolated live-position protection. Legacy automatic live entry remains disabled.",
+  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with fresh-candidate-priority Solana scheduling, durable funnel telemetry, qualified PAPER entries and provider-pending PAPER probes, manual-confirm Solana live execution, and isolated live-position protection. Legacy automatic live entry remains disabled.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",

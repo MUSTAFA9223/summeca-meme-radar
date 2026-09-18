@@ -25,6 +25,38 @@ const boolEnv = (name, fallback = true) => {
 };
 const numEnv = (name, fallback, min, max) => Math.max(min, Math.min(max, finite(process.env[name], fallback)));
 
+export function selectSolanaMarketCandidates(entries, {
+  now = Date.now(),
+  pollMs = 1_500,
+  limit = 30,
+  maxCandidateAgeMs = 8 * 60_000,
+  openPaperAddresses = new Set()
+} = {}) {
+  return [...entries]
+    .filter(([mint, state]) => {
+      const openPaper = openPaperAddresses.has(String(mint));
+      const ageMs = Math.max(0, now - finite(state?.createdAt, now));
+      const due = now - finite(state?.lastMarketAt, 0) >= pollMs;
+      return due && (openPaper || ageMs <= maxCandidateAgeMs);
+    })
+    .sort(([mintA, a], [mintB, b]) => {
+      const aOpen = openPaperAddresses.has(String(mintA));
+      const bOpen = openPaperAddresses.has(String(mintB));
+      if (aOpen !== bOpen) return aOpen ? -1 : 1;
+
+      const aInitial = a?.initialBuy === true;
+      const bInitial = b?.initialBuy === true;
+      if (aInitial !== bInitial) return aInitial ? -1 : 1;
+
+      const aFresh = now - finite(a?.createdAt, 0) <= 4 * 60_000;
+      const bFresh = now - finite(b?.createdAt, 0) <= 4 * 60_000;
+      if (aFresh !== bFresh) return aFresh ? -1 : 1;
+
+      return finite(b?.createdAt, 0) - finite(a?.createdAt, 0);
+    })
+    .slice(0, Math.max(1, Math.floor(limit)));
+}
+
 class SolanaTelegramSink {
   constructor() {
     this.settings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
@@ -256,6 +288,7 @@ export class SolanaUltraEarlyWorker {
     this.paperProbeMinScore = numEnv('SOLANA_PAPER_PROBE_MIN_SCORE', 68, 55, 90);
     this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
+    this.pendingMaxAgeMs = numEnv('SOLANA_PENDING_MAX_AGE_MS', 8 * 60_000, 4 * 60_000, 20 * 60_000);
     this.ws = null;
     this.active = false;
     this.reconnectAttempt = 0;
@@ -351,7 +384,7 @@ export class SolanaUltraEarlyWorker {
       `CA: ${mint}`
     ].join('\n'), mint, { marketUrl: market.url, replyTo: state.rootMessageId });
     if (!state.rootMessageId) state.rootMessageId = Number(message?.message_id ?? 0);
-    console.log(`[solana:qualified] mint=${short(mint)} score=${score} holders=${profile.observedAccounts} top=${profile.topUserPct.toFixed(1)}% age=${age}s`);
+    console.log(`[solana:qualified] mint=${short(mint)} score=${score} holders=${profile.observedAccounts ?? 'na'} top=${profile.topUserPct == null ? 'na' : `${profile.topUserPct.toFixed(1)}%`} age=${age}s`);
   }
 
   async sendTop(mint, state, market, profile, score) {
@@ -368,7 +401,7 @@ export class SolanaUltraEarlyWorker {
       `💧 السيولة: $${money(market.liquidityUsd)} | MC: $${money(market.marketCapUsd)}`,
       `5m: شراء ${market.buys5m} / بيع ${market.sells5m} | Ratio ${ratio.toFixed(2)}x`,
       `Vol: $${money(market.volume5mUsd)}`,
-      `🐋 حيازات مؤثرة: ${profile.meaningfulWallets} | Top holder: ${profile.topUserPct.toFixed(1)}%`,
+      `🐋 حيازات مؤثرة: ${profile.meaningfulWallets ?? '—'} | Top holder: ${profile.topUserPct == null ? '—' : `${profile.topUserPct.toFixed(1)}%`}`,
       '✅ شراء أولي + نشاط سوق + توزيع حيازة + ضغط شراء قوي',
       '',
       '⚠️ TOP-TIER = أقوى شروط الرادار، وليس ضمان ربح.',
@@ -600,12 +633,23 @@ export class SolanaUltraEarlyWorker {
     this.marketRunning = true;
     try {
       const now = Date.now();
+      const openPaperAddresses = new Set(this.bridge.openPositions().map((position) => String(position.address)));
+      let pruned = 0;
       for (const [mint, state] of this.pending) {
-        if (now - state.createdAt > 20 * 60_000 && !this.bridge.hasOpenPaperPosition(mint)) this.pending.delete(mint);
+        if (openPaperAddresses.has(String(mint))) continue;
+        if (now - finite(state?.createdAt, 0) > this.pendingMaxAgeMs) {
+          this.pending.delete(mint);
+          pruned += 1;
+        }
       }
-      const selected = [...this.pending.entries()]
-        .filter(([, state]) => now - state.lastMarketAt >= this.marketPollMs)
-        .slice(0, 30);
+      if (pruned) console.log(`[solana:scheduler] pruned-stale=${pruned} pending=${this.pending.size}`);
+      const selected = selectSolanaMarketCandidates(this.pending.entries(), {
+        now,
+        pollMs: this.marketPollMs,
+        limit: 30,
+        maxCandidateAgeMs: this.pendingMaxAgeMs,
+        openPaperAddresses
+      });
       if (!selected.length) return;
       for (const [, state] of selected) state.lastMarketAt = now;
       const mints = selected.map(([mint]) => mint);
