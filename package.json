@@ -1,9 +1,9 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with Helius plus standard holder fallbacks, Pump.fun-native early market fallback, qualified-first PAPER capacity preemption, durable score-band analytics, manual-confirm Solana live execution, and isolated live-position protection. Legacy automatic live entry remains disabled.",
+  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with qualified-candidate paper-capacity preemption, bounded Pump.fun-native early trade flow, Helius/getProgramAccounts holder profiles, resilient Solana data fallbacks, durable score-band analytics, manual-confirm Solana live execution, and isolated live-position protection. Legacy automatic live entry remains disabled.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
