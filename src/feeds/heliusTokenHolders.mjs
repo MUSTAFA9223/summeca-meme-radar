@@ -14,7 +14,7 @@ function amountOf(account = {}) {
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-export function holderProfileFromTokenAccounts(accounts = [], { complete = true } = {}) {
+export function holderProfileFromTokenAccounts(accounts = [], { complete = true, provider = 'helius-token-accounts' } = {}) {
   const byOwner = new Map();
   for (const account of Array.isArray(accounts) ? accounts : []) {
     const owner = String(account?.owner ?? account?.owner_address ?? account?.ownerAddress ?? '').trim();
@@ -48,7 +48,7 @@ export function holderProfileFromTokenAccounts(accounts = [], { complete = true 
 
   return {
     pass,
-    provider: 'helius-token-accounts',
+    provider,
     limitedEvidence: !complete,
     complete,
     curveExcluded,
