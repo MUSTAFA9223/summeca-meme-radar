@@ -118,6 +118,15 @@ export class SolanaTradeCandidateBridge {
           restored += 1;
         }
         this.logger.log(`[solana:paper-bridge] bankroll=isolated realized=${Number(realized).toFixed(4)} restored=${restored}`);
+        if (typeof this.store.listSolanaPaperPerformance === 'function') {
+          const performance = await this.store.listSolanaPaperPerformance().catch(() => []);
+          if (performance.length) {
+            const compact = performance.map((row) =>
+              `${row.strategy}:${row.score_band} n=${row.closed_trades} win=${row.win_rate_pct}% avg=${row.avg_pnl_pct}%`
+            ).join(' | ');
+            this.logger.log(`[solana:paper-performance] ${compact}`);
+          }
+        }
       } catch (error) {
         this.logger.warn?.('[solana:paper-bridge:init]', error?.message ?? error);
       }
