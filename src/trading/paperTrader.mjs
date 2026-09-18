@@ -77,6 +77,7 @@ export class PaperTrader {
       strategy: String(metadata.strategy ?? metadata.sizing?.strategy ?? (manual ? 'manual' : 'standard')),
       lifecycleStrategy: String(metadata.sizing?.promotedTo ?? metadata.strategy ?? metadata.sizing?.strategy ?? (manual ? 'manual' : 'standard')),
       declineConfirmations: 0,
+      forcedExitReason: null,
       persistenceId: row.id ?? null,
       restored: true
     };
@@ -100,6 +101,7 @@ export class PaperTrader {
 
     const previous = p.lifecycleStrategy || p.strategy;
     p.lifecycleStrategy = next;
+    if (next === 'solana-ultra-qualified') p.forcedExitReason = null;
     p.sizing = {
       ...(p.sizing && typeof p.sizing === 'object' ? p.sizing : {}),
       promotedFrom: previous,
@@ -108,6 +110,16 @@ export class PaperTrader {
     };
     this.#log({ type: 'LIFECYCLE_PROMOTION', address: p.address, previous, next });
     return { ok: true, changed: true, previous, next, position: p };
+  }
+
+  requestExit(address, reason = 'paper capacity rebalance') {
+    const p = this.getPosition(address);
+    if (!p) return { ok: false, reason: 'no-open-position' };
+    const text = String(reason || '').trim();
+    if (!text) return { ok: false, reason: 'invalid-exit-reason' };
+    p.forcedExitReason = text;
+    this.#log({ type: 'EXIT_REQUESTED', address: p.address, strategy: p.strategy, lifecycleStrategy: p.lifecycleStrategy, reason: text });
+    return { ok: true, position: p, reason: text };
   }
 
   #openPosition(s, scores, usdSize, { manual = false, sizing = null, strategy = 'standard' } = {}) {
@@ -146,6 +158,7 @@ export class PaperTrader {
       strategy,
       lifecycleStrategy: strategy,
       declineConfirmations: 0,
+      forcedExitReason: null,
       persistenceId: null,
       restored: false
     };
@@ -398,7 +411,15 @@ export class PaperTrader {
     const lifecycleStrategy = String(p.lifecycleStrategy ?? p.strategy ?? '');
 
     let d = null;
-    if (lifecycleStrategy === 'solana-ultra-probe' && holdMs >= probeMaxHoldMs) {
+    if (p.forcedExitReason) {
+      d = {
+        exit: true,
+        reason: p.forcedExitReason,
+        holdMs,
+        forced: true
+      };
+    }
+    if (!d && lifecycleStrategy === 'solana-ultra-probe' && holdMs >= probeMaxHoldMs) {
       d = {
         exit: true,
         reason: `paper probe max-hold (${Math.round(probeMaxHoldMs / 60_000)}m)`,
