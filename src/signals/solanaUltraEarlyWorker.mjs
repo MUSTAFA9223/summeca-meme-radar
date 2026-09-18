@@ -77,6 +77,48 @@ export function isSolanaEarlyAlertEligible({
     && move <= maxMovePct;
 }
 
+export function advanceSolanaEarlyConfirmation({
+  count = 0,
+  lastAt = 0,
+  lastPriceUsd = 0,
+  currentPriceUsd = 0,
+  now = Date.now(),
+  minGapMs = 8_000,
+  confirmations = 2
+} = {}) {
+  const required = Math.max(1, Math.floor(finite(confirmations, 2)));
+  const price = finite(currentPriceUsd);
+  const priorPrice = finite(lastPriceUsd);
+  if (!(price > 0)) {
+    return { count: 0, lastAt: 0, lastPriceUsd: 0, confirmed: false };
+  }
+  const priceHolding = !(priorPrice > 0) || price >= priorPrice * 0.99;
+  if (!lastAt || !priceHolding) {
+    const nextCount = 1;
+    return {
+      count: nextCount,
+      lastAt: now,
+      lastPriceUsd: price,
+      confirmed: nextCount >= required
+    };
+  }
+  if (now - finite(lastAt) < minGapMs) {
+    return {
+      count: Math.max(1, Math.floor(finite(count, 1))),
+      lastAt,
+      lastPriceUsd: priorPrice || price,
+      confirmed: false
+    };
+  }
+  const nextCount = Math.min(required, Math.max(1, Math.floor(finite(count, 1))) + 1);
+  return {
+    count: nextCount,
+    lastAt: now,
+    lastPriceUsd: price,
+    confirmed: nextCount >= required
+  };
+}
+
 export function selectSolanaMarketCandidates(entries, {
   now = Date.now(),
   pollMs = 1_500,
@@ -704,24 +746,21 @@ export class SolanaUltraEarlyWorker {
         market
       });
       if (eligible) {
-        const now = Date.now();
-        const priorPrice = finite(state.earlyLastEligiblePriceUsd);
-        const currentPrice = finite(market.priceUsd);
-        const priceHolding = !(priorPrice > 0) || currentPrice >= priorPrice * 0.99;
-        const enoughGap = !state.earlyLastEligibleAt || now - state.earlyLastEligibleAt >= this.earlyConfirmGapMs;
-
-        if (!priceHolding) {
-          state.earlyEligibleCount = 1;
-        } else if (enoughGap) {
-          state.earlyEligibleCount = Math.max(1, finite(state.earlyEligibleCount)) + (state.earlyLastEligibleAt ? 1 : 0);
-        }
-        if (enoughGap || !state.earlyLastEligibleAt) {
-          state.earlyLastEligibleAt = now;
-          state.earlyLastEligiblePriceUsd = currentPrice;
-        }
+        const confirmation = advanceSolanaEarlyConfirmation({
+          count: state.earlyEligibleCount,
+          lastAt: state.earlyLastEligibleAt,
+          lastPriceUsd: state.earlyLastEligiblePriceUsd,
+          currentPriceUsd: market.priceUsd,
+          now: Date.now(),
+          minGapMs: this.earlyConfirmGapMs,
+          confirmations: this.earlyConfirmations
+        });
+        state.earlyEligibleCount = confirmation.count;
+        state.earlyLastEligibleAt = confirmation.lastAt;
+        state.earlyLastEligiblePriceUsd = confirmation.lastPriceUsd;
 
         state.lastScore = Math.max(finite(state.lastScore), earlyScore);
-        if (state.earlyEligibleCount >= this.earlyConfirmations) {
+        if (confirmation.confirmed) {
           await this.sendEarlyWatch(mint, state, market, earlyScore);
         } else {
           console.log(`[solana:early-pending] mint=${short(mint)} score=${earlyScore} confirm=${state.earlyEligibleCount}/${this.earlyConfirmations} liq=${money(market.liquidityUsd)} vol=${money(market.volume5mUsd)} move=${finite(market.priceChange5mPct).toFixed(1)}%`);
