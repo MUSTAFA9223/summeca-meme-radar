@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { countOpenProbePositions, isSolanaBridgePaperTrade, selectProbeCapacityExits, SolanaTradeCandidateBridge } from '../src/signals/solanaTradeCandidateBridge.mjs';
+import { countOpenProbePositions, isSolanaBridgePaperTrade, selectProbeCapacityExits, selectProbeForQualifiedPreemption, SolanaTradeCandidateBridge } from '../src/signals/solanaTradeCandidateBridge.mjs';
 
 class FakeStore {
   constructor() {
@@ -230,4 +230,84 @@ test('probe capacity keeps one paper slot reserved for qualified candidates', ()
   assert.deepEqual(exits.map((position) => position.address), ['old-probe']);
   assert.deepEqual(selectProbeCapacityExits(positions, 2), []);
   assert.deepEqual(selectProbeCapacityExits(positions, 0).map((position) => position.address), ['old-probe', 'new-probe']);
+});
+
+
+test('qualified candidate requests oldest probe exit instead of being dropped at full paper capacity', async () => {
+  const store = new FakeStore();
+  const positions = [
+    {
+      address: 'old-probe',
+      entryAt: 1000,
+      status: 'open',
+      strategy: 'solana-ultra-probe',
+      lifecycleStrategy: 'solana-ultra-probe',
+      usdSize: 15
+    },
+    {
+      address: 'existing-qualified',
+      entryAt: 2000,
+      status: 'open',
+      strategy: 'solana-ultra-qualified',
+      lifecycleStrategy: 'solana-ultra-qualified',
+      usdSize: 35
+    }
+  ];
+  const trader = {
+    realized: 0,
+    enterCalls: 0,
+    get openPositions() { return positions.filter((p) => p.status === 'open'); },
+    setRealizedPnlUsd(value) { this.realized = value; },
+    restoreOpenPosition() { return { ok: false, reason: 'none' }; },
+    getPosition(address) { return this.openPositions.find((p) => p.address === address) ?? null; },
+    requestExit(address, reason) {
+      const p = this.getPosition(address);
+      if (!p) return { ok: false, reason: 'no-open-position' };
+      p.forcedExitReason = reason;
+      return { ok: true, position: p, reason };
+    },
+    enterQualified() {
+      this.enterCalls += 1;
+      return { ok: false, reason: 'max-open-positions' };
+    },
+    update() { return { pnlPct: 0 }; }
+  };
+
+  const bridge = new SolanaTradeCandidateBridge({
+    store,
+    trader,
+    enabled: true,
+    paperMinScore: 72,
+    maxProbeOpen: 1,
+    preemptProbeForQualified: true,
+    logger: { log() {}, warn() {} }
+  });
+
+  const result = await bridge.observe({
+    ...candidate,
+    mint: '22222222222222222222222222222222',
+    state: { createdAt: Date.now() - 10_000, initialBuy: true },
+    score: 88,
+    qualified: true
+  });
+
+  assert.equal(result.paperOpened, false);
+  assert.equal(result.reason, 'waiting-capacity');
+  assert.equal(trader.enterCalls, 0);
+  assert.equal(positions[0].forcedExitReason, 'paper qualified capacity preemption');
+  assert.ok(store.funnel.some((row) =>
+    row.stage === 'qualified_waiting_capacity'
+    && row.rejectionReason === 'paper-preempt-probe'
+  ));
+});
+
+test('probe preemption selector never chooses qualified positions and skips already-requested probes', () => {
+  const positions = [
+    { address: 'requested-probe', entryAt: 500, lifecycleStrategy: 'solana-ultra-probe', forcedExitReason: 'already requested' },
+    { address: 'old-probe', entryAt: 1000, lifecycleStrategy: 'solana-ultra-probe' },
+    { address: 'new-probe', entryAt: 2000, lifecycleStrategy: 'solana-ultra-probe' },
+    { address: 'qualified', entryAt: 100, lifecycleStrategy: 'solana-ultra-qualified' }
+  ];
+  assert.equal(selectProbeForQualifiedPreemption(positions)?.address, 'old-probe');
+  assert.equal(selectProbeForQualifiedPreemption([positions[0], positions[3]]), null);
 });
