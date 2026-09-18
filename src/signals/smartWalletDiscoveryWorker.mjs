@@ -608,20 +608,44 @@ export class SmartWalletDiscoveryWorker {
     const chatId = env.telegramChatId || await this.settings.get('telegram_chat_id').catch(() => '');
     if (!chatId) return;
     const label = wallet.network === 'solana' ? 'SOLANA' : (NETWORKS[wallet.network]?.label || wallet.network.toUpperCase());
+    const evidence = (Array.isArray(wallet.evidence) ? wallet.evidence : []).slice(-5);
+    const evidenceLines = evidence.flatMap((item, index) => [
+      `${index + 1}) $${item.tokenSymbol || 'TOKEN'} • أعلى صعود +${finite(item.peakRoiPct).toFixed(1)}%`,
+      `   العقد: ${item.tokenAddress}`
+    ]);
+    const lastEvidence = evidence[evidence.length - 1];
+    const networkKey = wallet.network === 'solana' ? 'sol' : wallet.network === 'robinhood' ? 'rh' : wallet.network;
+    const keyboard = [
+      [{ text: '📋 نسخ عنوان المحفظة', copy_text: { text: wallet.address } }]
+    ];
+    if (lastEvidence?.tokenAddress) {
+      keyboard.push([
+        { text: '📋 نسخ آخر عقد', copy_text: { text: lastEvidence.tokenAddress } },
+        { text: '🔎 تحليل آخر عملة', callback_data: `term:a:${networkKey}:${lastEvidence.tokenAddress}` }
+      ]);
+      if (wallet.network === 'solana') {
+        keyboard.push([{ text: '🟢 فتح الشراء', callback_data: `p6:b:sol:${lastEvidence.tokenAddress}` }]);
+      }
+    }
     await telegramApi(env.telegramBotToken, 'sendMessage', {
       chat_id: String(chatId),
       text: [
         '🧠🏆 محفظة ذكية مكتشفة تلقائيًا — تمت الترقية',
         '',
         `الشبكة: ${label}`,
-        `المحفظة: ${wallet.address}`,
+        'عنوان المحفظة:',
+        wallet.address,
         `درجة الاكتشاف: ${wallet.score}/100`,
         `عدد العملات الناجحة الداعمة: ${wallet.samples}`,
         `متوسط أعلى صعود بعد الرصد: +${finite(wallet.avgPeakRoi).toFixed(1)}%`,
         '',
-        '✅ تمت إضافتها للمراقبة الآلية.',
+        evidenceLines.length ? '🧾 العملات التي دعمت ترقية هذه المحفظة:' : '',
+        ...evidenceLines,
+        '',
+        '✅ تمت إضافتها للمراقبة الآلية. أي شراء جديد منها سيصلك مع عقد العملة كاملًا.',
         '⚠️ التقييم دليل تاريخي وليس ضمانًا لنجاح الصفقة التالية.'
-      ].join('\n')
+      ].filter(Boolean).join('\n'),
+      reply_markup: { inline_keyboard: keyboard }
     }).catch(() => {});
   }
 
@@ -712,29 +736,45 @@ export class SmartWalletDiscoveryWorker {
       const chatId = env.telegramChatId || await this.settings.get('telegram_chat_id').catch(() => '');
       if (chatId) {
         const label = network === 'solana' ? 'SOLANA' : (NETWORKS[network]?.label || network.toUpperCase());
+        const networkKey = network === 'solana' ? 'sol' : network === 'robinhood' ? 'rh' : network;
+        const buttons = [
+          [
+            { text: '📋 نسخ المحفظة', copy_text: { text: wallet.address } },
+            { text: '📋 نسخ عقد العملة', copy_text: { text: tokenAddress } }
+          ],
+          [
+            { text: '🔎 تحليل العملة', callback_data: `term:a:${networkKey}:${tokenAddress}` },
+            network === 'solana'
+              ? { text: '🟢 شراء مع التأكيد', callback_data: `p6:b:sol:${tokenAddress}` }
+              : { text: '🟢 معاينة شراء', callback_data: `term:b:${networkKey}:${tokenAddress}` }
+          ],
+          [{ text: '🧠 ترتيب المحافظ الذكية', callback_data: 'p4:lb' }]
+        ];
+        if (network === 'solana') {
+          buttons.splice(2, 0, [{ text: '👀 متابعة العملة', callback_data: `watch:add:${tokenAddress}` }]);
+        }
         await telegramApi(env.telegramBotToken, 'sendMessage', {
           chat_id: String(chatId),
           text: [
-            '🧠🔥 شراء من محفظة ذكية',
+            '🧠🔥 محفظة ذكية دخلت عملة جديدة',
             '',
-            `${market.symbol} • ${label}`,
-            `🏆 درجة المحفظة: ${wallet.score}/100 • عدد الأدلة ${wallet.samples}`,
-            `👛 ${short(wallet.address)}`,
+            `العملة: $${market.symbol} • الشبكة: ${label}`,
+            `🏆 درجة المحفظة: ${wallet.score}/100 • عدد الأدلة: ${wallet.samples}`,
+            '',
+            '👛 عنوان المحفظة الذكية:',
+            wallet.address,
+            '',
+            '🪙 عقد العملة التي دخلتها:',
+            tokenAddress,
+            '',
             `💧 السيولة: ${money(market.liquidityUsd)} • القيمة السوقية: ${money(market.marketCapUsd)}`,
-            `5 دقائق شراء/بيع: ${market.buys5m}/${market.sells5m} • الحركة: ${finite(market.priceChange5mPct).toFixed(1)}%`,
+            `5 دقائق — شراء: ${market.buys5m} • بيع: ${market.sells5m} • الحركة: ${finite(market.priceChange5mPct).toFixed(1)}%`,
+            txHash ? `🔗 المعاملة: ${txHash}` : '',
             '',
-            '⚠️ تم رصد شراء محفظة ذات سجل جيد؛ ليست ضمانًا للصعود ولا شراءً آليًا.',
-            `CA: ${tokenAddress}`,
-            txHash ? `TX: ${txHash}` : ''
+            'يمكنك نسخ العقد أو فتح الشراء من الأزرار أدناه.',
+            '⚠️ دخول المحفظة الذكية ليس ضمانًا لصعود العملة.'
           ].filter(Boolean).join('\n'),
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '🔎 تحليل', callback_data: `term:a:${network === 'solana' ? 'sol' : network === 'robinhood' ? 'rh' : network}:${tokenAddress}` },
-              { text: '📋 CA', copy_text: { text: tokenAddress } }
-            ], [
-              { text: '🧠 ترتيب المحافظ الذكية', callback_data: 'p4:lb' }
-            ]]
-          }
+          reply_markup: { inline_keyboard: buttons }
         }).catch(() => {});
       }
     }
@@ -793,7 +833,10 @@ export class SmartWalletDiscoveryWorker {
     if (!promoted.length) return;
     const wallet = promoted[this.solMonitorCursor % promoted.length];
     this.solMonitorCursor = (this.solMonitorCursor + 1) % promoted.length;
-    const signatures = await this.solanaRpc('getSignaturesForAddress', [wallet.address, { limit: 6 }, 'confirmed']).catch(() => []);
+    const signatures = await this.solanaRpc('getSignaturesForAddress', [wallet.address, { limit: 6, commitment: 'confirmed' }]).catch((error) => {
+      console.warn(`[auto-smart:solana-monitor] wallet=${short(wallet.address)} ${String(error?.message ?? error).slice(0, 140)}`);
+      return [];
+    });
     if (!Array.isArray(signatures) || !signatures.length) return;
     if (!wallet.lastMonitorCursor) {
       wallet.lastMonitorCursor = signatures[0]?.signature || '';
