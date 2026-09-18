@@ -25,7 +25,7 @@ export class LeanTelegramController {
     this.settings = new AppSettings(env.supabaseUrl, env.supabaseSecretKey);
     this.terminal = new TradingTerminal(this.settings);
     this.chatId = '';
-    this.language = env.telegramLanguage;
+    this.language = 'ar';
     this.offset = 0;
     this.stopped = true;
     this.walletLabels = parseWalletLabels();
@@ -42,8 +42,7 @@ export class LeanTelegramController {
     if (env.telegramChatId) return (this.chatId = String(env.telegramChatId));
     if (this.settings.enabled) {
       this.chatId = String(await this.settings.get('telegram_chat_id').catch(() => '') || '');
-      const language = String(await this.settings.get('telegram_language').catch(() => '') || '').toLowerCase();
-      if (['ar', 'en', 'bilingual'].includes(language)) this.language = language;
+      this.language = 'ar';
     }
     return this.chatId;
   }
@@ -71,12 +70,12 @@ export class LeanTelegramController {
 
   mainKeyboard() {
     return [
-      [{ text: '📊 الحالة', callback_data: 'menu:status' }, { text: '🌐 الشبكات', callback_data: 'menu:networks' }],
-      [{ text: '👀 EARLY WATCH', callback_data: 'menu:trending' }, { text: '💎 TOP-TIER', callback_data: 'menu:signals' }],
-      [{ text: '🧠 CONFIRMED', callback_data: 'menu:watchlist' }, { text: '🆕 PRE-LAUNCH', callback_data: 'menu:newcoins' }],
-      [{ text: '💱 Trading', callback_data: 'menu:trading' }, { text: '📊 Positions', callback_data: 'term:p' }],
-      [{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '🧠 Copy Trading', callback_data: 'p8:copy' }],
-      [{ text: '👀 Watchlist', callback_data: 'p8:watch' }, { text: '👛 Trading Wallets', callback_data: 'p8:wallets' }],
+      [{ text: '📊 حالة البوت', callback_data: 'menu:status' }, { text: '🌐 الشبكات', callback_data: 'menu:networks' }],
+      [{ text: '👀 مراقبة مبكرة', callback_data: 'menu:trending' }, { text: '💎 أقوى الإشارات', callback_data: 'menu:signals' }],
+      [{ text: '🧠 إشارات مؤكدة', callback_data: 'menu:watchlist' }, { text: '🆕 عملات جديدة', callback_data: 'menu:newcoins' }],
+      [{ text: '💱 التداول', callback_data: 'menu:trading' }, { text: '📊 المراكز', callback_data: 'term:p' }],
+      [{ text: '📋 الأوامر', callback_data: 'p3:o' }, { text: '🧠 نسخ التداول', callback_data: 'p8:copy' }],
+      [{ text: '👀 قائمة المتابعة', callback_data: 'p8:watch' }, { text: '👛 محفظتي', callback_data: 'p8:wallets' }],
       [{ text: '🛡️ الحماية', callback_data: 'menu:safety' }, { text: '⚙️ الإعدادات', callback_data: 'menu:settings' }],
       [{ text: '❓ المساعدة', callback_data: 'menu:help' }]
     ];
@@ -84,70 +83,66 @@ export class LeanTelegramController {
 
   async showMainMenu() {
     return this.#send(this.#pick(
-      '🤖 SUMMECA Trading Radar\n\n🌐 Arc + Solana + BNB Chain + Robinhood Chain\n⚡ رصد مبكر + فلترة جودة + Smart Wallet\n🔎 تحليل العقد من داخل تيليجرام\n💱 Buy/Sell Preview مع تأكيد نهائي\n🎯 Limit + DCA + Sniper Check\n📊 Positions وTP/SL/Trailing في Paper Mode\n\n🔒 التداول الحقيقي من Terminal الآمن غير منفذ حاليًا.',
-      '🤖 SUMMECA Trading Radar\n\n🌐 Arc + Solana + BNB Chain + Robinhood Chain\n⚡ Early detection + quality filters + Smart Wallet\n🔎 In-Telegram token analysis\n💱 Buy/Sell preview with final confirmation\n🎯 Limit + DCA + Sniper Check\n📊 Positions and TP/SL/Trailing in Paper Mode\n\n🔒 Live execution from the safe Terminal is currently disabled.'
+      '🤖 رادار SUMMECA للتداول\n\n🌐 Arc + Solana + BNB Chain + Robinhood Chain\n⚡ رصد مبكر + فلترة جودة + محافظ ذكية\n🔎 تحليل العقد من داخل تيليجرام\n💱 معاينة شراء/بيع مع تأكيد نهائي\n🎯 أوامر محددة + شراء دوري + فحص القنص\n📊 المراكز وإدارة الربح والخسارة التجريبية\n\n👛 يمكنك إنشاء محفظة تداول داخل البوت من زر «محفظتي».\n🔒 لا يتم إرسال أي صفقة حقيقية دون بوابات الأمان والتأكيد الحالية.',
+      '🤖 SUMMECA Trading Radar\n\n🌐 Arc + Solana + BNB Chain + Robinhood Chain\n⚡ Early detection + quality filters + محفظة ذكية\n🔎 In-Telegram token analysis\n💱 Buy/Sell preview with final confirmation\n🎯 Limit + DCA + Sniper Check\n📊 Positions and TP/SL/Trailing in Paper Mode\n\n🔒 Live execution from the safe Terminal is currently disabled.'
     ), this.mainKeyboard());
   }
 
   async #showStatus() {
     const wallets = this.walletLabels.length;
     return this.#send(this.#pick(
-      `📊 حالة البوت\n\n🟢 الخدمة: تعمل\n🌐 الشبكات: 4\n✅ Arc — PRE-LAUNCH + Smart Wallet\n✅ Solana — Pump.fun Ultra-Early + Quality Filter\n✅ BNB Chain — Smart Wallet + block scan\n✅ Robinhood Chain — Smart Wallet + Early Market\n👛 محافظ EVM الأساسية: ${wallets}\n🛡️ Anti-spoof: مفعّل\n🚦 Rate-limit guards: مفعّلة\n💱 Trading Terminal: تحليل + Paper + Limit/DCA/Sniper\n🔒 Live execution: ${env.liveTradingEnabled ? 'المحرك مهيأ لكن Terminal الآمن لا ينفذ معاملات' : 'مقفل'}`,
-      `📊 Bot status\n\n🟢 Service: running\n🌐 Networks: 4\n✅ Arc — PRE-LAUNCH + Smart Wallet\n✅ Solana — Pump.fun Ultra-Early + Quality Filter\n✅ BNB Chain — Smart Wallet + block scan\n✅ Robinhood Chain — Smart Wallet + Early Market\n👛 Base EVM wallets: ${wallets}\n🛡️ Anti-spoof: enabled\n🚦 Rate-limit guards: enabled\n💱 Trading Terminal: analysis + Paper + Limit/DCA/Sniper\n🔒 Live execution: ${env.liveTradingEnabled ? 'engine configured, but safe Terminal does not broadcast transactions' : 'locked'}`
-    ), [[{ text: '📊 Positions', callback_data: 'term:p' }, { text: '📋 Orders', callback_data: 'p3:o' }], [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
+      `📊 حالة البوت\n\n🟢 الخدمة: تعمل\n🌐 الشبكات: 4\n✅ Arc — PRE-LAUNCH + محفظة ذكية\n✅ Solana — Pump.fun Ultra-Early + Quality Filter\n✅ BNB Chain — محفظة ذكية + block scan\n✅ Robinhood Chain — محفظة ذكية + Early Market\n👛 محافظ EVM الأساسية: ${wallets}\n🛡️ Anti-spoof: مفعّل\n🚦 Rate-limit guards: مفعّلة\n💱 منصة التداول: تحليل + Paper + Limit/DCA/Sniper\n🔒 Live execution: ${env.liveTradingEnabled ? 'المحرك مهيأ لكن Terminal الآمن لا ينفذ معاملات' : 'مقفل'}`,
+      `📊 Bot status\n\n🟢 Service: running\n🌐 Networks: 4\n✅ Arc — PRE-LAUNCH + محفظة ذكية\n✅ Solana — Pump.fun Ultra-Early + Quality Filter\n✅ BNB Chain — محفظة ذكية + block scan\n✅ Robinhood Chain — محفظة ذكية + Early Market\n👛 Base EVM wallets: ${wallets}\n🛡️ Anti-spoof: enabled\n🚦 Rate-limit guards: enabled\n💱 منصة التداول: analysis + Paper + Limit/DCA/Sniper\n🔒 Live execution: ${env.liveTradingEnabled ? 'engine configured, but safe Terminal does not broadcast transactions' : 'locked'}`
+    ), [[{ text: '📊 المراكز', callback_data: 'term:p' }, { text: '📋 الأوامر', callback_data: 'p3:o' }], [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showTrading() {
     return this.#send(this.#pick(
-      '💱 SUMMECA Trading Terminal\n\nمن أي إشارة عملة ستجد:\n🔎 تحليل — السعر والسيولة وMC وBuy/Sell وتركيز أكبر حسابات Solana\n🟢 Buy / 🔴 Sell — Paper Preview + تأكيد\n🎯 TP/SL/Trailing — إدارة المخاطر التجريبية\n🎯 Limit / 📆 DCA — أوامر Paper تتم مراقبتها آليًا\n⚡ Sniper — فحص Pass/Fail ثم تأكيد يدوي\n🧠 Copy Trading — محافظ ديناميكية + مبلغ ثابت أو نسبة\n\nلن يتم توقيع أو إرسال أي صفقة حقيقية من هذه الواجهة.',
-      '💱 SUMMECA Trading Terminal\n\nEvery token alert can provide:\n🔎 Analysis — price, liquidity, MC, Buy/Sell and Solana top-account concentration\n🟢 Buy / 🔴 Sell — Paper preview + confirmation\n🎯 TP/SL/Trailing — Paper risk management\n🎯 Limit / 📆 DCA — monitored Paper orders\n⚡ Sniper — Pass/Fail check then manual confirmation\n🧠 Copy Trading — dynamic tracked wallets + fixed/percentage sizing\n\nNo real transaction is signed or broadcast from this interface.'
+      '💱 منصة التداول داخل SUMMECA\n\nمن أي إشارة عملة ستجد:\n🔎 تحليل — السعر والسيولة والقيمة السوقية والشراء/البيع وتركيز الحيازة\n🟢 شراء / 🔴 بيع — معاينة ثم تأكيد\n🎯 جني الربح / وقف الخسارة / الوقف المتحرك\n🎯 أمر محدد / 📆 شراء دوري — أوامر تجريبية تتم مراقبتها آليًا\n⚡ القنص — فحص نجاح/فشل ثم تأكيد يدوي\n🧠 نسخ التداول — محافظ متتبعة + مبلغ ثابت أو نسبة\n\nأي تنفيذ حقيقي يظل خاضعًا لبوابات الأمان والتأكيد.',
+      '💱 SUMMECA منصة التداول\n\nEvery token alert can provide:\n🔎 Analysis — price, liquidity, MC, Buy/Sell and Solana top-account concentration\n🟢 Buy / 🔴 Sell — Paper preview + confirmation\n🎯 TP/SL/Trailing — Paper risk management\n🎯 Limit / 📆 DCA — monitored Paper orders\n⚡ Sniper — Pass/Fail check then manual confirmation\n🧠 Copy Trading — dynamic tracked wallets + fixed/percentage sizing\n\nNo real transaction is signed or broadcast from this interface.'
     ), [
-      [{ text: '📊 Positions', callback_data: 'term:p' }, { text: '📋 Orders', callback_data: 'p3:o' }],
-      [{ text: '🧠 Copy Trading', callback_data: 'p8:copy' }, { text: '👛 Trading Wallets', callback_data: 'p8:wallets' }],
+      [{ text: '📊 المراكز', callback_data: 'term:p' }, { text: '📋 الأوامر', callback_data: 'p3:o' }],
+      [{ text: '🧠 نسخ التداول', callback_data: 'p8:copy' }, { text: '👛 محفظتي', callback_data: 'p8:wallets' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
     ]);
   }
 
   async #showSettings() {
     return this.#send(this.#pick(
-      `⚙️ الإعدادات\n\nاللغة الحالية: ${this.language}\nالرادار يعمل دائمًا في الخلفية حتى لا تضيع الفرص.\nTrading Terminal يستخدم Paper/Safe Mode للاختبار الآن.`,
-      `⚙️ Settings\n\nCurrent language: ${this.language}\nThe radar remains active in the background so opportunities are not missed.\nTrading Terminal currently uses Paper/Safe Mode for testing.`
+      '⚙️ الإعدادات\n\nاللغة: العربية\nالرادار يعمل دائمًا في الخلفية حتى لا تضيع الفرص.\nمنصة التداول تستخدم طبقات الأمان والتأكيد الحالية.',
+      `⚙️ Settings\n\nCurrent language: ${this.language}\nThe radar remains active in the background so opportunities are not missed.\nمنصة التداول currently uses Paper/Safe Mode for testing.`
     ), [
       [{ text: '🌐 اللغة', callback_data: 'settings:language' }],
-      [{ text: '⚙️ Buy Presets', callback_data: 'adv:pre' }, { text: '📋 Orders', callback_data: 'p3:o' }],
+      [{ text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' }, { text: '📋 الأوامر', callback_data: 'p3:o' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
     ]);
   }
 
   async #showLanguage() {
-    return this.#send(this.#pick('🌐 اختر اللغة:', '🌐 Choose language:'), [
-      [{ text: '🇸🇦 العربية', callback_data: 'lang:ar' }],
-      [{ text: '🇬🇧 English', callback_data: 'lang:en' }],
-      [{ text: '🌐 عربي + English', callback_data: 'lang:bilingual' }],
+    return this.#send('🇸🇦 لغة البوت مضبوطة على العربية بالكامل.', [
       [{ text: '⬅️ الإعدادات', callback_data: 'menu:settings' }]
     ]);
   }
 
-  async #setLanguage(language) {
-    if (!['ar', 'en', 'bilingual'].includes(language)) return;
-    this.language = language;
-    if (this.settings.enabled) await this.settings.set('telegram_language', language).catch(() => {});
-    return this.#send(this.#pick('✅ تم تغيير اللغة.', '✅ Language changed.'), [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]]);
+  async #setLanguage() {
+    this.language = 'ar';
+    if (this.settings.enabled) await this.settings.set('telegram_language', 'ar').catch(() => {});
+    return this.#send('✅ لغة البوت هي العربية.', [[{ text: '🏠 القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showWallets() {
     const names = this.walletLabels.slice(0, 12).map((label, i) => `${i + 1}. ${label}`);
     return this.#send(this.#pick(
-      `👛 Smart Money\n\nمحافظ EVM المتتبعة: ${this.walletLabels.length}\n${names.join('\n') || 'لا توجد محافظ مهيأة.'}\n\nArc وBNB وRobinhood تستخدم Anti-spoof.\nSolana تعتمد حاليًا Pump.fun Ultra-Early + تحليل السوق والحيازة، ولن نسمي حسابًا Smart Wallet دون سجل مثبت.`,
-      `👛 Smart Money\n\nTracked EVM wallets: ${this.walletLabels.length}\n${names.join('\n') || 'No wallets configured.'}\n\nArc, BNB and Robinhood use anti-spoof checks.\nSolana currently uses Pump.fun Ultra-Early + market/holder analysis; no account is labeled Smart Wallet without evidence.`
+      `👛 الأموال الذكية\n\nمحافظ EVM المتتبعة: ${this.walletLabels.length}\n${names.join('\n') || 'لا توجد محافظ مهيأة.'}\n\nArc وBNB وRobinhood تستخدم Anti-spoof.\nSolana تعتمد حاليًا Pump.fun Ultra-Early + تحليل السوق والحيازة، ولن نسمي حسابًا محفظة ذكية دون سجل مثبت.`,
+      `👛 الأموال الذكية\n\nTracked EVM wallets: ${this.walletLabels.length}\n${names.join('\n') || 'No wallets configured.'}\n\nArc, BNB and Robinhood use anti-spoof checks.\nSolana currently uses Pump.fun Ultra-Early + market/holder analysis; no account is labeled محفظة ذكية without evidence.`
     ), [[{ text: '🧠 Copy Dashboard', callback_data: 'p3:c' }, { text: '👛 Wallet', callback_data: 'adv:w' }], [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]]);
   }
 
   async #showInfo(data) {
     const map = {
       'menu:networks': [
-        '🌐 الشبكات\n\n🔷 Arc: عقود جديدة + Smart Wallet + PRE-DEX\n🟣 Solana: Pump.fun لحظيًا + فلتر جودة وحيازة\n🟡 BNB Chain: Smart Wallet + block scan\n🟢 Robinhood Chain: Smart Wallet + Early Market\n\nكل إشارة تكتب اسم الشبكة بوضوح.',
-        '🌐 Networks\n\n🔷 Arc: new contracts + Smart Wallet + PRE-DEX\n🟣 Solana: live Pump.fun + quality/holder filter\n🟡 BNB Chain: Smart Wallet + block scan\n🟢 Robinhood Chain: Smart Wallet + Early Market\n\nEvery alert clearly labels its network.'
+        '🌐 الشبكات\n\n🔷 Arc: عقود جديدة + محفظة ذكية + PRE-DEX\n🟣 Solana: Pump.fun لحظيًا + فلتر جودة وحيازة\n🟡 BNB Chain: محفظة ذكية + block scan\n🟢 Robinhood Chain: محفظة ذكية + Early Market\n\nكل إشارة تكتب اسم الشبكة بوضوح.',
+        '🌐 Networks\n\n🔷 Arc: new contracts + محفظة ذكية + PRE-DEX\n🟣 Solana: live Pump.fun + quality/holder filter\n🟡 BNB Chain: محفظة ذكية + block scan\n🟢 Robinhood Chain: محفظة ذكية + Early Market\n\nEvery alert clearly labels its network.'
       ],
       'menu:trending': [
         '👀 EARLY WATCH\n\nرصد مبكر بعد ظهور أدلة سوق أو محافظ كافية، مع إبقاء العقود الأضعف تحت المراقبة بصمت.',
@@ -170,8 +165,8 @@ export class LeanTelegramController {
         '🛡️ Safety\n\nAnti-spoof + liquidity + Buy/Sell + market cap + late-entry protection + Solana concentration checks + rate-limit guards.\n\nFilters reduce risk but do not guarantee profit.'
       ],
       'menu:help': [
-        '❓ المساعدة\n\n/start أو /menu — القائمة\n/status — حالة البوت\n/trade — Trading Terminal\n/positions — Paper Positions\n/orders — Limit/DCA Orders\n/copy — Dynamic Copy Trading\n/watch — العملات تحت المتابعة\n/wallets — محافظ التداول\n/settings — الإعدادات\n/admin — لوحة المالك\n\nافتح أي إشارة واستخدم Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper مباشرة.',
-        '❓ Help\n\n/start or /menu — main menu\n/status — bot status\n/trade — Trading Terminal\n/positions — Paper Positions\n/orders — Limit/DCA Orders\n/copy — Dynamic Copy Trading\n/watch — tracked tokens\n/wallets — trading wallets\n/settings — settings\n/admin — owner panel\n\nOpen any alert and use Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper directly.'
+        '❓ المساعدة\n\n/start أو /menu — القائمة الرئيسية\n/status — حالة البوت\n/trade — منصة التداول\n/positions — المراكز\n/orders — الأوامر المحددة والشراء الدوري\n/copy — نسخ التداول\n/watch — العملات تحت المتابعة\n/wallets — محفظتي ومحافظ التداول\n/settings — الإعدادات\n/admin — لوحة المالك\n\nافتح أي إشارة واستخدم تحليل / شراء / بيع / جني الربح ووقف الخسارة / أمر محدد / شراء دوري / قنص.',
+        '❓ Help\n\n/start or /menu — main menu\n/status — bot status\n/trade — منصة التداول\n/positions — المراكز التجريبية\n/orders — Limit/DCA Orders\n/copy — نسخ التداول\n/watch — tracked tokens\n/wallets — trading wallets\n/settings — settings\n/admin — owner panel\n\nOpen any alert and use Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper directly.'
       ]
     };
     const pair = map[data] || map['menu:help'];
@@ -181,7 +176,7 @@ export class LeanTelegramController {
   async #handleMessage(message) {
     if (String(message?.chat?.id ?? '') !== String(this.chatId)) return;
     const text = String(message?.text ?? '').trim();
-    const phase8 = await handlePhase8Message(message, this.terminal).catch((error) => ({ handled: true, text: `❌ Phase 8: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
+    const phase8 = await handlePhase8Message(message, this.terminal).catch((error) => ({ handled: true, text: `❌ خطأ في إدارة المتابعة والمحافظ: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
     if (phase8?.handled) return this.#sendTerminal(phase8);
     if (/^\/(start|menu)(?:@\w+)?\b/i.test(text)) return this.showMainMenu();
     if (/^\/status(?:@\w+)?\b/i.test(text)) return this.#showStatus();
@@ -200,7 +195,7 @@ export class LeanTelegramController {
     await telegramApi(env.telegramBotToken, 'answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
 
     if (data.startsWith('watch:add:') || data.startsWith('p8:') || data.startsWith('p8f:') || data.startsWith('p8p:') || data.startsWith('p8s:')) {
-      const result = await handlePhase8Callback(callback, this.terminal).catch((error) => ({ handled: true, text: `❌ Phase 8: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
+      const result = await handlePhase8Callback(callback, this.terminal).catch((error) => ({ handled: true, text: `❌ خطأ في إدارة المتابعة والمحافظ: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
       if (result?.handled) return this.#sendTerminal(result);
     }
 
@@ -231,9 +226,9 @@ export class LeanTelegramController {
 
     if (data.startsWith('paper:') || data.startsWith('live:')) {
       return this.#send(this.#pick(
-        'ℹ️ هذا زر من النسخة القديمة. استخدم Trading Terminal الجديد؛ التداول الحقيقي من Terminal ما زال مقفولًا، وPaper Mode متاح للاختبار.',
-        'ℹ️ This is a legacy button. Use the new Trading Terminal; live execution is locked, while Paper Mode is available for testing.'
-      ), [[{ text: '💱 Trading', callback_data: 'menu:trading' }, { text: '📊 Positions', callback_data: 'term:p' }]]);
+        'ℹ️ هذا زر من النسخة القديمة. استخدم منصة التداول الجديد؛ التداول الحقيقي من Terminal ما زال مقفولًا، وPaper Mode متاح للاختبار.',
+        'ℹ️ This is a legacy button. Use the new منصة التداول; live execution is locked, while Paper Mode is available for testing.'
+      ), [[{ text: '💱 التداول', callback_data: 'menu:trading' }, { text: '📊 المراكز', callback_data: 'term:p' }]]);
     }
   }
 
@@ -274,10 +269,10 @@ export class LeanTelegramController {
         { command: 'start', description: 'فتح قائمة SUMMECA' },
         { command: 'menu', description: 'القائمة الرئيسية' },
         { command: 'status', description: 'حالة البوت' },
-        { command: 'trade', description: 'Trading Terminal' },
-        { command: 'positions', description: 'Paper Positions' },
-        { command: 'orders', description: 'Limit / DCA Orders' },
-        { command: 'copy', description: 'Dynamic Copy Trading' },
+        { command: 'trade', description: 'منصة التداول' },
+        { command: 'positions', description: 'المراكز والمحفظة' },
+        { command: 'orders', description: 'الأوامر المحددة والشراء الدوري' },
+        { command: 'copy', description: 'نسخ التداول' },
         { command: 'copywallet', description: 'إضافة ومتابعة محافظ المتداولين' },
         { command: 'watch', description: 'قائمة العملات تحت المتابعة' },
         { command: 'wallets', description: 'محافظ التداول داخل البوت' },
