@@ -4,7 +4,7 @@ import { telegramApi } from '../notifiers/telegram.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { fetchTokenOverview, fetchTokenSecurity } from '../feeds/birdeye.mjs';
 import { fetchPumpNativeMarkets } from '../feeds/pumpFunNative.mjs';
-import { fetchHeliusHolderProfile, holderProfileFromTokenAccounts } from '../feeds/heliusTokenHolders.mjs';
+import { fetchHeliusHolderProfile, holderProfileFromParsedProgramAccounts } from '../feeds/heliusTokenHolders.mjs';
 import { SolanaTradeCandidateBridge } from './solanaTradeCandidateBridge.mjs';
 
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -217,20 +217,7 @@ async function fetchProgramAccountHolderProfile(mint) {
       ]
     }
   ]);
-  if (!Array.isArray(rows) || !rows.length) return null;
-  const accounts = [];
-  for (const row of rows) {
-    const info = row?.account?.data?.parsed?.info ?? {};
-    const owner = String(info?.owner ?? '').trim();
-    const amount = info?.tokenAmount?.amount ?? info?.token_amount?.amount ?? 0;
-    if (!owner || !(Number(amount) > 0)) continue;
-    accounts.push({ owner, amount });
-  }
-  if (!accounts.length) return null;
-  return holderProfileFromTokenAccounts(accounts, {
-    complete: true,
-    provider: 'solana-getProgramAccounts'
-  });
+  return holderProfileFromParsedProgramAccounts(rows);
 }
 
 async function fetchHolderProfile(mint) {
