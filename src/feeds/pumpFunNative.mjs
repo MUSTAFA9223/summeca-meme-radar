@@ -8,6 +8,9 @@ const positive = (value, fallback = null) => {
 };
 
 const coinCache = new Map();
+const tradeFlowCache = new Map();
+let tradeFlowDisabledUntil = 0;
+let tradeFlowWarningAt = 0;
 let solPriceCache = { value: null, at: 0 };
 let tail = Promise.resolve();
 let nextAt = 0;
@@ -17,6 +20,8 @@ let lastWarningAt = 0;
 const minGapMs = () => Math.max(250, Math.min(2_000, finite(process.env.PUMP_NATIVE_MIN_GAP_MS, 450)));
 const cacheMs = () => Math.max(2_000, Math.min(30_000, finite(process.env.PUMP_NATIVE_CACHE_MS, 8_000)));
 const timeoutMs = () => Math.max(1_500, Math.min(10_000, finite(process.env.PUMP_NATIVE_TIMEOUT_MS, 4_000)));
+const flowCacheMs = () => Math.max(1_500, Math.min(15_000, finite(process.env.PUMP_NATIVE_FLOW_CACHE_MS, 5_000)));
+const flowAuthCooldownMs = () => Math.max(15_000, Math.min(300_000, finite(process.env.PUMP_NATIVE_FLOW_AUTH_COOLDOWN_MS, 60_000)));
 
 function createdAtMs(value) {
   const n = finite(value, null);
@@ -38,7 +43,7 @@ async function queuedJson(path) {
         signal: controller.signal,
         headers: {
           accept: 'application/json',
-          'user-agent': 'SUMMECA-Meme-Radar/0.36'
+          'user-agent': 'SUMMECA-Meme-Radar/0.41'
         }
       });
       if (response.status === 404) return null;
@@ -66,6 +71,106 @@ async function fetchSolPriceUsd() {
     return value;
   } catch (error) {
     return positive(solPriceCache.value);
+  }
+}
+
+function tradeTimeMs(trade = {}) {
+  return createdAtMs(trade.timestamp ?? trade.created_timestamp ?? trade.createdTimestamp ?? trade.time);
+}
+
+function tradeIsBuy(trade = {}) {
+  const value = trade.is_buy ?? trade.isBuy ?? trade.buy;
+  if (typeof value === 'boolean') return value;
+  const side = String(trade.side ?? trade.type ?? '').toLowerCase();
+  if (side === 'buy') return true;
+  if (side === 'sell') return false;
+  return null;
+}
+
+function tradeSolAmount(trade = {}) {
+  const raw = positive(trade.sol_amount ?? trade.solAmount ?? trade.sol);
+  if (!raw) return null;
+  return raw > 10_000 ? raw / 1_000_000_000 : raw;
+}
+
+function tradeTokenAmount(trade = {}) {
+  const raw = positive(trade.token_amount ?? trade.tokenAmount ?? trade.tokens);
+  if (!raw) return null;
+  return raw > 1_000_000 ? raw / 1_000_000 : raw;
+}
+
+export function summarizePumpTradeFlow(trades = [], {
+  nowMs = Date.now(),
+  windowMs = 5 * 60_000,
+  solPriceUsd = null
+} = {}) {
+  const recent = [];
+  let buys5m = 0;
+  let sells5m = 0;
+  let volume5mUsd = 0;
+
+  for (const trade of Array.isArray(trades) ? trades : []) {
+    const at = tradeTimeMs(trade);
+    if (!at || at < nowMs - windowMs || at > nowMs + 5_000) continue;
+    const isBuy = tradeIsBuy(trade);
+    if (isBuy == null) continue;
+
+    const sol = tradeSolAmount(trade);
+    const tokens = tradeTokenAmount(trade);
+    const usd = sol && positive(solPriceUsd) ? sol * Number(solPriceUsd) : 0;
+    const priceUsd = sol && tokens && positive(solPriceUsd)
+      ? (sol * Number(solPriceUsd)) / tokens
+      : null;
+
+    if (isBuy) buys5m += 1;
+    else sells5m += 1;
+    volume5mUsd += usd;
+    recent.push({ at, priceUsd });
+  }
+
+  recent.sort((a, b) => a.at - b.at);
+  const priced = recent.filter((row) => positive(row.priceUsd));
+  const firstPrice = priced[0]?.priceUsd ?? null;
+  const lastPrice = priced.at(-1)?.priceUsd ?? null;
+  const priceChange5mPct = firstPrice && lastPrice && priced.length >= 2
+    ? ((lastPrice / firstPrice) - 1) * 100
+    : null;
+
+  return {
+    buys5m,
+    sells5m,
+    volume5mUsd,
+    priceChange5mPct,
+    tradeCount5m: recent.length,
+    hasFlow: recent.length >= 2 && (buys5m + sells5m) >= 2 && Number.isFinite(priceChange5mPct)
+  };
+}
+
+async function fetchPumpNativeTradeFlow(mint, solPriceUsd) {
+  const address = String(mint ?? '').trim();
+  if (!SOLANA_ADDRESS.test(address)) return null;
+  const now = Date.now();
+  const cached = tradeFlowCache.get(address);
+  if (cached && now - cached.at < flowCacheMs()) return cached.value;
+  if (tradeFlowDisabledUntil > now) return cached?.value ?? null;
+
+  try {
+    const body = await queuedJson(`/trades/all/${encodeURIComponent(address)}?limit=100&offset=0&minimumSize=0`);
+    const rows = Array.isArray(body)
+      ? body
+      : (body?.trades ?? body?.data?.trades ?? body?.data ?? []);
+    if (!Array.isArray(rows)) return null;
+    const flow = summarizePumpTradeFlow(rows, { nowMs: Date.now(), solPriceUsd });
+    tradeFlowCache.set(address, { value: flow, at: Date.now() });
+    return flow;
+  } catch (error) {
+    const message = String(error?.message ?? error);
+    if (/HTTP (401|403)/.test(message)) tradeFlowDisabledUntil = Date.now() + flowAuthCooldownMs();
+    if (Date.now() - tradeFlowWarningAt >= 30_000) {
+      tradeFlowWarningAt = Date.now();
+      console.warn(`[pump-native:flow] ${message}; continuing without native trade flow`);
+    }
+    return cached?.value ?? null;
   }
 }
 
@@ -121,7 +226,7 @@ export function normalizePumpCoinMarket(coin, solPriceUsd = null) {
   };
 }
 
-export async function fetchPumpNativeMarket(mint) {
+export async function fetchPumpNativeMarket(mint, { includeFlow = false } = {}) {
   const address = String(mint ?? '').trim();
   if (!SOLANA_ADDRESS.test(address)) return null;
 
@@ -134,7 +239,20 @@ export async function fetchPumpNativeMarket(mint) {
     if (!coin) return null;
     const solPriceUsd = await fetchSolPriceUsd();
     const market = normalizePumpCoinMarket(coin, solPriceUsd);
-    if (market) coinCache.set(address, { value: market, at: Date.now() });
+    if (!market) return null;
+    if (includeFlow) {
+      const flow = await fetchPumpNativeTradeFlow(address, solPriceUsd);
+      if (flow?.hasFlow) {
+        market.buys5m = flow.buys5m;
+        market.sells5m = flow.sells5m;
+        market.volume5mUsd = flow.volume5mUsd;
+        market.priceChange5mPct = flow.priceChange5mPct;
+        market.tradeCount5m = flow.tradeCount5m;
+        market.hasFlow = true;
+        market.flowSource = 'pump-native-trades';
+      }
+    }
+    coinCache.set(address, { value: market, at: Date.now() });
     return market;
   } catch (error) {
     const stamp = Date.now();
@@ -146,13 +264,15 @@ export async function fetchPumpNativeMarket(mint) {
   }
 }
 
-export async function fetchPumpNativeMarkets(mints, { limit = 4 } = {}) {
+export async function fetchPumpNativeMarkets(mints, { limit = 4, flowLimit = 0 } = {}) {
   const unique = [...new Set((Array.isArray(mints) ? mints : []).map(String).filter((mint) => SOLANA_ADDRESS.test(mint)))];
   const safeLimit = Math.max(1, Math.min(8, Number(limit) || 4));
   const selected = unique.slice(0, safeLimit);
   const rows = [];
-  for (const mint of selected) {
-    const market = await fetchPumpNativeMarket(mint);
+  const safeFlowLimit = Math.max(0, Math.min(safeLimit, Number(flowLimit) || 0));
+  for (let index = 0; index < selected.length; index += 1) {
+    const mint = selected[index];
+    const market = await fetchPumpNativeMarket(mint, { includeFlow: index < safeFlowLimit });
     if (market) rows.push(market);
   }
   return rows;
