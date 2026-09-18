@@ -81,14 +81,16 @@ export function advanceProtectionState({
   const candidates = [
     { value: -Math.abs(settings.stopLossPct), reason: 'initial-stop' }
   ];
-  if (highWaterPnlPct >= settings.trailStartPct) {
-    candidates.push({ value: highWaterPnlPct - settings.trailPct, reason: `trailing-${settings.trailPct}%` });
-  }
-  if (highWaterPnlPct >= settings.profitLockTriggerPct) {
-    candidates.push({ value: settings.profitLockFloorPct, reason: `profit-lock+${settings.profitLockFloorPct}%` });
-  }
-  if (highWaterPnlPct >= settings.tightTrailStartPct) {
-    candidates.push({ value: highWaterPnlPct - settings.tightTrailPct, reason: `tight-trailing-${settings.tightTrailPct}%` });
+  if (settings.manualStopLadder !== true) {
+    if (highWaterPnlPct >= settings.trailStartPct) {
+      candidates.push({ value: highWaterPnlPct - settings.trailPct, reason: `trailing-${settings.trailPct}%` });
+    }
+    if (highWaterPnlPct >= settings.profitLockTriggerPct) {
+      candidates.push({ value: settings.profitLockFloorPct, reason: `profit-lock+${settings.profitLockFloorPct}%` });
+    }
+    if (highWaterPnlPct >= settings.tightTrailStartPct) {
+      candidates.push({ value: highWaterPnlPct - settings.tightTrailPct, reason: `tight-trailing-${settings.tightTrailPct}%` });
+    }
   }
   const ladderConfig = normalizeStopLadderConfig({
     initialStopLossPct: settings.stopLossPct,
