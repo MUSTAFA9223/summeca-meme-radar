@@ -611,13 +611,13 @@ export class SmartWalletDiscoveryWorker {
     await telegramApi(env.telegramBotToken, 'sendMessage', {
       chat_id: String(chatId),
       text: [
-        '🧠🏆 AUTO SMART WALLET — PROMOTED',
+        '🧠🏆 محفظة ذكية مكتشفة تلقائيًا — تمت الترقية',
         '',
-        `Network: ${label}`,
-        `Wallet: ${wallet.address}`,
-        `Discovery Score: ${wallet.score}/100`,
-        `Winning-token evidence: ${wallet.samples}`,
-        `Average peak after tracked entry: +${finite(wallet.avgPeakRoi).toFixed(1)}%`,
+        `الشبكة: ${label}`,
+        `المحفظة: ${wallet.address}`,
+        `درجة الاكتشاف: ${wallet.score}/100`,
+        `عدد العملات الناجحة الداعمة: ${wallet.samples}`,
+        `متوسط أعلى صعود بعد الرصد: +${finite(wallet.avgPeakRoi).toFixed(1)}%`,
         '',
         '✅ تمت إضافتها للمراقبة الآلية.',
         '⚠️ التقييم دليل تاريخي وليس ضمانًا لنجاح الصفقة التالية.'
@@ -715,13 +715,13 @@ export class SmartWalletDiscoveryWorker {
         await telegramApi(env.telegramBotToken, 'sendMessage', {
           chat_id: String(chatId),
           text: [
-            '🧠🔥 AUTO SMART WALLET BUY',
+            '🧠🔥 شراء من محفظة ذكية',
             '',
-            `$${market.symbol} • ${label}`,
-            `🏆 Wallet score: ${wallet.score}/100 • evidence ${wallet.samples}`,
+            `${market.symbol} • ${label}`,
+            `🏆 درجة المحفظة: ${wallet.score}/100 • عدد الأدلة ${wallet.samples}`,
             `👛 ${short(wallet.address)}`,
-            `💧 Liquidity: ${money(market.liquidityUsd)} • MC: ${money(market.marketCapUsd)}`,
-            `5m Buy/Sell: ${market.buys5m}/${market.sells5m} • Move: ${finite(market.priceChange5mPct).toFixed(1)}%`,
+            `💧 السيولة: ${money(market.liquidityUsd)} • القيمة السوقية: ${money(market.marketCapUsd)}`,
+            `5 دقائق شراء/بيع: ${market.buys5m}/${market.sells5m} • الحركة: ${finite(market.priceChange5mPct).toFixed(1)}%`,
             '',
             '⚠️ تم رصد شراء محفظة ذات سجل جيد؛ ليست ضمانًا للصعود ولا شراءً آليًا.',
             `CA: ${tokenAddress}`,
@@ -732,7 +732,7 @@ export class SmartWalletDiscoveryWorker {
               { text: '🔎 تحليل', callback_data: `term:a:${network === 'solana' ? 'sol' : network === 'robinhood' ? 'rh' : network}:${tokenAddress}` },
               { text: '📋 CA', copy_text: { text: tokenAddress } }
             ], [
-              { text: '🧠 Wallet Leaderboard', callback_data: 'p4:lb' }
+              { text: '🧠 ترتيب المحافظ الذكية', callback_data: 'p4:lb' }
             ]]
           }
         }).catch(() => {});

@@ -32,16 +32,16 @@ const NETWORKS = {
 };
 
 const BUY_PRESETS = {
-  c: { label: '🛡️ Cautious', amounts: [10, 25, 50, 100] },
-  s: { label: '⚡ Standard', amounts: [25, 50, 100, 250] },
-  h: { label: '🔥 High', amounts: [50, 100, 250, 500] }
+  c: { label: '🛡️ حذر', amounts: [10, 25, 50, 100] },
+  s: { label: '⚡ متوازن', amounts: [25, 50, 100, 250] },
+  h: { label: '🔥 مرتفع', amounts: [50, 100, 250, 500] }
 };
 
 const RISK_PRESETS = {
-  f: { label: '⚡ Fast', takeProfitPct: 50, stopLossPct: 10, trailingPct: 15 },
-  b: { label: '🛡️ Balanced', takeProfitPct: 100, stopLossPct: 15, trailingPct: 20 },
-  m: { label: '🚀 Moon', takeProfitPct: 200, stopLossPct: 20, trailingPct: 25 },
-  o: { label: '⏸ Off', takeProfitPct: 0, stopLossPct: 0, trailingPct: 0 }
+  f: { label: '⚡ سريع', takeProfitPct: 50, stopLossPct: 10, trailingPct: 15 },
+  b: { label: '🛡️ متوازن', takeProfitPct: 100, stopLossPct: 15, trailingPct: 20 },
+  m: { label: '🚀 هجومي', takeProfitPct: 200, stopLossPct: 20, trailingPct: 25 },
+  o: { label: '⏸ متوقف', takeProfitPct: 0, stopLossPct: 0, trailingPct: 0 }
 };
 
 async function fetchJson(url, options = {}, timeoutMs = 5_000) {
@@ -121,30 +121,30 @@ async function riskMenu(instance, network, address) {
   const position = rows.find((row) => row.id === id && row.status === 'open');
   if (!position) {
     return {
-      text: `🎯 TP / SL / TRAILING\n\nلا يوجد Paper Position مفتوح للعقد ${short(address)}.\nافتح Buy أولًا ثم اختر خطة إدارة المخاطر.`,
-      keyboard: [[{ text: '🟢 Buy', callback_data: `term:b:${key}:${address}` }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
+      text: `🎯 جني الربح / وقف الخسارة / الوقف المتحرك\n\nلا يوجد مركز تجريبي مفتوح للعقد ${short(address)}.\nافتح شراء أولًا ثم اختر خطة إدارة المخاطر.`,
+      keyboard: [[{ text: '🟢 شراء', callback_data: `term:b:${key}:${address}` }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
     };
   }
   return {
     text: [
-      `🎯 RISK MANAGER — ${NETWORKS[key]?.label || key}`,
+      `🎯 إدارة المخاطر — ${NETWORKS[key]?.label || key}`,
       '',
       `$${position.symbol || 'TOKEN'} • ${short(address)}`,
-      `Entry: ${priceText(position.entryPrice)}`,
-      `TP: ${finite(position.takeProfitPct)}% | SL: ${finite(position.stopLossPct)}% | Trailing: ${finite(position.trailingPct)}%`,
+      `سعر الدخول: ${priceText(position.entryPrice)}`,
+      `جني الربح: ${finite(position.takeProfitPct)}% | وقف الخسارة: ${finite(position.stopLossPct)}% | الوقف المتحرك: ${finite(position.trailingPct)}%`,
       '',
-      'اختر خطة. المراقب الآلي يعمل على Paper Position فقط.'
+      'اختر خطة. المراقب الآلي يعمل على المركز التجريبي فقط.'
     ].join('\n'),
     keyboard: [
       [
-        { text: '⚡ Fast 50/10/15', callback_data: `adv:rp:f:${key}:${address}` },
-        { text: '🛡️ Balanced 100/15/20', callback_data: `adv:rp:b:${key}:${address}` }
+        { text: '⚡ سريع 50/10/15', callback_data: `adv:rp:f:${key}:${address}` },
+        { text: '🛡️ متوازن 100/15/20', callback_data: `adv:rp:b:${key}:${address}` }
       ],
       [
-        { text: '🚀 Moon 200/20/25', callback_data: `adv:rp:m:${key}:${address}` },
+        { text: '🚀 هجومي 200/20/25', callback_data: `adv:rp:m:${key}:${address}` },
         { text: '⏸ إيقاف', callback_data: `adv:rp:o:${key}:${address}` }
       ],
-      [{ text: '📊 Positions', callback_data: 'term:p' }]
+      [{ text: '📊 المراكز', callback_data: 'term:p' }]
     ]
   };
 }
@@ -156,7 +156,7 @@ async function applyRiskPreset(instance, code, network, address) {
   const rows = await loadRows(instance);
   const id = `${key}:${String(address).toLowerCase()}`;
   const position = rows.find((row) => row.id === id && row.status === 'open');
-  if (!position) return { text: '❌ لا يوجد Paper Position مفتوح.', keyboard: [] };
+  if (!position) return { text: '❌ لا يوجد مركز تجريبي مفتوح.', keyboard: [] };
   position.takeProfitPct = preset.takeProfitPct;
   position.stopLossPct = preset.stopLossPct;
   position.trailingPct = preset.trailingPct;
@@ -168,11 +168,11 @@ async function applyRiskPreset(instance, code, network, address) {
       `✅ تم تطبيق ${preset.label}`,
       '',
       `$${position.symbol || 'TOKEN'} • ${NETWORKS[key]?.label || key}`,
-      `TP +${preset.takeProfitPct}% | SL -${preset.stopLossPct}% | Trailing ${preset.trailingPct}%`,
+      `جني الربح +${preset.takeProfitPct}% | وقف الخسارة -${preset.stopLossPct}% | الوقف المتحرك ${preset.trailingPct}%`,
       '',
-      preset.takeProfitPct ? '🧪 المراقب سيغلق Paper Position تلقائيًا عند تحقق أول شرط.' : '⏸ تم إيقاف إدارة المخاطر الآلية لهذا المركز.'
+      preset.takeProfitPct ? '🧪 المراقب سيغلق المركز التجريبي تلقائيًا عند تحقق أول شرط.' : '⏸ تم إيقاف إدارة المخاطر الآلية لهذا المركز.'
     ].join('\n'),
-    keyboard: [[{ text: '🎯 إدارة المخاطر', callback_data: `adv:r:${key}:${address}` }, { text: '📊 Positions', callback_data: 'term:p' }]]
+    keyboard: [[{ text: '🎯 إدارة المخاطر', callback_data: `adv:r:${key}:${address}` }, { text: '📊 المراكز', callback_data: 'term:p' }]]
   };
 }
 
@@ -180,16 +180,16 @@ async function presetMenu(instance) {
   const active = await presetCode(instance);
   return {
     text: [
-      '⚙️ BUY PRESETS — PAPER', '',
+      '⚙️ مبالغ الشراء — تجريبي', '',
       `الحالي: ${BUY_PRESETS[active].label} → ${BUY_PRESETS[active].amounts.map((v) => `$${v}`).join(' / ')}`,
       '',
-      'هذه القيم تُستخدم في Buy وCopy Preview. لا توجد صفقة حقيقية.'
+      'تُستخدم هذه القيم في معاينة الشراء ونسخ التداول. لا توجد صفقة حقيقية.'
     ].join('\n'),
     keyboard: [
       [{ text: '🛡️ $10/$25/$50/$100', callback_data: 'adv:pre:c' }],
       [{ text: '⚡ $25/$50/$100/$250', callback_data: 'adv:pre:s' }],
       [{ text: '🔥 $50/$100/$250/$500', callback_data: 'adv:pre:h' }],
-      [{ text: '📊 Positions', callback_data: 'term:p' }]
+      [{ text: '📊 المراكز', callback_data: 'term:p' }]
     ]
   };
 }
@@ -197,8 +197,8 @@ async function presetMenu(instance) {
 async function setPreset(instance, code) {
   const safe = await setPresetCode(instance, code);
   return {
-    text: `✅ Buy Preset: ${BUY_PRESETS[safe].label}\n${BUY_PRESETS[safe].amounts.map((v) => `$${v}`).join(' / ')}\n\n🧪 Paper/Safe Mode فقط.`,
-    keyboard: [[{ text: '⚙️ Presets', callback_data: 'adv:pre' }, { text: '📊 Positions', callback_data: 'term:p' }]]
+    text: `✅ إعداد مبلغ الشراء: ${BUY_PRESETS[safe].label}\n${BUY_PRESETS[safe].amounts.map((v) => `$${v}`).join(' / ')}\n\n🧪 Paper/Safe Mode فقط.`,
+    keyboard: [[{ text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' }, { text: '📊 المراكز', callback_data: 'term:p' }]]
   };
 }
 
@@ -210,18 +210,18 @@ async function copyPreview(instance, network, address) {
   const pack = BUY_PRESETS[code];
   return {
     text: [
-      `🧠 COPY PREVIEW — ${NETWORKS[key]?.label || key}`,
+      `🧠 معاينة نسخ التداول — ${NETWORKS[key]?.label || key}`,
       '',
       `${market ? `$${market.symbol}` : 'TOKEN'} • ${short(address)}`,
       market ? `السعر: ${priceText(market.priceUsd)} | السيولة: ${money(market.liquidityUsd)}` : 'السوق لم يظهر بشكل موثوق بعد.',
-      `Preset: ${pack.label}`,
+      `الإعداد: ${pack.label}`,
       '',
       'اختر مبلغًا. بعد ذلك ستظهر شاشة تأكيد أخيرة.',
-      '🔒 لا يوجد Copy Trading أعمى أو تنفيذ تلقائي بأموال حقيقية.'
+      '🔒 لا يوجد نسخ تداول أعمى أو تنفيذ تلقائي بأموال حقيقية.'
     ].join('\n'),
     keyboard: [
       ...amountKeyboard(code, key, address, 'adv:cb'),
-      [{ text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }, { text: '⚙️ Presets', callback_data: 'adv:pre' }]
+      [{ text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }, { text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' }]
     ]
   };
 }
@@ -242,22 +242,22 @@ async function walletDashboard(instance) {
         body: JSON.stringify({ jsonrpc: '2.0', id: 'summeca-wallet', method: 'getBalance', params: [address, { commitment: 'processed' }] })
       }, 4_000);
       const lamports = finite(body?.result?.value);
-      if (lamports >= 0) balanceLine = `💰 SOL balance: ${(lamports / 1e9).toFixed(4)} SOL`;
+      if (lamports >= 0) balanceLine = `💰 رصيد SOL: ${(lamports / 1e9).toFixed(4)} SOL`;
     } catch {}
   }
   return {
     text: [
-      '👛 SUMMECA WALLET DASHBOARD', '',
-      `🔐 Wallet: ${address ? short(address) : 'غير مهيأة'}`,
+      '👛 لوحة محفظة SUMMECA', '',
+      `🔐 المحفظة: ${address ? short(address) : 'غير مهيأة'}`,
       balanceLine,
-      `📊 Paper Positions: ${open.length}`,
-      `🧪 Paper capital open: ${money(cost)}`,
-      `✅ Realized Paper PnL: ${realized >= 0 ? '+' : ''}${money(realized)}`,
+      `📊 المراكز التجريبية: ${open.length}`,
+      `🧪 رأس المال التجريبي المفتوح: ${money(cost)}`,
+      `✅ الربح/الخسارة التجريبية المحققة: ${realized >= 0 ? '+' : ''}${money(realized)}`,
       '',
       `🔒 LIVE_TRADING_ENABLED: ${env.liveTradingEnabled ? 'ON في البيئة، لكن Terminal لا يبث معاملات' : 'OFF'}`,
-      'لا يتم عرض أي مفتاح خاص أو Secret داخل تيليجرام.'
+      'لا يتم عرض أي مفتاح خاص أو سر داخل تيليجرام.'
     ].join('\n'),
-    keyboard: [[{ text: '📊 Positions', callback_data: 'term:p' }, { text: '⚙️ Presets', callback_data: 'adv:pre' }]]
+    keyboard: [[{ text: '📊 المراكز', callback_data: 'term:p' }, { text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' }]]
   };
 }
 
@@ -287,16 +287,16 @@ async function notifyAutoExit(position, price, reason, pnl) {
   await telegramApi(env.telegramBotToken, 'sendMessage', {
     chat_id: chatId,
     text: [
-      '🤖🎯 SUMMECA PAPER AUTO-EXIT', '',
+      '🤖🎯 خروج تجريبي تلقائي من SUMMECA', '',
       `$${position.symbol || 'TOKEN'} • ${NETWORKS[position.network]?.label || position.network}`,
       `السبب: ${reason}`,
-      `Exit: ${priceText(price)}`,
-      `Paper PnL: ${pnl >= 0 ? '+' : ''}${money(pnl)}`,
+      `سعر الخروج: ${priceText(price)}`,
+      `الربح/الخسارة التجريبية: ${pnl >= 0 ? '+' : ''}${money(pnl)}`,
       '',
       '🧪 هذه محاكاة فقط ولم تُرسل أي معاملة حقيقية.',
       `CA: ${position.address}`
     ].join('\n'),
-    reply_markup: { inline_keyboard: [[{ text: '📊 Positions', callback_data: 'term:p' }, { text: '🔎 تحليل', callback_data: `term:a:${position.network}:${position.address}` }]] }
+    reply_markup: { inline_keyboard: [[{ text: '📊 المراكز', callback_data: 'term:p' }, { text: '🔎 تحليل', callback_data: `term:a:${position.network}:${position.address}` }]] }
   }).catch(() => {});
 }
 
@@ -363,9 +363,9 @@ export function installAdvancedTerminal() {
     const key = normalizeTerminalNetwork(network);
     if (result?.keyboard && isTerminalAddress(key, address)) {
       result.keyboard = [...result.keyboard, [
-        { text: '🎯 TP/SL', callback_data: `adv:r:${key}:${address}` },
-        { text: '⚙️ Presets', callback_data: 'adv:pre' },
-        { text: '👛 Wallet', callback_data: 'adv:w' }
+        { text: '🎯 إدارة المخاطر', callback_data: `adv:r:${key}:${address}` },
+        { text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' },
+        { text: '👛 المحفظة', callback_data: 'adv:w' }
       ]];
     }
     return result;
@@ -377,11 +377,11 @@ export function installAdvancedTerminal() {
     const key = normalizeTerminalNetwork(network);
     if (!result?.text || !isTerminalAddress(key, address)) return result;
     const code = await presetCode(this);
-    result.text += `\n\n⚙️ Preset: ${BUY_PRESETS[code].label}`;
+    result.text += `\n\n⚙️ الإعداد: ${BUY_PRESETS[code].label}`;
     result.keyboard = [
       ...amountKeyboard(code, key, address),
-      [{ text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }, { text: '⚙️ Presets', callback_data: 'adv:pre' }],
-      [{ text: '📊 Positions', callback_data: 'term:p' }]
+      [{ text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }, { text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' }],
+      [{ text: '📊 المراكز', callback_data: 'term:p' }]
     ];
     return result;
   };
@@ -390,7 +390,7 @@ export function installAdvancedTerminal() {
   TradingTerminal.prototype.positions = async function() {
     const result = await originalPositions.call(this);
     if (result?.keyboard) {
-      result.keyboard = [...result.keyboard, [{ text: '👛 Wallet', callback_data: 'adv:w' }, { text: '⚙️ Presets', callback_data: 'adv:pre' }]];
+      result.keyboard = [...result.keyboard, [{ text: '👛 المحفظة', callback_data: 'adv:w' }, { text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' }]];
     }
     return result;
   };
@@ -410,9 +410,9 @@ export function installAdvancedTerminal() {
       if (action === 'cp' && parts.length >= 4) return { handled: true, ...(await copyPreview(this, parts[2], parts.slice(3).join(':'))) };
       if (action === 'cb' && parts.length >= 5) return { handled: true, ...(await this.paperBuyConfirm(parts[2], parts[3], parts.slice(4).join(':'))) };
     } catch (error) {
-      return { handled: true, text: `❌ Advanced Terminal error: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [[{ text: '📊 Positions', callback_data: 'term:p' }]] };
+      return { handled: true, text: `❌ خطأ في منصة التداول المتقدمة: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [[{ text: '📊 المراكز', callback_data: 'term:p' }]] };
     }
-    return { handled: true, text: 'ℹ️ أمر Advanced Terminal غير معروف.', keyboard: [[{ text: '📊 Positions', callback_data: 'term:p' }]] };
+    return { handled: true, text: 'ℹ️ أمر غير معروف في منصة التداول المتقدمة.', keyboard: [[{ text: '📊 المراكز', callback_data: 'term:p' }]] };
   };
 
   startMonitor();

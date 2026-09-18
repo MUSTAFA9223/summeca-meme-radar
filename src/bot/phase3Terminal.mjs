@@ -20,9 +20,9 @@ const NETWORKS = {
 };
 
 const SNIPER_PRESETS = {
-  u: { label: '⚡ Ultra Early', maxMc: 500_000, minLiquidity: 3_000, minBuys: 4, maxMove: 35 },
-  b: { label: '🛡️ Balanced', maxMc: 1_200_000, minLiquidity: 8_000, minBuys: 8, maxMove: 30 },
-  s: { label: '💎 Strict', maxMc: 1_500_000, minLiquidity: 15_000, minBuys: 12, maxMove: 22 }
+  u: { label: '⚡ مبكر جدًا', maxMc: 500_000, minLiquidity: 3_000, minBuys: 4, maxMove: 35 },
+  b: { label: '🛡️ متوازن', maxMc: 1_200_000, minLiquidity: 8_000, minBuys: 8, maxMove: 30 },
+  s: { label: '💎 صارم', maxMc: 1_500_000, minLiquidity: 15_000, minBuys: 12, maxMove: 22 }
 };
 
 async function fetchJson(url, options = {}, timeoutMs = 5_000) {
@@ -92,20 +92,20 @@ async function limitMenu(instance, network, address) {
   const key = normalizeTerminalNetwork(network);
   if (!isTerminalAddress(key, address)) return { text: '❌ عقد أو شبكة غير صالحين.', keyboard: [] };
   const market = await marketFor(key, address).catch(() => null);
-  if (!market?.priceUsd) return { text: '⏳ لا يوجد سعر سوق موثوق لإنشاء Limit Order الآن.', keyboard: [[{ text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]] };
+  if (!market?.priceUsd) return { text: '⏳ لا يوجد سعر سوق موثوق لإنشاء أمر شراء محدد الآن.', keyboard: [[{ text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]] };
   return {
     text: [
-      `🎯 PAPER LIMIT BUY — ${NETWORKS[key].label}`, '',
+      `🎯 شراء محدد تجريبي — ${NETWORKS[key].label}`, '',
       `$${market.symbol} • ${short(address)}`,
       `السعر الحالي: ${priceText(market.priceUsd)}`,
       '',
       'اختر مستوى الدخول. بعدها تختار المبلغ ثم تؤكد الأمر.',
-      '🧪 Paper فقط — لا يوجد أمر حقيقي على السلسلة.'
+      '🧪 تجريبي فقط — لا يوجد أمر حقيقي على السلسلة.'
     ].join('\n'),
     keyboard: [
       [{ text: '-5%', callback_data: `p3:ld:5:${key}:${address}` }, { text: '-10%', callback_data: `p3:ld:10:${key}:${address}` }],
       [{ text: '-20%', callback_data: `p3:ld:20:${key}:${address}` }, { text: '-30%', callback_data: `p3:ld:30:${key}:${address}` }],
-      [{ text: '📋 Orders', callback_data: 'p3:o' }]
+      [{ text: '📋 الأوامر', callback_data: 'p3:o' }]
     ]
   };
 }
@@ -118,7 +118,7 @@ async function limitAmount(instance, discountPct, network, address) {
   const target = market.priceUsd * (1 - discount / 100);
   const amounts = [25, 50, 100, 250];
   return {
-    text: `🎯 LIMIT BUY PREVIEW\n\n$${market.symbol} • ${NETWORKS[key].label}\nCurrent: ${priceText(market.priceUsd)}\nTarget: ${priceText(target)} (-${discount}%)\n\nاختر المبلغ:`,
+    text: `🎯 معاينة أمر الشراء المحدد\n\n$${market.symbol} • ${NETWORKS[key].label}\nالسعر الحالي: ${priceText(market.priceUsd)}\nالسعر المستهدف: ${priceText(target)} (-${discount}%)\n\nاختر المبلغ:`,
     keyboard: [
       amounts.slice(0, 2).map((amount) => ({ text: `$${amount}`, callback_data: `p3:lc:${discount}:${amount}:${key}:${address}` })),
       amounts.slice(2).map((amount) => ({ text: `$${amount}`, callback_data: `p3:lc:${discount}:${amount}:${key}:${address}` }))
@@ -142,8 +142,8 @@ async function createLimit(instance, discountPct, amountUsd, network, address) {
   orders.unshift(order);
   await setJsonSetting(instance.settings, ORDERS_KEY, orders.slice(0, 80));
   return {
-    text: `✅ PAPER LIMIT ORDER CREATED\n\n$${market.symbol} • ${NETWORKS[key].label}\nالمبلغ: $${amount.toFixed(2)}\nCurrent: ${priceText(market.priceUsd)}\nTarget: ${priceText(order.targetPrice)} (-${discount}%)\n\n🤖 سيُراقب كل عدة ثوانٍ ويُنفذ Paper Buy عند الوصول للسعر.`,
-    keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
+    text: `✅ PAPER LIMIT ORDER CREATED\n\n$${market.symbol} • ${NETWORKS[key].label}\nالمبلغ: $${amount.toFixed(2)}\nالسعر الحالي: ${priceText(market.priceUsd)}\nالسعر المستهدف: ${priceText(order.targetPrice)} (-${discount}%)\n\n🤖 سيُراقب كل عدة ثوانٍ ويُنفذ شراء تجريبي عند الوصول للسعر.`,
+    keyboard: [[{ text: '📋 الأوامر', callback_data: 'p3:o' }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
   };
 }
 
@@ -153,17 +153,17 @@ async function dcaMenu(instance, network, address) {
   const market = await marketFor(key, address).catch(() => null);
   return {
     text: [
-      `📆 PAPER DCA — ${NETWORKS[key].label}`, '',
+      `📆 شراء دوري تجريبي — ${NETWORKS[key].label}`, '',
       `${market ? `$${market.symbol}` : 'TOKEN'} • ${short(address)}`,
       market ? `السعر: ${priceText(market.priceUsd)}` : '',
-      '', 'اختر الخطة. يتم تنفيذ الدفعات Paper فقط.',
+      '', 'اختر الخطة. تُنفذ الدفعات تجريبيًا فقط.',
       'كل خطة تستخدم مبلغًا إجماليًا مقسمًا بالتساوي.'
     ].filter(Boolean).join('\n'),
     keyboard: [
       [{ text: '$60 × 3 / 1m', callback_data: `p3:dc:60:3:1:${key}:${address}` }],
       [{ text: '$150 × 3 / 5m', callback_data: `p3:dc:150:3:5:${key}:${address}` }],
       [{ text: '$300 × 4 / 15m', callback_data: `p3:dc:300:4:15:${key}:${address}` }],
-      [{ text: '📋 Orders', callback_data: 'p3:o' }]
+      [{ text: '📋 الأوامر', callback_data: 'p3:o' }]
     ]
   };
 }
@@ -186,22 +186,22 @@ async function createDca(instance, totalUsd, installments, intervalMin, network,
   await setJsonSetting(instance.settings, ORDERS_KEY, orders.slice(0, 80));
   return {
     text: `✅ PAPER DCA CREATED\n\n$${order.symbol} • ${NETWORKS[key].label}\nالإجمالي: $${total.toFixed(2)}\nالدفعات: ${count} × $${order.amountPerFill.toFixed(2)}\nالفاصل: ${minutes} دقيقة\n\nأول دفعة ستنفذ في دورة المراقبة القادمة.`,
-    keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '📊 Positions', callback_data: 'term:p' }]]
+    keyboard: [[{ text: '📋 الأوامر', callback_data: 'p3:o' }, { text: '📊 المراكز', callback_data: 'term:p' }]]
   };
 }
 
 async function ordersDashboard(instance) {
   const orders = await getJsonSetting(instance.settings, ORDERS_KEY, []);
   const active = orders.filter((order) => order.status === 'open').slice(0, 10);
-  if (!active.length) return { text: '📋 PAPER ORDERS\n\nلا توجد Limit/DCA orders مفتوحة.', keyboard: [[{ text: '📊 Positions', callback_data: 'term:p' }]] };
-  const lines = ['📋 PAPER ORDERS', ''];
+  if (!active.length) return { text: '📋 الأوامر التجريبية\n\nلا توجد أوامر شراء محدد أو شراء دوري مفتوحة.', keyboard: [[{ text: '📊 المراكز', callback_data: 'term:p' }]] };
+  const lines = ['📋 الأوامر التجريبية', ''];
   const keyboard = [];
   for (const order of active) {
     if (order.type === 'limit') lines.push(`🎯 $${order.symbol} • ${NETWORKS[order.network]?.label || order.network}\n   $${finite(order.amountUsd).toFixed(0)} @ ${priceText(order.targetPrice)}`);
-    else lines.push(`📆 $${order.symbol} • ${NETWORKS[order.network]?.label || order.network}\n   ${order.filled}/${order.installments} filled • $${finite(order.amountPerFill).toFixed(0)} each`);
-    keyboard.push([{ text: `❌ Cancel ${order.symbol}`, callback_data: `p3:oc:${encodeURIComponent(order.id)}` }]);
+    else lines.push(`📆 $${order.symbol} • ${NETWORKS[order.network]?.label || order.network}\n   ${order.filled}/${order.installments} منفذة • $${finite(order.amountPerFill).toFixed(0)} لكل دفعة`);
+    keyboard.push([{ text: `❌ إلغاء ${order.symbol}`, callback_data: `p3:oc:${encodeURIComponent(order.id)}` }]);
   }
-  keyboard.push([{ text: '📊 Positions', callback_data: 'term:p' }]);
+  keyboard.push([{ text: '📊 المراكز', callback_data: 'term:p' }]);
   return { text: lines.join('\n'), keyboard };
 }
 
@@ -209,11 +209,11 @@ async function cancelOrder(instance, encodedId) {
   const id = decodeURIComponent(String(encodedId || ''));
   const orders = await getJsonSetting(instance.settings, ORDERS_KEY, []);
   const order = orders.find((row) => row.id === id && row.status === 'open');
-  if (!order) return { text: 'ℹ️ الأمر غير موجود أو مغلق.', keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }]] };
+  if (!order) return { text: 'ℹ️ الأمر غير موجود أو مغلق.', keyboard: [[{ text: '📋 الأوامر', callback_data: 'p3:o' }]] };
   order.status = 'cancelled';
   order.cancelledAt = new Date().toISOString();
   await setJsonSetting(instance.settings, ORDERS_KEY, orders);
-  return { text: `✅ تم إلغاء Paper ${order.type.toUpperCase()} لـ $${order.symbol}.`, keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }]] };
+  return { text: `✅ تم إلغاء الأمر التجريبي ${order.type.toUpperCase()} لـ $${order.symbol}.`, keyboard: [[{ text: '📋 الأوامر', callback_data: 'p3:o' }]] };
 }
 
 async function sniperMenu(instance, network, address) {
@@ -222,23 +222,23 @@ async function sniperMenu(instance, network, address) {
   const active = await sniperCode(instance);
   return {
     text: [
-      '🎯 SUMMECA SNIPER CHECK — MANUAL CONFIRM', '',
+      '🎯 فحص القنص في SUMMECA — تأكيد يدوي', '',
       `العقد: ${short(address)} • ${NETWORKS[key].label}`,
-      `Preset الحالي: ${SNIPER_PRESETS[active].label}`,
+      `الإعداد الحالي: ${SNIPER_PRESETS[active].label}`,
       '',
-      'الـSniper هنا لا يشتري تلقائيًا. يفحص العقد فورًا ثم يعرض نتيجة Pass/Fail وزر Paper Buy للتأكيد.'
+      'ميزة القنص هنا لا تشتري تلقائيًا. يفحص العقد فورًا ثم يعرض نتيجة نجاح/فشل وزر شراء تجريبي للتأكيد.'
     ].join('\n'),
     keyboard: [
-      [{ text: '⚡ Ultra', callback_data: `p3:ss:u:${key}:${address}` }, { text: '🛡️ Balanced', callback_data: `p3:ss:b:${key}:${address}` }],
-      [{ text: '💎 Strict', callback_data: `p3:ss:s:${key}:${address}` }],
-      [{ text: '🔍 Run Check', callback_data: `p3:sr:${key}:${address}` }]
+      [{ text: '⚡ مبكر', callback_data: `p3:ss:u:${key}:${address}` }, { text: '🛡️ متوازن', callback_data: `p3:ss:b:${key}:${address}` }],
+      [{ text: '💎 صارم', callback_data: `p3:ss:s:${key}:${address}` }],
+      [{ text: '🔍 تشغيل الفحص', callback_data: `p3:sr:${key}:${address}` }]
     ]
   };
 }
 
 async function setSniper(instance, code, network, address) {
   const safe = await setSniperCode(instance, code);
-  return sniperMenu(instance, network, address).then((result) => ({ ...result, text: `✅ Sniper Preset: ${SNIPER_PRESETS[safe].label}\n\n${result.text}` }));
+  return sniperMenu(instance, network, address).then((result) => ({ ...result, text: `✅ إعداد القنص: ${SNIPER_PRESETS[safe].label}\n\n${result.text}` }));
 }
 
 async function runSniper(instance, network, address) {
@@ -269,7 +269,7 @@ async function runSniper(instance, network, address) {
   return {
     text: lines.join('\n'),
     keyboard: pass
-      ? [[{ text: '🟢 Buy Preview', callback_data: `term:b:${key}:${address}` }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
+      ? [[{ text: '🟢 معاينة الشراء', callback_data: `term:b:${key}:${address}` }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
       : [[{ text: '🔄 إعادة الفحص', callback_data: `p3:sr:${key}:${address}` }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]]
   };
 }
@@ -290,19 +290,19 @@ async function copyDashboard(instance) {
   const orders = await getJsonSetting(instance.settings, ORDERS_KEY, []);
   const openCopyLike = orders.filter((o) => o.status === 'open' && ['limit', 'dca'].includes(o.type)).length;
   const lines = [
-    '🧠 SMART-WALLET COPY DASHBOARD', '',
-    `👛 EVM wallets tracked: ${wallets.length}`,
+    '🧠 لوحة نسخ المحافظ الذكية', '',
+    `👛 محافظ EVM المتتبعة: ${wallets.length}`,
     ...wallets.slice(0, 8).map((w, i) => `${i + 1}. ${w.label} • ${short(w.address)}`),
     '',
-    `📋 Active Paper orders: ${openCopyLike}`,
-    '✅ Copy mode: Preview → Amount → Final confirmation',
-    '🔒 Blind/automatic real-money copy: OFF',
+    `📋 الأوامر التجريبية النشطة: ${openCopyLike}`,
+    '✅ مسار النسخ: معاينة ← مبلغ ← تأكيد نهائي',
+    '🔒 النسخ الحقيقي الأعمى/التلقائي: متوقف',
     '',
     'ملاحظة: هذه محافظ EVM المتتبعة العامة/المهيأة؛ لا يتم وصفها كـElite إلا بعد سجل أداء مثبت.'
   ];
   return {
     text: lines.join('\n'),
-    keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '📊 Positions', callback_data: 'term:p' }], [{ text: '👛 Wallet', callback_data: 'adv:w' }]]
+    keyboard: [[{ text: '📋 الأوامر', callback_data: 'p3:o' }, { text: '📊 المراكز', callback_data: 'term:p' }], [{ text: '👛 المحفظة', callback_data: 'adv:w' }]]
   };
 }
 
@@ -333,7 +333,7 @@ async function orderCycle() {
         const result = await terminalForMonitor.paperBuy(finite(order.amountUsd), order.network, order.address);
         if (/PAPER BUY تم/.test(String(result?.text || ''))) {
           order.status = 'filled'; order.filledAt = new Date().toISOString(); order.fillPrice = market.priceUsd; changed = true;
-          await notify(`🎯✅ PAPER LIMIT FILLED\n\n$${market.symbol} • ${NETWORKS[order.network]?.label || order.network}\nAmount: $${finite(order.amountUsd).toFixed(2)}\nFill: ${priceText(market.priceUsd)}\nTarget: ${priceText(order.targetPrice)}\n\n🧪 Paper only.`, [[{ text: '📊 Positions', callback_data: 'term:p' }]]);
+          await notify(`🎯✅ PAPER LIMIT FILLED\n\n$${market.symbol} • ${NETWORKS[order.network]?.label || order.network}\nAmount: $${finite(order.amountUsd).toFixed(2)}\nFill: ${priceText(market.priceUsd)}\nالسعر المستهدف: ${priceText(order.targetPrice)}\n\n🧪 Paper only.`, [[{ text: '📊 المراكز', callback_data: 'term:p' }]]);
         }
       }
       if (order.type === 'dca' && Date.now() >= finite(order.nextAt) && finite(order.filled) < finite(order.installments)) {
@@ -344,7 +344,7 @@ async function orderCycle() {
           order.lastFillPrice = market.priceUsd;
           if (order.filled >= order.installments) { order.status = 'filled'; order.filledAt = new Date().toISOString(); }
           changed = true;
-          await notify(`📆✅ PAPER DCA FILL ${order.filled}/${order.installments}\n\n$${market.symbol} • ${NETWORKS[order.network]?.label || order.network}\nAmount: $${finite(order.amountPerFill).toFixed(2)}\nFill: ${priceText(market.priceUsd)}\n\n🧪 Paper only.`, [[{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '📊 Positions', callback_data: 'term:p' }]]);
+          await notify(`📆✅ PAPER DCA FILL ${order.filled}/${order.installments}\n\n$${market.symbol} • ${NETWORKS[order.network]?.label || order.network}\nAmount: $${finite(order.amountPerFill).toFixed(2)}\nFill: ${priceText(market.priceUsd)}\n\n🧪 Paper only.`, [[{ text: '📋 الأوامر', callback_data: 'p3:o' }, { text: '📊 المراكز', callback_data: 'term:p' }]]);
         }
       }
       await sleep(120);
@@ -370,8 +370,8 @@ export function installPhase3Terminal() {
     const key = normalizeTerminalNetwork(network);
     if (result?.keyboard && isTerminalAddress(key, address)) {
       result.keyboard = [...result.keyboard,
-        [{ text: '🎯 Limit', callback_data: `p3:l:${key}:${address}` }, { text: '📆 DCA', callback_data: `p3:d:${key}:${address}` }, { text: '⚡ Sniper', callback_data: `p3:s:${key}:${address}` }],
-        [{ text: '🧠 Copy Dashboard', callback_data: 'p3:c' }, { text: '📋 Orders', callback_data: 'p3:o' }]
+        [{ text: '🎯 أمر محدد', callback_data: `p3:l:${key}:${address}` }, { text: '📆 شراء دوري', callback_data: `p3:d:${key}:${address}` }, { text: '⚡ قنص', callback_data: `p3:s:${key}:${address}` }],
+        [{ text: '🧠 نسخ التداول', callback_data: 'p3:c' }, { text: '📋 الأوامر', callback_data: 'p3:o' }]
       ];
     }
     terminalForMonitor = this;
@@ -398,9 +398,9 @@ export function installPhase3Terminal() {
       if (action === 'sr' && parts.length >= 4) return { handled: true, ...(await runSniper(this, parts[2], parts.slice(3).join(':'))) };
       if (action === 'c') return { handled: true, ...(await copyDashboard(this)) };
     } catch (error) {
-      return { handled: true, text: `❌ Phase 3 Terminal error: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }]] };
+      return { handled: true, text: `❌ خطأ في منصة الأوامر: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [[{ text: '📋 الأوامر', callback_data: 'p3:o' }]] };
     }
-    return { handled: true, text: 'ℹ️ أمر Phase 3 غير معروف.', keyboard: [[{ text: '📋 Orders', callback_data: 'p3:o' }]] };
+    return { handled: true, text: 'ℹ️ أمر غير معروف في منصة الأوامر.', keyboard: [[{ text: '📋 الأوامر', callback_data: 'p3:o' }]] };
   };
 
   startOrderMonitor();

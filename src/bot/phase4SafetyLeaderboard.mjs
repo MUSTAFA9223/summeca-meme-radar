@@ -151,23 +151,23 @@ async function deepSafety(network, address) {
   const market = await marketFor(key, address).catch(() => null);
   const chain = key === 'sol' ? await solanaSafety(address).catch(() => ({ verified: [], warnings: ['solana-rpc-unavailable'] })) : await evmSafety(key, address);
   const result = scoreSafety(market, chain);
-  const level = result.score >= 80 ? '🟢 LOW SIGNALLED RISK' : result.score >= 60 ? '🟡 MEDIUM RISK' : '🔴 HIGH RISK';
+  const level = result.score >= 80 ? '🟢 مخاطر منخفضة حسب الأدلة' : result.score >= 60 ? '🟡 مخاطر متوسطة' : '🔴 مخاطر مرتفعة';
   const lines = [
-    `🛡️ DEEP SAFETY — ${NETWORKS[key]?.label || key}`, '',
+    `🛡️ فحص الأمان المتقدم — ${NETWORKS[key]?.label || key}`, '',
     `${market ? `$${market.symbol}` : 'TOKEN'} • ${short(address)}`,
-    `Safety Score: ${result.score}/100 • ${level}`,
-    market ? `Liquidity: ${money(market.liquidityUsd)} | MC: ${money(market.marketCapUsd)}` : 'Market: غير متاح حاليًا',
-    market ? `Buys/Sells 5m: ${market.buys5m}/${market.sells5m} | Move: ${pct(market.priceChange5mPct)}` : '',
+    `درجة الأمان: ${result.score}/100 • ${level}`,
+    market ? `السيولة: ${money(market.liquidityUsd)} | القيمة السوقية: ${money(market.marketCapUsd)}` : 'السوق: غير متاح حاليًا',
+    market ? `شراء/بيع 5 دقائق: ${market.buys5m}/${market.sells5m} | الحركة: ${pct(market.priceChange5mPct)}` : '',
     '',
     `✅ Verified checks: ${(chain.verified ?? []).length ? chain.verified.join(', ') : 'basic market checks only'}`
   ].filter(Boolean);
   if (chain.top1Pct != null) lines.push(`👤 Top1: ${pct(chain.top1Pct)} | Top5: ${pct(chain.top5Pct)} | Top10: ${pct(chain.top10Pct)}`);
   if (key === 'sol') lines.push(`🪙 Mint authority: ${chain.mintAuthority ? 'ACTIVE ⚠️' : 'none/disabled ✅'} | Freeze: ${chain.freezeAuthority ? 'ACTIVE ⚠️' : 'none/disabled ✅'}`);
   if (key !== 'sol' && (chain.buyTax != null || chain.sellTax != null)) lines.push(`💸 Tax: buy ${chain.buyTax == null ? '—' : pct(chain.buyTax)} / sell ${chain.sellTax == null ? '—' : pct(chain.sellTax)}`);
-  lines.push('', result.reasons.length ? `⚠️ Flags: ${result.reasons.join(', ')}` : '✅ No high-risk flag detected by available checks.', '', 'مهم: عدم ظهور تحذير لا يضمن أن العقد آمن أو أن السعر سيرتفع.');
+  lines.push('', result.reasons.length ? `⚠️ Flags: ${result.reasons.join(', ')}` : '✅ لم تظهر علامة خطر مرتفع في الفحوص المتاحة.', '', 'مهم: عدم ظهور تحذير لا يضمن أن العقد آمن أو أن السعر سيرتفع.');
   return {
     text: lines.join('\n'),
-    keyboard: [[{ text: '🧾 Preflight', callback_data: `p4:p:${key}:${address}` }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }], [{ text: '🧠 Wallet Leaderboard', callback_data: 'p4:lb' }]]
+    keyboard: [[{ text: '🧾 فحص ما قبل التنفيذ', callback_data: `p4:p:${key}:${address}` }, { text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }], [{ text: '🧠 ترتيب المحافظ الذكية', callback_data: 'p4:lb' }]]
   };
 }
 
@@ -266,16 +266,16 @@ async function walletLeaderboard() {
     const evidence = Math.max(signalEvidence, finite(w.autoScore));
     return { ...w, avgEntry, avgRisk, signalEvidence, evidence };
   }).sort((a, b) => b.evidence - a.evidence || b.signals - a.signals);
-  const lines = ['🧠 SMART-WALLET LEADERBOARD', '', 'Auto Discovery يحتاج ≥2 عملات ناجحة مختلفة قبل ترقية المحفظة. النتيجة دليل تاريخي وليست ضمان ربح.', ''];
+  const lines = ['🧠 ترتيب المحافظ الذكية', '', 'الاكتشاف التلقائي يحتاج إلى عملتين ناجحتين مختلفتين على الأقل قبل ترقية المحفظة. النتيجة دليل تاريخي وليست ضمانًا للربح.', ''];
   for (const [i, w] of ranked.slice(0, 10).entries()) {
     const auto = w.autoDiscovered
-      ? ` | AUTO ${w.autoSamples} wins • avg peak +${finite(w.autoAvgPeakRoi).toFixed(0)}%`
+      ? ` | تلقائي ${w.autoSamples} نجاحات • متوسط القمة +${finite(w.autoAvgPeakRoi).toFixed(0)}%`
       : '';
-    lines.push(`${i + 1}. [${String(w.network || 'unknown').toUpperCase()}] ${w.label} • ${w.evidence}/100`, `   signals ${w.signals} | clusters ${w.clusters} | verified flow ${money(w.paidUsd)} | avg entry ${w.avgEntry.toFixed(0)}${auto}`);
+    lines.push(`${i + 1}. [${String(w.network || 'unknown').toUpperCase()}] ${w.label} • ${w.evidence}/100`, `   إشارات ${w.signals} | تجمعات ${w.clusters} | تدفق موثق ${money(w.paidUsd)} | متوسط الدخول ${w.avgEntry.toFixed(0)}${auto}`);
   }
   if (!ranked.length) lines.push('لا توجد أدلة كافية حتى الآن.');
-  lines.push('', '📈 Performance/ROI ranking سيُفعل تلقائيًا فقط عندما تتوفر عينات نتائج موثوقة كافية.');
-  return { text: lines.join('\n'), keyboard: [[{ text: '📊 Positions', callback_data: 'term:p' }, { text: '📋 Orders', callback_data: 'p3:o' }]] };
+  lines.push('', '📈 ترتيب الأداء والعائد سيتفعّل تلقائيًا عندما تتوفر عينات موثوقة كافية.');
+  return { text: lines.join('\n'), keyboard: [[{ text: '📊 المراكز', callback_data: 'term:p' }, { text: '📋 الأوامر', callback_data: 'p3:o' }]] };
 }
 
 async function preflight(network, address) {
@@ -283,19 +283,19 @@ async function preflight(network, address) {
   if (!isTerminalAddress(key, address)) return { text: '❌ عقد غير صالح.', keyboard: [] };
   const market = await marketFor(key, address).catch(() => null);
   const safety = await deepSafety(key, address);
-  const safetyMatch = String(safety.text || '').match(/Safety Score:\s*(\d+)/i);
+  const safetyMatch = String(safety.text || '').match(/درجة الأمان:\s*(\d+)/i);
   const safetyScore = finite(safetyMatch?.[1]);
   const checks = [
-    ['Market pair visible', Boolean(market)],
-    ['Liquidity ≥ $10K', finite(market?.liquidityUsd) >= 10_000],
-    ['Real sells observed', finite(market?.sells5m) >= 1],
-    ['Safety score ≥ 70', safetyScore >= 70],
-    ['Network supported by Terminal', Boolean(NETWORKS[key])],
-    ['Live broadcaster disabled', true]
+    ['زوج السوق ظاهر', Boolean(market)],
+    ['السيولة ≥ 10 آلاف دولار', finite(market?.liquidityUsd) >= 10_000],
+    ['تم رصد بيع حقيقي', finite(market?.sells5m) >= 1],
+    ['درجة الأمان ≥ 70', safetyScore >= 70],
+    ['الشبكة مدعومة في منصة التداول', Boolean(NETWORKS[key])],
+    ['الإرسال الحقيقي مقفل', true]
   ];
   const pass = checks.slice(0, 5).every(([, ok]) => ok);
-  const lines = ['🧾 EXECUTION PREFLIGHT — SAFE MODE', '', `${market ? `$${market.symbol}` : 'TOKEN'} • ${NETWORKS[key]?.label || key}`, ...checks.map(([label, ok]) => `${ok ? '✅' : '❌'} ${label}`), '', pass ? '🟢 جاهز لمرحلة Preview/Paper من ناحية الفحوص الحالية.' : '🟡 غير جاهز بعد؛ لا أنصح حتى بمعاملة حقيقية مستقبلًا قبل حل البنود الفاشلة.', '', '🔒 لا يوجد Router/Signer/Broadcast حقيقي في هذه المرحلة، كما طلبت.'];
-  return { text: lines.join('\n'), keyboard: [[{ text: '🛡️ Deep Safety', callback_data: `p4:s:${key}:${address}` }, { text: '🟢 Paper Buy', callback_data: `term:b:${key}:${address}` }]] };
+  const lines = ['🧾 فحص ما قبل التنفيذ — الوضع الآمن', '', `${market ? `$${market.symbol}` : 'TOKEN'} • ${NETWORKS[key]?.label || key}`, ...checks.map(([label, ok]) => `${ok ? '✅' : '❌'} ${label}`), '', pass ? '🟢 جاهز لمرحلة Preview/Paper من ناحية الفحوص الحالية.' : '🟡 غير جاهز بعد؛ لا أنصح حتى بمعاملة حقيقية مستقبلًا قبل حل البنود الفاشلة.', '', '🔒 لا يوجد إرسال حقيقي دون بوابات التنفيذ الحالية.'];
+  return { text: lines.join('\n'), keyboard: [[{ text: '🛡️ الأمان المتقدم', callback_data: `p4:s:${key}:${address}` }, { text: '🟢 شراء تجريبي', callback_data: `term:b:${key}:${address}` }]] };
 }
 
 let installed = false;
@@ -309,7 +309,7 @@ export function installPhase4SafetyLeaderboard() {
     const key = normalizeTerminalNetwork(network);
     if (result?.keyboard && isTerminalAddress(key, address)) {
       const hasP4 = result.keyboard.some((row) => row.some((button) => String(button?.callback_data ?? '').startsWith('p4:')));
-      if (!hasP4) result.keyboard.push([{ text: '🛡️ Deep Safety', callback_data: `p4:s:${key}:${address}` }, { text: '🧾 Preflight', callback_data: `p4:p:${key}:${address}` }], [{ text: '🧠 Wallet Leaderboard', callback_data: 'p4:lb' }]);
+      if (!hasP4) result.keyboard.push([{ text: '🛡️ الأمان المتقدم', callback_data: `p4:s:${key}:${address}` }, { text: '🧾 فحص ما قبل التنفيذ', callback_data: `p4:p:${key}:${address}` }], [{ text: '🧠 ترتيب المحافظ الذكية', callback_data: 'p4:lb' }]);
     }
     return result;
   };
@@ -325,9 +325,9 @@ export function installPhase4SafetyLeaderboard() {
       if (action === 's' && parts.length >= 4) return { handled: true, ...(await deepSafety(parts[2], parts.slice(3).join(':'))) };
       if (action === 'p' && parts.length >= 4) return { handled: true, ...(await preflight(parts[2], parts.slice(3).join(':'))) };
     } catch (error) {
-      return { handled: true, text: `❌ Phase 4 error: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [[{ text: '🧠 Leaderboard', callback_data: 'p4:lb' }]] };
+      return { handled: true, text: `❌ خطأ في فحص الأمان: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [[{ text: '🧠 ترتيب المحافظ', callback_data: 'p4:lb' }]] };
     }
-    return { handled: true, text: 'ℹ️ أمر Phase 4 غير معروف.', keyboard: [[{ text: '🧠 Leaderboard', callback_data: 'p4:lb' }]] };
+    return { handled: true, text: 'ℹ️ أمر غير معروف في فحص الأمان.', keyboard: [[{ text: '🧠 ترتيب المحافظ', callback_data: 'p4:lb' }]] };
   };
 
   console.log('SUMMECA PHASE 4: Deep Safety + Evidence Wallet Leaderboard + Safe Execution Preflight; live broadcast remains OFF');

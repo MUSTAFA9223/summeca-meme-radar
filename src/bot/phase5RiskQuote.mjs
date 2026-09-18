@@ -124,26 +124,26 @@ async function insiderRisk(network, address) {
   const risk = key === 'sol' ? await solanaInsiderRisk(address) : await evmInsiderRisk(key, address);
   const flags = risk.flags || [];
   const severe = flags.filter((f) => /honeypot|owner-change|mintable|freeze|mint-authority/.test(f)).length;
-  const level = severe ? '🔴 HIGH' : flags.length >= 2 ? '🟠 ELEVATED' : flags.length === 1 ? '🟡 WATCH' : '🟢 NO FLAG FOUND';
+  const level = severe ? '🔴 مرتفع' : flags.length >= 2 ? '🟠 فوق المتوسط' : flags.length === 1 ? '🟡 مراقبة' : '🟢 لا توجد علامة خطر';
   const lines = [
-    `🕵️ DEPLOYER / INSIDER RISK — ${NETWORKS[key]?.label || key}`, '',
+    `🕵️ مخاطر المطور والمحافظ الداخلية — ${NETWORKS[key]?.label || key}`, '',
     `${market ? `$${market.symbol}` : 'TOKEN'} • ${short(address)}`,
-    `Risk view: ${level}`,
-    market ? `Liquidity ${money(market.liquidityUsd)} | MC ${money(market.marketCapUsd)}` : 'Market snapshot unavailable', ''
+    `تقييم المخاطر: ${level}`,
+    market ? `السيولة ${money(market.liquidityUsd)} | القيمة السوقية ${money(market.marketCapUsd)}` : 'لقطة السوق غير متاحة', ''
   ];
   if (key === 'sol') {
-    if (risk.top1Pct != null) lines.push(`👥 Top1 ${pct(risk.top1Pct)} | Top5 ${pct(risk.top5Pct)} | Top10 ${pct(risk.top10Pct)}`);
-    lines.push(`🪙 Mint authority: ${risk.mintAuthority ? 'ACTIVE ⚠️' : 'none/disabled ✅'}`, `🧊 Freeze authority: ${risk.freezeAuthority ? 'ACTIVE ⚠️' : 'none/disabled ✅'}`);
+    if (risk.top1Pct != null) lines.push(`👥 أكبر محفظة ${pct(risk.top1Pct)} | أكبر 5 ${pct(risk.top5Pct)} | أكبر 10 ${pct(risk.top10Pct)}`);
+    lines.push(`🪙 Mint authority: ${risk.mintAuthority ? 'نشط ⚠️' : 'غير موجود/معطل ✅'}`, `🧊 Freeze authority: ${risk.freezeAuthority ? 'نشط ⚠️' : 'غير موجود/معطل ✅'}`);
   } else {
-    lines.push(`🧑‍💻 Creator: ${risk.creator ? short(risk.creator) : 'unknown'}${risk.creatorPct == null ? '' : ` • ${pct(risk.creatorPct)}`}`,
-      `👑 Owner: ${risk.owner ? short(risk.owner) : 'unknown'}${risk.ownerPct == null ? '' : ` • ${pct(risk.ownerPct)}`}`);
-    if (risk.top10Pct != null) lines.push(`👥 Top10 holders: ${pct(risk.top10Pct)}`);
-    if (risk.lpTopPct != null) lines.push(`💧 Largest LP holder: ${pct(risk.lpTopPct)}`);
+    lines.push(`🧑‍💻 Creator: ${risk.creator ? short(risk.creator) : 'غير معروف'}${risk.creatorPct == null ? '' : ` • ${pct(risk.creatorPct)}`}`,
+      `👑 Owner: ${risk.owner ? short(risk.owner) : 'غير معروف'}${risk.ownerPct == null ? '' : ` • ${pct(risk.ownerPct)}`}`);
+    if (risk.top10Pct != null) lines.push(`👥 أكبر 10 حائزين: ${pct(risk.top10Pct)}`);
+    if (risk.lpTopPct != null) lines.push(`💧 أكبر حائز للسيولة: ${pct(risk.lpTopPct)}`);
   }
-  lines.push('', flags.length ? `⚠️ Flags: ${[...new Set(flags)].join(', ')}` : '✅ No deployer/insider flag detected by available evidence.');
+  lines.push('', flags.length ? `⚠️ Flags: ${[...new Set(flags)].join(', ')}` : '✅ لم تظهر علامة خطر للمطور أو المحافظ الداخلية ضمن الأدلة المتاحة.');
   for (const note of risk.notes || []) lines.push(`ℹ️ ${note}`);
   lines.push('', 'هذا فحص أدلة، وليس إثباتًا أن المطور حسن/سيئ النية.');
-  return { text: lines.join('\n'), keyboard: [[{ text: '🛡️ Deep Safety', callback_data: `p4:s:${key}:${address}` }, { text: '🧾 Route Simulation', callback_data: `p5:q:${key}:${address}` }], [{ text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]] };
+  return { text: lines.join('\n'), keyboard: [[{ text: '🛡️ الأمان المتقدم', callback_data: `p4:s:${key}:${address}` }, { text: '🧾 محاكاة مسار الصفقة', callback_data: `p5:q:${key}:${address}` }], [{ text: '🔎 تحليل', callback_data: `term:a:${key}:${address}` }]] };
 }
 
 async function jupiterQuote(outputMint) {
@@ -162,24 +162,24 @@ async function routeSimulation(network, address) {
   const key = normalizeTerminalNetwork(network);
   if (!isTerminalAddress(key, address)) return { text: '❌ عقد غير صالح.', keyboard: [] };
   const market = await marketFor(key, address).catch(() => null);
-  const lines = [`🧾 ROUTE / QUOTE SIMULATION — ${NETWORKS[key]?.label || key}`, '', `${market ? `$${market.symbol}` : 'TOKEN'} • ${short(address)}`, '🔒 Quote only — no signing, no transaction construction, no broadcast.', ''];
+  const lines = [`🧾 محاكاة المسار والسعر — ${NETWORKS[key]?.label || key}`, '', `${market ? `$${market.symbol}` : 'TOKEN'} • ${short(address)}`, '🔒 عرض سعر فقط — بلا توقيع أو إنشاء أو إرسال معاملة.', ''];
   if (key === 'sol') {
     try {
       const quote = await jupiterQuote(address);
       const outAmount = String(quote?.outAmount || '0');
       const priceImpact = finite(quote?.priceImpactPct) * 100;
       const routeLabels = Array.isArray(quote?.routePlan) ? quote.routePlan.map((r) => r?.swapInfo?.label).filter(Boolean) : [];
-      lines.push('Input: 0.1000 SOL', `Output raw units: ${outAmount}`, `Price impact: ${priceImpact.toFixed(3)}%`, `Slippage cap: 5.00%`, `Route: ${routeLabels.length ? [...new Set(routeLabels)].join(' → ') : 'provider route returned'}`, '✅ Jupiter quote received.');
+      lines.push('المبلغ المدخل: 0.1000 SOL', `المخرجات الخام: ${outAmount}`, `تأثير السعر: ${priceImpact.toFixed(3)}%`, `حد الانزلاق: 5.00%`, `Route: ${routeLabels.length ? [...new Set(routeLabels)].join(' → ') : 'provider route returned'}`, '✅ تم استلام عرض سعر من Jupiter.');
     } catch (error) {
-      lines.push(`🟡 Jupiter quote unavailable: ${String(error?.message ?? error).slice(0, 120)}`, 'لم يتم إنشاء أو توقيع أي معاملة.');
+      lines.push(`🟡 عرض Jupiter غير متاح: ${String(error?.message ?? error).slice(0, 120)}`, 'لم يتم إنشاء أو توقيع أي معاملة.');
     }
   } else {
     const amountUsd = 100;
     const impact = estimateEvmImpact(amountUsd, finite(market?.liquidityUsd));
-    lines.push(`Simulation size: ${money(amountUsd)}`, market ? `Pool/Dex: ${market.dexId || 'DEX'} • liquidity ${money(market.liquidityUsd)}` : 'DEX pool not visible', impact == null ? 'Estimated impact: unavailable' : `Estimated constant-liquidity impact: ~${impact.toFixed(3)}%`, 'ℹ️ هذا تقدير سيولة فقط وليس Router quote ملزمًا. EVM signer/router remains disconnected.');
+    lines.push(`حجم المحاكاة: ${money(amountUsd)}`, market ? `Pool/Dex: ${market.dexId || 'DEX'} • liquidity ${money(market.liquidityUsd)}` : 'DEX pool not visible', impact == null ? 'تأثير السعر المقدر: غير متاح' : `تأثير السيولة المقدر: ~${impact.toFixed(3)}%`, 'ℹ️ هذا تقدير سيولة فقط وليس عرضًا ملزمًا. التوقيع والتنفيذ على شبكات EVM غير متصلين حاليًا.');
   }
-  lines.push('', '✅ Safe readiness: العرض لا يملك صلاحية إرسال أموال.');
-  return { text: lines.join('\n'), keyboard: [[{ text: '🕵️ Insider Risk', callback_data: `p5:i:${key}:${address}` }, { text: '🧾 Preflight', callback_data: `p4:p:${key}:${address}` }], [{ text: '🟢 Paper Buy', callback_data: `term:b:${key}:${address}` }]] };
+  lines.push('', '✅ جاهزية آمنة: هذه الشاشة لا تملك صلاحية إرسال الأموال.');
+  return { text: lines.join('\n'), keyboard: [[{ text: '🕵️ مخاطر المحافظ الداخلية', callback_data: `p5:i:${key}:${address}` }, { text: '🧾 فحص ما قبل التنفيذ', callback_data: `p4:p:${key}:${address}` }], [{ text: '🟢 شراء تجريبي', callback_data: `term:b:${key}:${address}` }]] };
 }
 
 let installed = false;
@@ -192,7 +192,7 @@ export function installPhase5RiskQuote() {
     const key = normalizeTerminalNetwork(network);
     if (result?.keyboard && isTerminalAddress(key, address)) {
       const has = result.keyboard.some((row) => row.some((b) => String(b?.callback_data || '').startsWith('p5:')));
-      if (!has) result.keyboard.push([{ text: '🕵️ Insider Risk', callback_data: `p5:i:${key}:${address}` }, { text: '🧾 Route Sim', callback_data: `p5:q:${key}:${address}` }]);
+      if (!has) result.keyboard.push([{ text: '🕵️ مخاطر المحافظ الداخلية', callback_data: `p5:i:${key}:${address}` }, { text: '🧾 محاكاة المسار', callback_data: `p5:q:${key}:${address}` }]);
     }
     return result;
   };
@@ -205,9 +205,9 @@ export function installPhase5RiskQuote() {
       if (parts[1] === 'i' && parts.length >= 4) return { handled: true, ...(await insiderRisk(parts[2], parts.slice(3).join(':'))) };
       if (parts[1] === 'q' && parts.length >= 4) return { handled: true, ...(await routeSimulation(parts[2], parts.slice(3).join(':'))) };
     } catch (error) {
-      return { handled: true, text: `❌ Phase 5 error: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] };
+      return { handled: true, text: `❌ خطأ في تحليل المخاطر: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] };
     }
-    return { handled: true, text: 'ℹ️ أمر Phase 5 غير معروف.', keyboard: [] };
+    return { handled: true, text: 'ℹ️ أمر غير معروف في تحليل المخاطر.', keyboard: [] };
   };
   console.log('SUMMECA PHASE 5: deployer/insider evidence + quote/route simulation active; signer/router broadcast OFF');
 }
