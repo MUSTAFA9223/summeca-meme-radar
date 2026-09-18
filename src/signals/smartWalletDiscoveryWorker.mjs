@@ -583,13 +583,13 @@ export class SmartWalletDiscoveryWorker {
     this.monitorRunning = false;
     this.state = emptyState();
     this.stateLoaded = false;
-    this.discoveryIntervalMs = Math.max(60_000, finite(process.env.AUTO_SMART_DISCOVERY_INTERVAL_MS, 120_000));
+    this.discoveryIntervalMs = Math.max(45_000, finite(process.env.AUTO_SMART_DISCOVERY_INTERVAL_MS, 60_000));
     this.monitorIntervalMs = Math.max(5_000, finite(process.env.AUTO_SMART_MONITOR_INTERVAL_MS, 8_000));
     this.winnerMinPeakRoi = Math.max(20, finite(process.env.AUTO_SMART_WINNER_MIN_PEAK_ROI_PCT, 50));
     this.minSamples = Math.max(2, Math.floor(finite(process.env.AUTO_SMART_MIN_WINNING_TOKENS, 2)));
     this.minScore = clamp(finite(process.env.AUTO_SMART_MIN_SCORE, 60), 40, 95);
     this.minAveragePeakRoi = Math.max(20, finite(process.env.AUTO_SMART_MIN_AVG_PEAK_ROI_PCT, 40));
-    this.winnersPerCycle = Math.max(1, Math.min(3, Math.floor(finite(process.env.AUTO_SMART_WINNERS_PER_CYCLE, 1))));
+    this.winnersPerCycle = Math.max(1, Math.min(4, Math.floor(finite(process.env.AUTO_SMART_WINNERS_PER_CYCLE, 2))));
     this.solMonitorCursor = 0;
     this.evmMonitorCursor = 0;
   }
