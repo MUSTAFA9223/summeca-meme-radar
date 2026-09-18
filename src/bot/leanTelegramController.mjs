@@ -2,6 +2,7 @@ import { env } from '../config/env.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { TradingTerminal } from './tradingTerminal.mjs';
+import { handlePhase8Callback, handlePhase8Message } from './phase8OwnerFlows.mjs';
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const EVM = /^0x[0-9a-fA-F]{40}$/;
@@ -74,9 +75,10 @@ export class LeanTelegramController {
       [{ text: '👀 EARLY WATCH', callback_data: 'menu:trending' }, { text: '💎 TOP-TIER', callback_data: 'menu:signals' }],
       [{ text: '🧠 CONFIRMED', callback_data: 'menu:watchlist' }, { text: '🆕 PRE-LAUNCH', callback_data: 'menu:newcoins' }],
       [{ text: '💱 Trading', callback_data: 'menu:trading' }, { text: '📊 Positions', callback_data: 'term:p' }],
-      [{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '🧠 Copy Dashboard', callback_data: 'p3:c' }],
-      [{ text: '👛 المحافظ', callback_data: 'menu:wallet' }, { text: '🛡️ الحماية', callback_data: 'menu:safety' }],
-      [{ text: '⚙️ الإعدادات', callback_data: 'menu:settings' }, { text: '❓ المساعدة', callback_data: 'menu:help' }]
+      [{ text: '📋 Orders', callback_data: 'p3:o' }, { text: '🧠 Copy Trading', callback_data: 'p8:copy' }],
+      [{ text: '👀 Watchlist', callback_data: 'p8:watch' }, { text: '👛 Trading Wallets', callback_data: 'p8:wallets' }],
+      [{ text: '🛡️ الحماية', callback_data: 'menu:safety' }, { text: '⚙️ الإعدادات', callback_data: 'menu:settings' }],
+      [{ text: '❓ المساعدة', callback_data: 'menu:help' }]
     ];
   }
 
@@ -97,11 +99,11 @@ export class LeanTelegramController {
 
   async #showTrading() {
     return this.#send(this.#pick(
-      '💱 SUMMECA Trading Terminal\n\nمن أي إشارة عملة ستجد:\n🔎 تحليل — السعر والسيولة وMC وBuy/Sell وتركيز أكبر حسابات Solana\n🟢 Buy / 🔴 Sell — Paper Preview + تأكيد\n🎯 TP/SL/Trailing — إدارة المخاطر التجريبية\n🎯 Limit / 📆 DCA — أوامر Paper تتم مراقبتها آليًا\n⚡ Sniper — فحص Pass/Fail ثم تأكيد يدوي\n🧠 Copy Dashboard — المحافظ المتتبعة ووضع النسخ الآمن\n\nلن يتم توقيع أو إرسال أي صفقة حقيقية من هذه الواجهة.',
-      '💱 SUMMECA Trading Terminal\n\nEvery token alert can provide:\n🔎 Analysis — price, liquidity, MC, Buy/Sell and Solana top-account concentration\n🟢 Buy / 🔴 Sell — Paper preview + confirmation\n🎯 TP/SL/Trailing — Paper risk management\n🎯 Limit / 📆 DCA — monitored Paper orders\n⚡ Sniper — Pass/Fail check then manual confirmation\n🧠 Copy Dashboard — tracked wallets and safe copy mode\n\nNo real transaction is signed or broadcast from this interface.'
+      '💱 SUMMECA Trading Terminal\n\nمن أي إشارة عملة ستجد:\n🔎 تحليل — السعر والسيولة وMC وBuy/Sell وتركيز أكبر حسابات Solana\n🟢 Buy / 🔴 Sell — Paper Preview + تأكيد\n🎯 TP/SL/Trailing — إدارة المخاطر التجريبية\n🎯 Limit / 📆 DCA — أوامر Paper تتم مراقبتها آليًا\n⚡ Sniper — فحص Pass/Fail ثم تأكيد يدوي\n🧠 Copy Trading — محافظ ديناميكية + مبلغ ثابت أو نسبة\n\nلن يتم توقيع أو إرسال أي صفقة حقيقية من هذه الواجهة.',
+      '💱 SUMMECA Trading Terminal\n\nEvery token alert can provide:\n🔎 Analysis — price, liquidity, MC, Buy/Sell and Solana top-account concentration\n🟢 Buy / 🔴 Sell — Paper preview + confirmation\n🎯 TP/SL/Trailing — Paper risk management\n🎯 Limit / 📆 DCA — monitored Paper orders\n⚡ Sniper — Pass/Fail check then manual confirmation\n🧠 Copy Trading — dynamic tracked wallets + fixed/percentage sizing\n\nNo real transaction is signed or broadcast from this interface.'
     ), [
       [{ text: '📊 Positions', callback_data: 'term:p' }, { text: '📋 Orders', callback_data: 'p3:o' }],
-      [{ text: '🧠 Copy Dashboard', callback_data: 'p3:c' }],
+      [{ text: '🧠 Copy Trading', callback_data: 'p8:copy' }, { text: '👛 Trading Wallets', callback_data: 'p8:wallets' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
     ]);
   }
@@ -168,8 +170,8 @@ export class LeanTelegramController {
         '🛡️ Safety\n\nAnti-spoof + liquidity + Buy/Sell + market cap + late-entry protection + Solana concentration checks + rate-limit guards.\n\nFilters reduce risk but do not guarantee profit.'
       ],
       'menu:help': [
-        '❓ المساعدة\n\n/start أو /menu — القائمة\n/status — حالة البوت\n/trade — Trading Terminal\n/positions — Paper Positions\n/orders — Limit/DCA Orders\n/copy — Smart-Wallet Copy Dashboard\n/settings — الإعدادات\n/admin — لوحة المالك\n\nافتح أي إشارة واستخدم Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper مباشرة.',
-        '❓ Help\n\n/start or /menu — main menu\n/status — bot status\n/trade — Trading Terminal\n/positions — Paper Positions\n/orders — Limit/DCA Orders\n/copy — Smart-Wallet Copy Dashboard\n/settings — settings\n/admin — owner panel\n\nOpen any alert and use Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper directly.'
+        '❓ المساعدة\n\n/start أو /menu — القائمة\n/status — حالة البوت\n/trade — Trading Terminal\n/positions — Paper Positions\n/orders — Limit/DCA Orders\n/copy — Dynamic Copy Trading\n/watch — العملات تحت المتابعة\n/wallets — محافظ التداول\n/settings — الإعدادات\n/admin — لوحة المالك\n\nافتح أي إشارة واستخدم Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper مباشرة.',
+        '❓ Help\n\n/start or /menu — main menu\n/status — bot status\n/trade — Trading Terminal\n/positions — Paper Positions\n/orders — Limit/DCA Orders\n/copy — Dynamic Copy Trading\n/watch — tracked tokens\n/wallets — trading wallets\n/settings — settings\n/admin — owner panel\n\nOpen any alert and use Analyse / Buy / Sell / TP-SL / Limit / DCA / Sniper directly.'
       ]
     };
     const pair = map[data] || map['menu:help'];
@@ -179,6 +181,8 @@ export class LeanTelegramController {
   async #handleMessage(message) {
     if (String(message?.chat?.id ?? '') !== String(this.chatId)) return;
     const text = String(message?.text ?? '').trim();
+    const phase8 = await handlePhase8Message(message, this.terminal).catch((error) => ({ handled: true, text: `❌ Phase 8: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
+    if (phase8?.handled) return this.#sendTerminal(phase8);
     if (/^\/(start|menu)(?:@\w+)?\b/i.test(text)) return this.showMainMenu();
     if (/^\/status(?:@\w+)?\b/i.test(text)) return this.#showStatus();
     if (/^\/settings(?:@\w+)?\b/i.test(text)) return this.#showSettings();
@@ -194,6 +198,11 @@ export class LeanTelegramController {
     if (!callback?.id || chatId !== String(this.chatId)) return;
     const data = String(callback?.data ?? '');
     await telegramApi(env.telegramBotToken, 'answerCallbackQuery', { callback_query_id: callback.id }).catch(() => {});
+
+    if (data.startsWith('watch:add:') || data.startsWith('p8:') || data.startsWith('p8f:') || data.startsWith('p8p:') || data.startsWith('p8s:')) {
+      const result = await handlePhase8Callback(callback, this.terminal).catch((error) => ({ handled: true, text: `❌ Phase 8: ${String(error?.message ?? error).slice(0, 180)}`, keyboard: [] }));
+      if (result?.handled) return this.#sendTerminal(result);
+    }
 
     if (data.startsWith('term:') || data.startsWith('adv:') || data.startsWith('p3:')) {
       const result = await this.terminal.handle(data);
@@ -268,7 +277,10 @@ export class LeanTelegramController {
         { command: 'trade', description: 'Trading Terminal' },
         { command: 'positions', description: 'Paper Positions' },
         { command: 'orders', description: 'Limit / DCA Orders' },
-        { command: 'copy', description: 'Smart-Wallet Copy Dashboard' },
+        { command: 'copy', description: 'Dynamic Copy Trading' },
+        { command: 'copywallet', description: 'إضافة ومتابعة محافظ المتداولين' },
+        { command: 'watch', description: 'قائمة العملات تحت المتابعة' },
+        { command: 'wallets', description: 'محافظ التداول داخل البوت' },
         { command: 'settings', description: 'الإعدادات' },
         { command: 'help', description: 'المساعدة' },
         { command: 'admin', description: 'لوحة المالك' }
