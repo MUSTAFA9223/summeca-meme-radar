@@ -75,32 +75,37 @@ test('paper probe eligibility uses the plausible gate result plus score threshol
 
 test('early alert lane surfaces strong market flow without waiting for holder profile', () => {
   const market = {
+    priceUsd: 0.001,
+    liquidityUsd: 12_000,
     marketCapUsd: 320_000,
-    buys5m: 12,
-    sells5m: 4,
+    buys5m: 18,
+    sells5m: 6,
     volume5mUsd: 2_400,
     priceChange5mPct: 24
   };
   assert.equal(isSolanaEarlyAlertEligible({
     rejectionReason: null,
-    score: 65,
-    minScore: 55,
+    score: 80,
+    ageMs: 60_000,
     market
   }), true);
 });
 
 test('early alert lane still rejects weak or one-way unsafe market flow', () => {
   const base = {
+    priceUsd: 0.001,
+    liquidityUsd: 12_000,
     marketCapUsd: 320_000,
-    buys5m: 12,
-    sells5m: 4,
+    buys5m: 18,
+    sells5m: 6,
     volume5mUsd: 2_400,
     priceChange5mPct: 24
   };
-  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: 'weak-buy-sell-ratio', score: 80, market: base }), false);
-  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: null, score: 80, market: { ...base, sells5m: 0 } }), false);
-  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: null, score: 80, market: { ...base, volume5mUsd: 100 } }), false);
-  assert.equal(isSolanaEarlyAlertEligible({ rejectionReason: null, score: 50, minScore: 55, market: base }), false);
+  const common = { ageMs: 60_000 };
+  assert.equal(isSolanaEarlyAlertEligible({ ...common, rejectionReason: 'weak-buy-sell-ratio', score: 80, market: base }), false);
+  assert.equal(isSolanaEarlyAlertEligible({ ...common, rejectionReason: null, score: 80, market: { ...base, sells5m: 0 } }), false);
+  assert.equal(isSolanaEarlyAlertEligible({ ...common, rejectionReason: null, score: 80, market: { ...base, volume5mUsd: 100 } }), false);
+  assert.equal(isSolanaEarlyAlertEligible({ ...common, rejectionReason: null, score: 70, market: base }), false);
 });
 
 
