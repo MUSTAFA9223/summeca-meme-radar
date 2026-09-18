@@ -76,7 +76,8 @@ export class LeanTelegramController {
       [{ text: '💱 التداول', callback_data: 'menu:trading' }, { text: '📊 المراكز', callback_data: 'term:p' }],
       [{ text: '📋 الأوامر', callback_data: 'p3:o' }, { text: '🧠 نسخ التداول', callback_data: 'p8:copy' }],
       [{ text: '👀 قائمة المتابعة', callback_data: 'p8:watch' }, { text: '👛 محفظتي', callback_data: 'p8:wallets' }],
-      [{ text: '🛡️ الحماية', callback_data: 'menu:safety' }, { text: '⚙️ الإعدادات', callback_data: 'menu:settings' }],
+      [{ text: '🪜 سُلّم الوقف', callback_data: 'p8:ladder' }, { text: '🛡️ الحماية', callback_data: 'menu:safety' }],
+      [{ text: '⚙️ الإعدادات', callback_data: 'menu:settings' }],
       [{ text: '❓ المساعدة', callback_data: 'menu:help' }]
     ];
   }
@@ -103,6 +104,7 @@ export class LeanTelegramController {
     ), [
       [{ text: '📊 المراكز', callback_data: 'term:p' }, { text: '📋 الأوامر', callback_data: 'p3:o' }],
       [{ text: '🧠 نسخ التداول', callback_data: 'p8:copy' }, { text: '👛 محفظتي', callback_data: 'p8:wallets' }],
+      [{ text: '🪜 سُلّم الوقف الديناميكي', callback_data: 'p8:ladder' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
     ]);
   }
@@ -113,7 +115,8 @@ export class LeanTelegramController {
       `⚙️ Settings\n\nCurrent language: ${this.language}\nThe radar remains active in the background so opportunities are not missed.\nمنصة التداول currently uses Paper/Safe Mode for testing.`
     ), [
       [{ text: '🌐 اللغة', callback_data: 'settings:language' }],
-      [{ text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' }, { text: '📋 الأوامر', callback_data: 'p3:o' }],
+      [{ text: '⚙️ مبالغ الشراء', callback_data: 'adv:pre' }, { text: '🪜 سُلّم الوقف', callback_data: 'p8:ladder' }],
+      [{ text: '📋 الأوامر', callback_data: 'p3:o' }],
       [{ text: '⬅️ القائمة', callback_data: 'menu:home' }]
     ]);
   }
@@ -276,6 +279,7 @@ export class LeanTelegramController {
         { command: 'copywallet', description: 'إضافة ومتابعة محافظ المتداولين' },
         { command: 'watch', description: 'قائمة العملات تحت المتابعة' },
         { command: 'wallets', description: 'محافظ التداول داخل البوت' },
+        { command: 'stopladder', description: 'تعديل سُلّم الوقف الديناميكي' },
         { command: 'settings', description: 'الإعدادات' },
         { command: 'help', description: 'المساعدة' },
         { command: 'admin', description: 'لوحة المالك' }
