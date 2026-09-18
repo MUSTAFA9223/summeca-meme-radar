@@ -170,7 +170,7 @@ async function blockRequest(requestId, reason, payload = {}) {
 }
 
 async function finalConfirmGuard(requestId) {
-  if (!store.enabled) return { ok: false, text: '🔒 Execution store غير متاح؛ التداول الحقيقي موقوف.' };
+  if (!store.enabled) return { ok: false, text: '🔒 سجل التنفيذ غير متاح؛ التداول الحقيقي موقوف.' };
   const row = await store.getAudit(requestId).catch(() => null);
   if (!row || row.status !== 'awaiting_confirm') return { ok: true };
   if (row.network !== 'sol') return { ok: true };
@@ -178,7 +178,7 @@ async function finalConfirmGuard(requestId) {
   const limits = finalGuardLimits();
   if (limits.killSwitch) {
     await blockRequest(requestId, 'MANUAL_EXECUTION_KILL_SWITCH=true');
-    return { ok: false, text: '🛑 KILL SWITCH مفعل. تم حظر Request قبل التوقيع.' };
+    return { ok: false, text: '🛑 مفتاح الإيقاف الطارئ مفعّل. تم حظر الطلب قبل التوقيع.' };
   }
 
   const usage = await dailyUsage();
@@ -196,7 +196,7 @@ async function finalConfirmGuard(requestId) {
     await blockRequest(requestId, `final safety failed: ${safety.reasons.join(',')}`, { reasons: safety.reasons });
     return {
       ok: false,
-      text: ['⛔ FINAL LIVE SAFETY BLOCK', '', 'تم إيقاف الصفقة قبل التوقيع.', `الأسباب: ${safety.reasons.join(' • ')}`, '', 'أنشئ Preview جديدًا فقط إذا تغيّرت حالة العقد/السوق.'].join('\n')
+      text: ['⛔ حظر الأمان النهائي للتداول الحقيقي', '', 'تم إيقاف الصفقة قبل التوقيع.', `الأسباب: ${safety.reasons.join(' • ')}`, '', 'أنشئ معاينة جديدة فقط إذا تغيّرت حالة العقد أو السوق.'].join('\n')
     };
   }
   return { ok: true };
@@ -212,7 +212,7 @@ export function installPhase7FinalGuard() {
     if (value.startsWith('p6:c:')) {
       const requestId = value.slice('p6:c:'.length);
       const guard = await finalConfirmGuard(requestId);
-      if (!guard.ok) return { handled: true, text: guard.text, keyboard: [[{ text: '📜 Audit', callback_data: 'p6:a' }]] };
+      if (!guard.ok) return { handled: true, text: guard.text, keyboard: [[{ text: '📜 سجل التنفيذ', callback_data: 'p6:a' }]] };
     }
     return previousHandle.call(this, data);
   };
