@@ -94,3 +94,18 @@ test('Pump.fun flow ignores stale and unclassified trades', () => {
   assert.equal(flow.tradeCount5m, 0);
   assert.equal(flow.volume5mUsd, 0);
 });
+
+
+test('pump trade flow exposes unique buyer wallet addresses', async () => {
+  const { summarizePumpTradeFlow } = await import('../src/feeds/pumpFunNative.mjs');
+  const now = Date.now();
+  const walletA = 'J2Gys26qFcmetpneVYTcpeRMwLMNE2RRdtJCSkwxVKjG';
+  const walletB = 'GZcwVp1yZ7pwmxXuJTKMq4riy3sTH1KDKiQEpy2VsVj';
+  const flow = summarizePumpTradeFlow([
+    { timestamp: now - 3000, is_buy: true, sol_amount: 1000000000, token_amount: 1000000, user: walletA },
+    { timestamp: now - 2000, is_buy: true, sol_amount: 500000000, token_amount: 500000, user: walletA },
+    { timestamp: now - 1000, is_buy: true, sol_amount: 750000000, token_amount: 500000, user_address: walletB },
+    { timestamp: now - 500, is_buy: false, sol_amount: 200000000, token_amount: 100000, user: walletB }
+  ], { nowMs: now, solPriceUsd: 200 });
+  assert.deepEqual(flow.buyerWallets.map((row) => row.address), [walletA, walletB]);
+});
