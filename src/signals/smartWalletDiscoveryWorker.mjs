@@ -3,6 +3,7 @@ import { AppSettings } from '../storage/appSettings.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { fetchPumpNativeMarket } from '../feeds/pumpFunNative.mjs';
 import { sharedHeliusRpc, sharedSolanaPublicRpc } from '../infra/solanaRpcManager.mjs';
+import { classifySmartEntry, dynamicSmartWalletScore, mergeSmartCluster, smartClusterScore, shouldSuppressWalletToken } from './smartWalletQuality.mjs';
 
 const STATE_KEY = 'auto_smart_wallet_discovery_v1';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -99,7 +100,9 @@ function emptyState() {
     updatedAt: new Date().toISOString(),
     wallets: [],
     processed: {},
-    networkBlocks: {}
+    networkBlocks: {},
+    clusters: {},
+    entryDedupe: {}
   };
 }
 
@@ -431,49 +434,73 @@ class Store {
 
   async insertSignal(tokenId, network, wallet, market, txHash, entryContext = {}) {
     const stats = smartWalletSignalStats(wallet);
+    const cluster = entryContext?.cluster || null;
+    const clusterEntries = Array.isArray(cluster?.entries) ? cluster.entries : [];
+    const confirmingWallets = Math.max(1, finite(cluster?.uniqueWallets, 1));
+    const signalWallets = confirmingWallets >= 2
+      ? clusterEntries.map((row) => ({
+          network,
+          address: row.walletAddress,
+          label: row.walletAddress === wallet.address ? wallet.label : `cluster-${short(row.walletAddress)}`,
+          score: finite(row.dynamicScore, row.walletScore),
+          paid_usd: 0
+        }))
+      : [{
+          network,
+          address: wallet.address,
+          label: wallet.label,
+          score: finite(wallet.dynamicScore, stats.score),
+          paid_usd: 0
+        }];
     const blockTime = finite(entryContext?.blockTime);
     const detectedPriceUsd = finite(market?.priceUsd);
+    const entryScore = confirmingWallets >= 2
+      ? clamp(Math.round(finite(cluster?.score)), 0, 100)
+      : clamp(Math.round(55 + finite(wallet.dynamicScore, stats.score) * 0.35), 0, 100);
     return this.request('signals', {
       method: 'POST',
       prefer: 'return=minimal',
       body: {
         token_id: tokenId,
-        signal_type: 'entry',
-        entry_score: clamp(Math.round(55 + stats.score * 0.35), 0, 100),
-        risk_score: 25,
+        signal_type: confirmingWallets >= 2 ? 'smart_cluster' : 'entry',
+        entry_score: entryScore,
+        risk_score: entryContext?.timing?.late ? 55 : 25,
         reason: {
-          trigger: `${network}-auto-smart-wallet-buy`,
+          trigger: confirmingWallets >= 2 ? `${network}-smart-wallet-cluster` : `${network}-auto-smart-wallet-buy`,
           origin: 'auto-smart-wallet-discovery',
           network,
           auto_discovered: true,
           wallet_score: stats.score,
+          wallet_dynamic_score: finite(wallet.dynamicScore, stats.score),
           wallet_samples: stats.samples,
           wallet_avg_peak_roi_pct: Number(stats.avgPeakRoi.toFixed(2)),
           wallet_hit_50: stats.hit50,
           wallet_hit_100: stats.hit100,
           wallet_hit_50_rate_pct: Number(stats.hit50Rate.toFixed(2)),
           wallet_hit_100_rate_pct: Number(stats.hit100Rate.toFixed(2)),
+          smart_cluster: confirmingWallets >= 2,
+          cluster_score: confirmingWallets >= 2 ? finite(cluster?.score) : null,
+          entry_timing: entryContext?.timing?.timing || 'normal',
+          entry_age_ms: entryContext?.timing?.ageMs ?? null,
+          late_entry: Boolean(entryContext?.timing?.late),
           tx: txHash,
           wallet_buy_block_time: blockTime > 0 ? blockTime : null,
           detected_price_usd: detectedPriceUsd > 0 ? detectedPriceUsd : null,
           estimated_sol_spent: finite(entryContext?.solSpent) > 0 ? finite(entryContext.solSpent) : null,
           token_amount_received: finite(entryContext?.tokenAmount) > 0 ? finite(entryContext.tokenAmount) : null,
-          confirming_wallets: 1,
-          wallets: [{
-            network,
-            address: wallet.address,
-            label: wallet.label,
-            score: stats.score,
-            paid_usd: 0
-          }],
+          confirming_wallets: confirmingWallets,
+          wallets: signalWallets,
           liquidity_usd: finite(market?.liquidityUsd),
           market_cap_usd: finite(market?.marketCapUsd),
           buys_5m: finite(market?.buys5m),
-          sells_5m: finite(market?.sells5m)
+          sells_5m: finite(market?.sells5m),
+          volume_5m_usd: finite(market?.volume5mUsd),
+          price_change_5m_pct: finite(market?.priceChange5mPct)
         }
       }
     });
   }
+}
 }
 
 async function fetchJson(url, options = {}, timeoutMs = 7_000) {
@@ -690,7 +717,9 @@ function normalizeState(state) {
     ...base,
     wallets: Array.isArray(base.wallets) ? base.wallets : [],
     processed: base.processed && typeof base.processed === 'object' ? base.processed : {},
-    networkBlocks: base.networkBlocks && typeof base.networkBlocks === 'object' ? base.networkBlocks : {}
+    networkBlocks: base.networkBlocks && typeof base.networkBlocks === 'object' ? base.networkBlocks : {},
+    clusters: base.clusters && typeof base.clusters === 'object' ? base.clusters : {},
+    entryDedupe: base.entryDedupe && typeof base.entryDedupe === 'object' ? base.entryDedupe : {}
   };
 }
 
@@ -711,6 +740,11 @@ export class SmartWalletDiscoveryWorker {
     this.minScore = clamp(finite(process.env.AUTO_SMART_MIN_SCORE, 60), 40, 95);
     this.minAveragePeakRoi = Math.max(20, finite(process.env.AUTO_SMART_MIN_AVG_PEAK_ROI_PCT, 40));
     this.winnersPerCycle = Math.max(1, Math.min(4, Math.floor(finite(process.env.AUTO_SMART_WINNERS_PER_CYCLE, 2))));
+    this.clusterWindowMs = Math.max(30_000, Math.min(180_000, finite(process.env.AUTO_SMART_CLUSTER_WINDOW_MS, 120_000)));
+    this.entryDedupeMs = Math.max(60_000, Math.min(30 * 60_000, finite(process.env.AUTO_SMART_ENTRY_DEDUPE_MS, 10 * 60_000)));
+    this.lateMovePct = Math.max(80, Math.min(500, finite(process.env.AUTO_SMART_LATE_MOVE_PCT, 180)));
+    this.performanceCacheAt = 0;
+    this.performanceByWallet = new Map();
     this.solMonitorCursor = 0;
     this.evmMonitorCursor = 0;
   }
@@ -734,11 +768,112 @@ export class SmartWalletDiscoveryWorker {
       processedEntries.sort((a, b) => finite(b[1]?.at) - finite(a[1]?.at));
       this.state.processed = Object.fromEntries(processedEntries.slice(0, 400));
     }
+    const now = Date.now();
+    this.state.clusters = Object.fromEntries(
+      Object.entries(this.state.clusters || {})
+        .filter(([, row]) => now - finite(row?.lastAt, row?.firstAt) <= Math.max(this.clusterWindowMs * 3, 10 * 60_000))
+        .slice(-120)
+    );
+    this.state.entryDedupe = Object.fromEntries(
+      Object.entries(this.state.entryDedupe || {})
+        .filter(([, at]) => now - finite(at) <= this.entryDedupeMs * 2)
+        .slice(-1000)
+    );
     await this.settings.set(STATE_KEY, JSON.stringify(this.state));
   }
 
   walletMap() {
     return new Map(this.state.wallets.map((row) => [walletKey(row.network, row.address), row]));
+  }
+
+  async refreshPerformanceScores() {
+    const now = Date.now();
+    if (now - this.performanceCacheAt < 60_000 && this.performanceByWallet.size) return;
+    const raw = await this.settings.get('wallet_performance_v2').catch(() => null);
+    const parsed = parseJson(raw, null);
+    const rows = Array.isArray(parsed?.wallets) ? parsed.wallets : [];
+    this.performanceByWallet = new Map(
+      rows.filter((row) => row?.address).map((row) => [
+        walletKey(normalizeNetwork(row.network), row.address),
+        row
+      ])
+    );
+    this.performanceCacheAt = now;
+  }
+
+  applyDynamicScores(wallets = []) {
+    return wallets.map((wallet) => {
+      const performance = this.performanceByWallet.get(walletKey(wallet.network, wallet.address)) || null;
+      const dynamicScore = dynamicSmartWalletScore(wallet, performance);
+      wallet.dynamicScore = dynamicScore;
+      wallet.performanceScore = performance ? finite(performance.performanceScore) : null;
+      wallet.samples24h = performance ? finite(performance.samples24h) : 0;
+      wallet.samples7d = performance ? finite(performance.samples7d) : 0;
+      return wallet;
+    });
+  }
+
+  recordCluster(network, tokenAddress, wallet, market, entryContext, observedAtMs) {
+    const key = tokenKey(network, tokenAddress);
+    const existing = this.state.clusters[key] || null;
+    const cluster = mergeSmartCluster(existing, {
+      walletAddress: wallet.address,
+      walletScore: finite(wallet.score),
+      dynamicScore: finite(wallet.dynamicScore, wallet.score),
+      observedAtMs,
+      txHash: String(entryContext?.signature || ''),
+      solSpent: finite(entryContext?.solSpent)
+    }, {
+      now: Date.now(),
+      windowMs: this.clusterWindowMs
+    });
+    cluster.score = smartClusterScore(cluster.entries, market);
+    cluster.tokenAddress = tokenAddress;
+    cluster.tokenSymbol = market?.symbol || 'TOKEN';
+    cluster.network = network;
+    this.state.clusters[key] = cluster;
+    return cluster;
+  }
+
+  async notifyCluster(cluster, market, timing) {
+    if (!cluster?.shouldNotify || !env.telegramBotToken) return;
+    const chatId = env.telegramChatId || await this.settings.get('telegram_chat_id').catch(() => '');
+    if (!chatId) return;
+    const rows = (cluster.entries || []).slice(0, 8);
+    const tokenAddress = cluster.tokenAddress;
+    const late = Boolean(timing?.late);
+    const walletLines = rows.map((row, index) =>
+      `${index + 1}) ${row.walletAddress} • score ${finite(row.dynamicScore, row.walletScore).toFixed(0)}/100`
+    );
+    const buttons = [
+      [
+        { text: '📋 نسخ العقد', copy_text: { text: tokenAddress } },
+        { text: '🔎 تحليل العملة', callback_data: `term:a:sol:${tokenAddress}` }
+      ],
+      [{ text: '👀 متابعة العملة', callback_data: `watch:add:${tokenAddress}` }]
+    ];
+    if (!late) buttons.splice(1, 0, [{ text: '🟢 شراء مع التأكيد', callback_data: `p6:b:sol:${tokenAddress}` }]);
+    await telegramApi(env.telegramBotToken, 'sendMessage', {
+      chat_id: String(chatId),
+      text: [
+        `🚨🧠 SMART CLUSTER — ${cluster.uniqueWallets} محافظ ذكية دخلت نفس العملة`,
+        '',
+        `العملة: ${cluster.tokenSymbol || 'TOKEN'} • Cluster Score: ${finite(cluster.score).toFixed(0)}/100`,
+        late ? '⚠️ LATE / HIGH RISK — الحركة أصبحت ممتدة؛ تم إخفاء زر الشراء من التنبيه.' : '✅ دخول جماعي مبكر/طبيعي حسب الرصد الحالي.',
+        `📈 حركة 5 دقائق: ${finite(market?.priceChange5mPct).toFixed(1)}% • شراء/بيع: ${finite(market?.buys5m)}/${finite(market?.sells5m)}`,
+        `💧 السيولة: ${money(market?.liquidityUsd)} • حجم 5m: ${money(market?.volume5mUsd)}`,
+        '',
+        '👛 المحافظ:',
+        ...walletLines,
+        '',
+        `🪙 العقد: ${tokenAddress}`,
+        '⚠️ التجمع دليل أقوى من دخول منفرد لكنه لا يضمن استمرار الصعود.'
+      ].join('\n'),
+      reply_markup: { inline_keyboard: buttons }
+    }).catch(() => {});
+    cluster.lastNotifiedCount = cluster.uniqueWallets;
+    cluster.lastNotifiedAt = Date.now();
+    console.log(`[auto-smart:cluster] mint=${short(tokenAddress)} wallets=${cluster.uniqueWallets} score=${cluster.score} late=${late ? 'yes' : 'no'}`);
   }
 
   async notifyPromotion(wallet) {
@@ -880,6 +1015,13 @@ export class SmartWalletDiscoveryWorker {
   }
 
   async marketSignal(network, tokenAddress, wallet, txHash, entryContext = {}) {
+    const now = Date.now();
+    const dedupeKey = `${tokenKey(network, tokenAddress)}:${normalizeWallet(network, wallet.address)}`;
+    if (shouldSuppressWalletToken(this.state.entryDedupe[dedupeKey], { now, ttlMs: this.entryDedupeMs })) {
+      console.log(`[auto-smart:dedupe] wallet=${short(wallet.address)} mint=${short(tokenAddress)}`);
+      return false;
+    }
+
     const market = await dexMarket(network, tokenAddress).catch(() => null);
     if (!market?.priceUsd || market.liquidityUsd < 2_000 || market.sells5m < 1) return false;
 
@@ -888,18 +1030,27 @@ export class SmartWalletDiscoveryWorker {
     const hasTransactionTime = finite(entryContext?.blockTimeMs) > 0 || finite(entryContext?.blockTime) > 0;
     const observedAtMs = finite(entryContext?.blockTimeMs) > 0
       ? finite(entryContext.blockTimeMs)
-      : (finite(entryContext?.blockTime) > 0 ? finite(entryContext.blockTime) * 1_000 : Date.now());
+      : (finite(entryContext?.blockTime) > 0 ? finite(entryContext.blockTime) * 1_000 : now);
     const observedAtIso = new Date(observedAtMs).toISOString();
     const solSpent = finite(entryContext?.solSpent);
     const tokenAmount = finite(entryContext?.tokenAmount);
+    const timing = classifySmartEntry({
+      observedAtMs,
+      pairCreatedAt: market.pairCreatedAt,
+      movePct: market.priceChange5mPct,
+      lateMovePct: this.lateMovePct
+    });
 
+    this.state.entryDedupe[dedupeKey] = now;
     wallet.lastBuyAt = observedAtIso;
     wallet.lastBuyTokenAddress = tokenAddress;
     wallet.lastBuyTokenSymbol = market.symbol || 'TOKEN';
     wallet.lastBuyTxHash = signature;
     wallet.lastDetectedPriceUsd = finite(market.priceUsd);
     wallet.lastEstimatedSolSpent = solSpent > 0 ? solSpent : null;
+    wallet.lastEntryTiming = timing.timing;
 
+    const cluster = this.recordCluster(network, tokenAddress, wallet, market, { ...entryContext, signature }, observedAtMs);
     const token = await this.store.upsertToken(network, tokenAddress, market).catch(() => null);
     if (token?.id) {
       await this.store.insertSignal(token.id, network, wallet, market, signature, {
@@ -907,13 +1058,21 @@ export class SmartWalletDiscoveryWorker {
         blockTime: finite(entryContext?.blockTime),
         blockTimeMs: observedAtMs,
         solSpent: solSpent > 0 ? solSpent : null,
-        tokenAmount: tokenAmount > 0 ? tokenAmount : null
+        tokenAmount: tokenAmount > 0 ? tokenAmount : null,
+        timing,
+        cluster
       }).catch(() => null);
     }
 
     console.log(
-      `[auto-smart:entry] wallet=${short(wallet.address)} mint=${short(tokenAddress)} score=${stats.score} price=${finite(market.priceUsd)} solSpent=${solSpent > 0 ? solSpent.toFixed(6) : 'na'}`
+      `[auto-smart:entry] wallet=${short(wallet.address)} mint=${short(tokenAddress)} score=${finite(wallet.dynamicScore, stats.score)} timing=${timing.timing} cluster=${cluster.uniqueWallets} price=${finite(market.priceUsd)} solSpent=${solSpent > 0 ? solSpent.toFixed(6) : 'na'}`
     );
+
+    if (cluster.shouldNotify) {
+      await this.notifyCluster(cluster, market, timing);
+      return true;
+    }
+    if (cluster.uniqueWallets >= 2) return true;
 
     if (env.telegramBotToken) {
       const chatId = env.telegramChatId || await this.settings.get('telegram_chat_id').catch(() => '');
@@ -925,25 +1084,23 @@ export class SmartWalletDiscoveryWorker {
             { text: '📋 نسخ المحفظة', copy_text: { text: wallet.address } },
             { text: '📋 نسخ عقد العملة', copy_text: { text: tokenAddress } }
           ],
-          [
-            { text: '🔎 تحليل العملة', callback_data: `term:a:${networkKey}:${tokenAddress}` },
-            network === 'solana'
-              ? { text: '🟢 شراء مع التأكيد', callback_data: `p6:b:sol:${tokenAddress}` }
-              : { text: '🟢 معاينة شراء', callback_data: `term:b:${networkKey}:${tokenAddress}` }
-          ],
+          [{ text: '🔎 تحليل العملة', callback_data: `term:a:${networkKey}:${tokenAddress}` }],
           [{ text: '🧠 ترتيب المحافظ الذكية', callback_data: 'p4:lb' }]
         ];
         if (network === 'solana') {
           buttons.splice(2, 0, [{ text: '👀 متابعة العملة', callback_data: `watch:add:${tokenAddress}` }]);
+          if (!timing.late) buttons.splice(2, 0, [{ text: '🟢 شراء مع التأكيد', callback_data: `p6:b:sol:${tokenAddress}` }]);
+        } else if (!timing.late) {
+          buttons.splice(2, 0, [{ text: '🟢 معاينة شراء', callback_data: `term:b:${networkKey}:${tokenAddress}` }]);
         }
 
         await telegramApi(env.telegramBotToken, 'sendMessage', {
           chat_id: String(chatId),
           text: [
-            '🧠🔥 محفظة ذكية دخلت عملة جديدة',
+            `🧠🔥 محفظة ذكية دخلت عملة جديدة — ${timing.timing === 'early' ? 'EARLY' : timing.late ? 'LATE / HIGH RISK' : 'NORMAL'}`,
             '',
             `العملة: $${market.symbol} • الشبكة: ${label}`,
-            `🏆 درجة المحفظة: ${stats.score}/100 • أدلة تاريخية: ${stats.samples}`,
+            `🏆 الدرجة الديناميكية: ${finite(wallet.dynamicScore, stats.score).toFixed(0)}/100 • أدلة تاريخية: ${stats.samples}`,
             `📈 متوسط أعلى صعود تاريخي: +${stats.avgPeakRoi.toFixed(1)}%`,
             `🎯 +50%: ${stats.hit50}/${stats.samples} (${stats.hit50Rate.toFixed(0)}%) • +100%: ${stats.hit100}/${stats.samples} (${stats.hit100Rate.toFixed(0)}%)`,
             '',
@@ -954,15 +1111,16 @@ export class SmartWalletDiscoveryWorker {
             tokenAddress,
             '',
             `⏱️ ${hasTransactionTime ? 'وقت المعاملة' : 'وقت الرصد'}: ${utcTime(observedAtMs)}`,
+            timing.ageMs != null ? `⚡ سرعة الدخول من إنشاء الزوج: ${Math.max(0, Math.round(timing.ageMs / 1000))} ثانية` : '',
             `💵 سعر السوق عند رصد الدخول: ${priceText(market.priceUsd)}`,
             solSpent > 0 ? `◎ انخفاض SOL الصافي في المعاملة: ~${solSpent.toFixed(6)} SOL` : '',
             tokenAmount > 0 ? `🪙 كمية التوكن المستلمة تقريبًا: ${tokenAmount.toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '',
             `💧 السيولة: ${money(market.liquidityUsd)} • القيمة السوقية: ${money(market.marketCapUsd)}`,
-            `5 دقائق — شراء: ${market.buys5m} • بيع: ${market.sells5m} • الحركة: ${finite(market.priceChange5mPct).toFixed(1)}%`,
+            `5 دقائق — شراء: ${market.buys5m} • بيع: ${market.sells5m} • الحجم: ${money(market.volume5mUsd)} • الحركة: ${finite(market.priceChange5mPct).toFixed(1)}%`,
+            timing.late ? '⚠️ الحركة/العمر متأخر؛ التنبيه للمراقبة فقط وزر الشراء مخفي.' : '',
             signature ? `🔗 المعاملة: ${signature}` : '',
             '',
             'ℹ️ سعر الدخول المعروض هو سعر السوق عند رصد المعاملة، وليس سعر تنفيذ المحفظة الدقيق.',
-            'يمكنك نسخ العقد أو فتح الشراء من الأزرار أدناه.',
             '⚠️ دخول المحفظة الذكية ليس ضمانًا لصعود العملة.'
           ].filter(Boolean).join('\n'),
           reply_markup: { inline_keyboard: buttons }
@@ -971,6 +1129,7 @@ export class SmartWalletDiscoveryWorker {
     }
     return true;
   }
+
   async solanaRpc(method, params = []) {
     let lastError = null;
     if (env.heliusApiKey) {
@@ -1101,8 +1260,11 @@ export class SmartWalletDiscoveryWorker {
     this.monitorRunning = true;
     try {
       await this.loadState();
-      const promoted = this.state.wallets.filter((row) => row.promoted);
-      const solana = promoted.filter((row) => row.network === 'solana' && SOLANA.test(row.address));
+      await this.refreshPerformanceScores();
+      const promoted = this.applyDynamicScores(this.state.wallets.filter((row) => row.promoted));
+      const solana = promoted
+        .filter((row) => row.network === 'solana' && SOLANA.test(row.address))
+        .sort((a, b) => finite(b.dynamicScore, b.score) - finite(a.dynamicScore, a.score) || finite(b.samples) - finite(a.samples));
       const solanaChecked = solana.length ? await this.monitorSolana(solana) : 0;
 
       const evmNetworks = ['bsc', 'robinhood', 'arc'].filter((network) => promoted.some((row) => row.network === network));
