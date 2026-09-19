@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates } from '../src/signals/solanaUltraEarlyWorker.mjs';
+import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates, solanaProfileRetryDelayMs } from '../src/signals/solanaUltraEarlyWorker.mjs';
 
 test('fresh initial-buy candidates outrank restored backlog', () => {
   const now = 1_000_000;
@@ -217,4 +217,12 @@ test('tuned breakout lane accepts moderate verified liquidity and flow only afte
   assert.equal(isSolanaBreakoutEligible({ ageMs: 70_000, market }), true);
   assert.equal(isSolanaBreakoutEligible({ ageMs: 70_000, market: { ...market, priceChange5mPct: 25 } }), false);
   assert.equal(isSolanaBreakoutEligible({ ageMs: 70_000, market: { ...market, sells5m: 1 } }), false);
+});
+
+
+test('holder provider retry backoff grows and caps safely', () => {
+  assert.equal(solanaProfileRetryDelayMs(1), 5_000);
+  assert.equal(solanaProfileRetryDelayMs(2), 10_000);
+  assert.equal(solanaProfileRetryDelayMs(3), 20_000);
+  assert.equal(solanaProfileRetryDelayMs(8), 60_000);
 });

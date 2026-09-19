@@ -6,7 +6,8 @@ import {
   extractEvmWinnerBuyers,
   extractSolanaWinnerBuyers,
   extractSolanaRpcWinnerBuyers,
-  scoreAutoSmartWallet
+  scoreAutoSmartWallet,
+  solanaMonitorBatchSize
 } from '../src/signals/smartWalletDiscoveryWorker.mjs';
 
 test('auto smart wallet is never promoted from one winning token', () => {
@@ -187,4 +188,27 @@ test('Solana RPC fallback ignores free token receipts without trade or native sp
     }
   };
   assert.equal(extractSolanaRpcWinnerBuyers([tx], mint).length, 0);
+});
+
+
+test('Solana smart-wallet monitoring batches enough wallets for a bounded sweep', () => {
+  assert.equal(solanaMonitorBatchSize(50, {
+    intervalMs: 8_000,
+    targetSweepMs: 90_000,
+    maxBatch: 6
+  }), 5);
+  assert.equal(solanaMonitorBatchSize(3, {
+    intervalMs: 8_000,
+    targetSweepMs: 90_000,
+    maxBatch: 6
+  }), 1);
+  assert.equal(solanaMonitorBatchSize(0), 0);
+});
+
+test('Solana smart-wallet monitoring never exceeds the configured batch cap', () => {
+  assert.equal(solanaMonitorBatchSize(500, {
+    intervalMs: 5_000,
+    targetSweepMs: 30_000,
+    maxBatch: 7
+  }), 7);
 });

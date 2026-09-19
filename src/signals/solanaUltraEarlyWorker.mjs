@@ -27,6 +27,16 @@ const boolEnv = (name, fallback = true) => {
 };
 const numEnv = (name, fallback, min, max) => Math.max(min, Math.min(max, finite(process.env[name], fallback)));
 
+export function solanaProfileRetryDelayMs(failures = 1, {
+  baseMs = 5_000,
+  maxMs = 60_000
+} = {}) {
+  const count = Math.max(1, Math.min(8, Math.floor(finite(failures, 1))));
+  const base = Math.max(1_000, finite(baseMs, 5_000));
+  const cap = Math.max(base, finite(maxMs, 60_000));
+  return Math.min(cap, base * (2 ** (count - 1)));
+}
+
 export function isSolanaPaperProbeEligible({
   rejectionReason = null,
   score = 0,
@@ -286,16 +296,25 @@ class SolanaProfileRpc {
     this.id = 0;
     this.tail = Promise.resolve();
     this.nextAt = 0;
+    this.endpointCooldownUntil = new Map();
   }
 
   call(method, params = []) {
     const task = this.tail.then(async () => {
       let lastError = null;
-      for (let attempt = 0; attempt < Math.min(4, this.endpoints.length + 1); attempt += 1) {
+      let attempted = 0;
+      for (let attempt = 0; attempt < this.endpoints.length; attempt += 1) {
+        const endpoint = this.endpoints[(this.index + attempt) % this.endpoints.length];
+        const blockedUntil = finite(this.endpointCooldownUntil.get(endpoint));
+        if (blockedUntil > Date.now()) {
+          lastError = new Error(`${method} provider cooling down`);
+          continue;
+        }
+
+        attempted += 1;
         const waitMs = Math.max(0, this.nextAt - Date.now());
         if (waitMs) await sleep(waitMs);
-        this.nextAt = Date.now() + 450;
-        const endpoint = this.endpoints[(this.index + attempt) % this.endpoints.length];
+        this.nextAt = Date.now() + 650;
         try {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 4_500);
@@ -306,19 +325,25 @@ class SolanaProfileRpc {
             body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params })
           }).finally(() => clearTimeout(timer));
           if (response.status === 429) {
+            const retryAfterSec = finite(response.headers.get('retry-after'), 0);
+            const cooldownMs = retryAfterSec > 0
+              ? Math.min(60_000, retryAfterSec * 1_000)
+              : Math.min(60_000, 10_000 * (attempt + 1));
+            this.endpointCooldownUntil.set(endpoint, Date.now() + Math.max(5_000, cooldownMs));
             lastError = new Error(`${method} HTTP 429`);
-            await sleep(Math.min(4_000, 750 * (attempt + 1)));
             continue;
           }
           if (!response.ok) throw new Error(`${method} HTTP ${response.status}`);
           const body = await response.json();
           if (body?.error) throw new Error(`${method} ${body.error.code}: ${body.error.message}`);
+          this.endpointCooldownUntil.delete(endpoint);
           this.index = (this.index + attempt) % this.endpoints.length;
           return body?.result;
         } catch (error) {
           lastError = error;
         }
       }
+      if (!attempted) throw lastError || new Error(`${method} providers cooling down`);
       throw lastError || new Error(`${method} failed`);
     });
     this.tail = task.catch(() => undefined);
@@ -386,13 +411,18 @@ async function fetchHolderProfile(mint) {
 
 async function fetchBirdeyeHolderProfile(mint) {
   if (!env.birdeyeApiKey) return null;
-  const [overview, security] = await Promise.all([
-    fetchTokenOverview(env.birdeyeApiKey, mint),
-    fetchTokenSecurity(env.birdeyeApiKey, mint)
-  ]);
+  let overview;
+  try {
+    overview = await fetchTokenOverview(env.birdeyeApiKey, mint);
+  } catch (error) {
+    if (/\/defi\/token_overview HTTP 400/i.test(String(error?.message ?? error))) return null;
+    throw error;
+  }
   const holderCount = optionalFinite(overview?.holderCount);
+  if (!(holderCount > 0)) return null;
+  const security = await fetchTokenSecurity(env.birdeyeApiKey, mint);
   const top10 = optionalFinite(security?.top10HolderPct);
-  if (!(holderCount > 0) || !(top10 > 0)) return null;
+  if (!(top10 > 0)) return null;
   return {
     pass: holderCount >= 20 && top10 <= 45,
     provider: 'birdeye',
@@ -510,6 +540,8 @@ export class SolanaUltraEarlyWorker {
       lastMarketAt: 0,
       lastProfileAt: 0,
       profile: null,
+      profileFailures: 0,
+      profileRetryAt: 0,
       rootMessageId: 0,
       launchSent: false,
       earlySent: false,
@@ -699,6 +731,7 @@ export class SolanaUltraEarlyWorker {
   async profileFor(mint, state) {
     const now = Date.now();
     if (state.profile && now - state.lastProfileAt < this.profileRefreshMs) return state.profile;
+    if (finite(state.profileRetryAt) > now) return state.profile || null;
     state.lastProfileAt = now;
     const prior = state.profile;
 
@@ -706,6 +739,8 @@ export class SolanaUltraEarlyWorker {
       const helius = await fetchHeliusHolderProfile(env.heliusApiKey, mint);
       if (helius) {
         state.profile = helius;
+        state.profileFailures = 0;
+        state.profileRetryAt = 0;
         console.log(`[solana:holder-profile] mint=${short(mint)} provider=helius-token-accounts holders=${helius.observedAccounts} top=${helius.topUserPct.toFixed(1)}% pass=${helius.pass ? 'yes' : 'no'} complete=${helius.complete ? 'yes' : 'no'}`);
         return helius;
       }
@@ -719,6 +754,8 @@ export class SolanaUltraEarlyWorker {
       const gpa = await fetchProgramAccountHolderProfile(mint);
       if (gpa) {
         state.profile = gpa;
+        state.profileFailures = 0;
+        state.profileRetryAt = 0;
         console.log(`[solana:holder-profile] mint=${short(mint)} provider=solana-getProgramAccounts holders=${gpa.observedAccounts} top=${gpa.topUserPct.toFixed(1)}% pass=${gpa.pass ? 'yes' : 'no'}`);
         return gpa;
       }
@@ -730,6 +767,8 @@ export class SolanaUltraEarlyWorker {
       const direct = await fetchHolderProfile(mint);
       if (direct) {
         state.profile = direct;
+        state.profileFailures = 0;
+        state.profileRetryAt = 0;
         return direct;
       }
     } catch (error) {
@@ -740,6 +779,8 @@ export class SolanaUltraEarlyWorker {
       const fallback = await fetchBirdeyeHolderProfile(mint);
       if (fallback) {
         state.profile = fallback;
+        state.profileFailures = 0;
+        state.profileRetryAt = 0;
         console.log(`[solana:holder-fallback] mint=${short(mint)} provider=birdeye holders=${fallback.observedAccounts} top10=${fallback.top10UsersPct.toFixed(1)}%`);
         return fallback;
       }
@@ -747,6 +788,8 @@ export class SolanaUltraEarlyWorker {
       console.warn(`[solana:holder-fallback] mint=${short(mint)} ${error.message}`);
     }
 
+    state.profileFailures = Math.min(8, Math.max(0, Math.floor(finite(state.profileFailures))) + 1);
+    state.profileRetryAt = Date.now() + solanaProfileRetryDelayMs(state.profileFailures);
     return prior || null;
   }
 

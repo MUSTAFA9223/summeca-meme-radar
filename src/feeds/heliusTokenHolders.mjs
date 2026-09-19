@@ -4,7 +4,7 @@ const cache = new Map();
 let cooldownUntil = 0;
 
 const CACHE_MS = Math.max(2_000, Math.min(60_000, finite(process.env.HELIUS_HOLDER_CACHE_MS, 10_000)));
-const COOLDOWN_MS = Math.max(2_000, Math.min(60_000, finite(process.env.HELIUS_HOLDER_COOLDOWN_MS, 10_000)));
+const COOLDOWN_MS = Math.max(5_000, Math.min(120_000, finite(process.env.HELIUS_HOLDER_COOLDOWN_MS, 30_000)));
 const TIMEOUT_MS = Math.max(1_500, Math.min(10_000, finite(process.env.HELIUS_HOLDER_TIMEOUT_MS, 4_000)));
 const LIMIT = 1_000;
 
@@ -112,7 +112,9 @@ export async function fetchHeliusHolderProfile(apiKey, mint) {
     });
 
     if (response.status === 429) {
-      cooldownUntil = Date.now() + COOLDOWN_MS;
+      const retryAfterSec = finite(response.headers.get('retry-after'), 0);
+      const retryMs = retryAfterSec > 0 ? Math.min(120_000, retryAfterSec * 1_000) : COOLDOWN_MS;
+      cooldownUntil = Date.now() + Math.max(COOLDOWN_MS, retryMs);
       const error = new Error('Helius getTokenAccounts HTTP 429');
       error.code = 'HELIUS_HOLDER_429';
       throw error;

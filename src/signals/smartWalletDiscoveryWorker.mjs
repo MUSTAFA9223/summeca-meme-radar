@@ -55,6 +55,20 @@ const normalizeWallet = (network, address) => network === 'solana' ? String(addr
 const walletKey = (network, address) => `${network}:${normalizeWallet(network, address)}`;
 const tokenKey = (network, address) => `${network}:${network === 'solana' ? String(address || '').trim() : low(address)}`;
 
+export function solanaMonitorBatchSize(walletCount, {
+  intervalMs = 8_000,
+  targetSweepMs = 90_000,
+  maxBatch = 6
+} = {}) {
+  const count = Math.max(0, Math.floor(finite(walletCount)));
+  if (!count) return 0;
+  const interval = Math.max(1_000, finite(intervalMs, 8_000));
+  const sweep = Math.max(interval, finite(targetSweepMs, 90_000));
+  const cyclesPerSweep = Math.max(1, Math.floor(sweep / interval));
+  const cap = Math.max(1, Math.min(12, Math.floor(finite(maxBatch, 6))));
+  return Math.max(1, Math.min(count, cap, Math.ceil(count / cyclesPerSweep)));
+}
+
 function parseJson(raw, fallback) {
   try {
     const value = JSON.parse(String(raw ?? ''));
@@ -585,6 +599,8 @@ export class SmartWalletDiscoveryWorker {
     this.stateLoaded = false;
     this.discoveryIntervalMs = Math.max(45_000, finite(process.env.AUTO_SMART_DISCOVERY_INTERVAL_MS, 60_000));
     this.monitorIntervalMs = Math.max(5_000, finite(process.env.AUTO_SMART_MONITOR_INTERVAL_MS, 8_000));
+    this.solanaTargetSweepMs = Math.max(30_000, finite(process.env.AUTO_SMART_SOLANA_TARGET_SWEEP_MS, 90_000));
+    this.solanaMaxBatch = Math.max(1, Math.min(12, Math.floor(finite(process.env.AUTO_SMART_SOLANA_MAX_BATCH, 6))));
     this.winnerMinPeakRoi = Math.max(20, finite(process.env.AUTO_SMART_WINNER_MIN_PEAK_ROI_PCT, 50));
     this.minSamples = Math.max(2, Math.floor(finite(process.env.AUTO_SMART_MIN_WINNING_TOKENS, 2)));
     this.minScore = clamp(finite(process.env.AUTO_SMART_MIN_SCORE, 60), 40, 95);
@@ -860,18 +876,15 @@ export class SmartWalletDiscoveryWorker {
     return best?.mint || null;
   }
 
-  async monitorSolana(promoted) {
-    if (!promoted.length) return;
-    const wallet = promoted[this.solMonitorCursor % promoted.length];
-    this.solMonitorCursor = (this.solMonitorCursor + 1) % promoted.length;
+  async monitorSolanaWallet(wallet) {
     const signatures = await this.solanaRpc('getSignaturesForAddress', [wallet.address, { limit: 6, commitment: 'confirmed' }]).catch((error) => {
       console.warn(`[auto-smart:solana-monitor] wallet=${short(wallet.address)} ${String(error?.message ?? error).slice(0, 140)}`);
       return [];
     });
-    if (!Array.isArray(signatures) || !signatures.length) return;
+    if (!Array.isArray(signatures) || !signatures.length) return false;
     if (!wallet.lastMonitorCursor) {
       wallet.lastMonitorCursor = signatures[0]?.signature || '';
-      return;
+      return true;
     }
     const fresh = [];
     for (const row of signatures) {
@@ -889,6 +902,26 @@ export class SmartWalletDiscoveryWorker {
       if (mint) await this.marketSignal('solana', mint, wallet, row.signature);
       await sleep(100);
     }
+    return true;
+  }
+
+  async monitorSolana(promoted) {
+    if (!promoted.length) return 0;
+    const batchSize = solanaMonitorBatchSize(promoted.length, {
+      intervalMs: this.monitorIntervalMs,
+      targetSweepMs: this.solanaTargetSweepMs,
+      maxBatch: this.solanaMaxBatch
+    });
+    const start = this.solMonitorCursor % promoted.length;
+    let checked = 0;
+    for (let offset = 0; offset < batchSize; offset += 1) {
+      const wallet = promoted[(start + offset) % promoted.length];
+      await this.monitorSolanaWallet(wallet);
+      checked += 1;
+      if (offset + 1 < batchSize) await sleep(90);
+    }
+    this.solMonitorCursor = (start + batchSize) % promoted.length;
+    return checked;
   }
 
   incomingEvmTokens(receipt, walletAddress) {
@@ -939,7 +972,7 @@ export class SmartWalletDiscoveryWorker {
       await this.loadState();
       const promoted = this.state.wallets.filter((row) => row.promoted);
       const solana = promoted.filter((row) => row.network === 'solana' && SOLANA.test(row.address));
-      if (solana.length) await this.monitorSolana(solana);
+      const solanaChecked = solana.length ? await this.monitorSolana(solana) : 0;
 
       const evmNetworks = ['bsc', 'robinhood', 'arc'].filter((network) => promoted.some((row) => row.network === network));
       if (evmNetworks.length) {
@@ -948,7 +981,7 @@ export class SmartWalletDiscoveryWorker {
         await this.monitorEvm(network, promoted.filter((row) => row.network === network));
       }
       if (promoted.length) await this.saveState();
-      console.log(`[auto-smart:monitor] promoted=${promoted.length} sol=${solana.length} evm=${promoted.length - solana.length}`);
+      console.log(`[auto-smart:monitor] promoted=${promoted.length} sol=${solana.length} solChecked=${solanaChecked} evm=${promoted.length - solana.length}`);
     } catch (error) {
       console.warn('[auto-smart:monitor]', String(error?.message ?? error));
     } finally {
