@@ -58,6 +58,10 @@ export function shouldTrySolanaGpaFallback(failures = 0, minFailures = 2) {
   return count >= threshold;
 }
 
+export function solanaHolderProfileNeeded(preProfileScore = 0, minQualifiedScore = 72, maxProfileBonus = 25) {
+  return finite(preProfileScore) + finite(maxProfileBonus, 25) >= finite(minQualifiedScore, 72);
+}
+
 export function isSolanaPaperProbeEligible({
   rejectionReason = null,
   score = 0,
@@ -932,10 +936,31 @@ export class SolanaUltraEarlyWorker {
       }
     }
 
+    const preProfileScore = qualityScore(state, market, null);
+    if (!existingPaper && !solanaHolderProfileNeeded(preProfileScore, this.minScore, 25)) {
+      state.lastScore = preProfileScore;
+      this.noteRejection('quality-score-cannot-qualify');
+      await this.bridge.observe({
+        mint,
+        state,
+        market,
+        profile: null,
+        score: preProfileScore,
+        qualified: false,
+        paperEligible: isSolanaPaperProbeEligible({
+          rejectionReason: reject,
+          score: preProfileScore,
+          minScore: this.paperProbeMinScore
+        }),
+        rejectionReason: 'quality-score-cannot-qualify'
+      });
+      return;
+    }
+
     const profile = await this.profileFor(mint, state);
     if (!profile) {
       this.noteRejection('profile-provider-pending');
-      const score = qualityScore(state, market, null);
+      const score = preProfileScore;
       state.lastScore = score;
       const paperEligible = isSolanaPaperProbeEligible({
         rejectionReason: reject,

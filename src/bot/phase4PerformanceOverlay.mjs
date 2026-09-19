@@ -26,14 +26,16 @@ export function performanceView(data) {
   if (!wallets.length) return null;
   const lines = [
     '🧠📈 أداء المحافظ الذكية', '',
-    'هذا الترتيب يعتمد على النتائج المسجلة بعد الإشارات الفعلية.',
+    'الترتيب يعطي أولوية لأداء آخر 24 ساعة ثم 7 أيام، مع الاحتفاظ بالسجل الكلي.',
     'Peak ROI = أعلى حركة وصلت إليها العملة بعد الإشارة، وليس ربحًا محققًا للمحفظة.', ''
   ];
   for (const [i, w] of wallets.entries()) {
     lines.push(
       `${i + 1}. ${w.label || short(w.address)} • الدرجة ${finite(w.performanceScore).toFixed(0)}/100`,
       `   👛 المحفظة: ${w.address || '—'}`,
-      `   عينات ${finite(w.samples)} | متوسط القمة ${finite(w.avgPeakRoi).toFixed(1)}% | +25 ${finite(w.hit25Rate).toFixed(0)}% | +50 ${finite(w.hit50Rate).toFixed(0)}% | +100 ${finite(w.hit100Rate).toFixed(0)}%`,
+      `   🔥 24h: score ${finite(w.recentScore24h).toFixed(0)} • عينات ${finite(w.samples24h)} • +50 ${finite(w.hit50Rate24h).toFixed(0)}% • avg peak ${finite(w.avgPeakRoi24h).toFixed(1)}%`,
+      `   📅 7d: score ${finite(w.recentScore7d).toFixed(0)} • عينات ${finite(w.samples7d)} • +50 ${finite(w.hit50Rate7d).toFixed(0)}% • avg peak ${finite(w.avgPeakRoi7d).toFixed(1)}%`,
+      `   إجمالي: عينات ${finite(w.samples)} | +25 ${finite(w.hit25Rate).toFixed(0)}% | +50 ${finite(w.hit50Rate).toFixed(0)}% | +100 ${finite(w.hit100Rate).toFixed(0)}%`,
       `   تدفق موثق ${money(w.paidUsd)} | متوسط الدخول ${finite(w.avgEntryScore).toFixed(0)} | متوسط المخاطر ${finite(w.avgRisk).toFixed(0)}`
     );
     if (w.lastTokenAddress) {

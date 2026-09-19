@@ -8,6 +8,7 @@ const CACHE_MS = Math.max(2_000, Math.min(60_000, finite(process.env.HELIUS_HOLD
 const COOLDOWN_MS = Math.max(5_000, Math.min(120_000, finite(process.env.HELIUS_HOLDER_COOLDOWN_MS, 30_000)));
 const TIMEOUT_MS = Math.max(1_500, Math.min(10_000, finite(process.env.HELIUS_HOLDER_TIMEOUT_MS, 4_000)));
 const LIMIT = 1_000;
+const MAX_PAGES = Math.max(1, Math.min(5, Math.floor(finite(process.env.HELIUS_HOLDER_MAX_PAGES, 3))));
 
 function amountOf(account = {}) {
   const raw = account.amount ?? account.token_amount ?? account.tokenAmount ?? account.balance ?? 0;
@@ -87,25 +88,41 @@ export async function fetchHeliusHolderProfile(apiKey, mint) {
   const cached = cache.get(key);
   if (cached && cached.expiresAt > now) return cached.value;
 
-  const result = await sharedHeliusRpc(apiKey, 'getTokenAccounts', {
-    page: 1,
-    limit: LIMIT,
-    displayOptions: {},
-    mint: key
-  }, {
-    timeoutMs: TIMEOUT_MS,
-    minIntervalMs: 700,
-    cooldown429Ms: COOLDOWN_MS,
-    maxCooldownMs: 120_000
+  const accounts = [];
+  let complete = false;
+  for (let page = 1; page <= MAX_PAGES; page += 1) {
+    const result = await sharedHeliusRpc(apiKey, 'getTokenAccounts', {
+      page,
+      limit: LIMIT,
+      displayOptions: {},
+      mint: key
+    }, {
+      timeoutMs: TIMEOUT_MS,
+      minIntervalMs: 700,
+      cooldown429Ms: COOLDOWN_MS,
+      maxCooldownMs: 120_000
+    });
+
+    const rows = result?.token_accounts ?? result?.tokenAccounts ?? [];
+    if (!Array.isArray(rows) || !rows.length) {
+      complete = page === 1 ? false : true;
+      break;
+    }
+    accounts.push(...rows);
+    if (rows.length < LIMIT) {
+      complete = true;
+      break;
+    }
+  }
+
+  if (!accounts.length) return null;
+
+  // Safety remains conservative: when all configured pages are full, more
+  // holders may exist. The profile is useful telemetry but cannot pass.
+  const profile = holderProfileFromTokenAccounts(accounts, {
+    complete,
+    provider: `helius-token-accounts:paged-${Math.ceil(accounts.length / LIMIT)}`
   });
-
-  const accounts = result?.token_accounts ?? result?.tokenAccounts ?? [];
-  if (!Array.isArray(accounts) || !accounts.length) return null;
-
-  // A full page can mean there are more accounts. In that case the profile is
-  // useful telemetry but is never allowed to pass the safety gate.
-  const complete = accounts.length < LIMIT;
-  const profile = holderProfileFromTokenAccounts(accounts, { complete });
   if (profile) cache.set(key, { value: profile, expiresAt: Date.now() + CACHE_MS });
   return profile;
 }
