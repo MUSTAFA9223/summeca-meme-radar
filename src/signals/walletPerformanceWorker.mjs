@@ -2,8 +2,9 @@ import { env } from '../config/env.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 
 const PERFORMANCE_KEY = 'wallet_performance_v2';
-const OUTCOME_KEY = 'smart_signal_outcomes_v1';
+const OUTCOME_KEY = 'smart_signal_outcomes_v2';
 const OUTCOME_CHECKPOINT_MINUTES = [1, 5, 15, 30, 60];
+const OUTCOME_GRACE_MINUTES = 2;
 const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
@@ -66,7 +67,28 @@ function walletFromSignal(signal, chain) {
   }).filter((w) => w.address);
 }
 
-export function summarizeWalletPerformance(signals, tokenById, now = Date.now()) {
+export function outcomeCheckpointDue(ageMinutes, checkpointMinutes, {
+  graceMinutes = OUTCOME_GRACE_MINUTES
+} = {}) {
+  const age = finite(ageMinutes, -1);
+  const checkpoint = finite(checkpointMinutes, -1);
+  const grace = Math.max(0.25, finite(graceMinutes, OUTCOME_GRACE_MINUTES));
+  return age >= checkpoint && age <= checkpoint + grace;
+}
+
+export function measuredOutcomeRoi(outcome) {
+  const checkpoints = outcome?.checkpoints && typeof outcome.checkpoints === 'object'
+    ? Object.values(outcome.checkpoints)
+    : [];
+  const values = checkpoints.map((value) => Number(value)).filter(Number.isFinite);
+  return values.length ? Math.max(...values) : null;
+}
+
+function signalOutcomeKey(signal) {
+  return String(signal?.id || `${signal?.token_id || ''}:${signal?.created_at || ''}`);
+}
+
+export function summarizeWalletPerformance(signals, tokenById, now = Date.now(), outcomes = {}) {
   const map = new Map();
   const seenWalletToken = new Set();
   for (const signal of signals) {
@@ -77,9 +99,14 @@ export function summarizeWalletPerformance(signals, tokenById, now = Date.now())
     const entry = detectedEntry > 0 ? detectedEntry : finite(token.initial_price_usd);
     const high = finite(token.highest_price_usd, entry);
     if (!(entry > 0 && high > 0)) continue;
-    const peakRoi = (high / entry - 1) * 100;
     const signalAtMs = Date.parse(String(signal?.created_at || '')) || 0;
     const ageMs = signalAtMs > 0 ? Math.max(0, finite(now) - signalAtMs) : Number.POSITIVE_INFINITY;
+    const outcome = outcomes?.[signalOutcomeKey(signal)] || null;
+    const measuredRoi = measuredOutcomeRoi(outcome);
+    const legacyPeakRoi = (high / entry - 1) * 100;
+    const peakRoi = measuredRoi == null ? legacyPeakRoi : measuredRoi;
+    const hasMeasuredRecentOutcome = measuredRoi != null;
+    const isSmartSignal = String(signal?.reason?.origin || '') === 'auto-smart-wallet-discovery';
 
     for (const w of walletFromSignal(signal, chain)) {
       const key = `${w.network || chain}:${w.address}`;
@@ -102,12 +129,16 @@ export function summarizeWalletPerformance(signals, tokenById, now = Date.now())
       row.hit25 += peakRoi >= 25 ? 1 : 0;
       row.hit50 += peakRoi >= 50 ? 1 : 0;
       row.hit100 += peakRoi >= 100 ? 1 : 0;
-      if (ageMs <= 24 * 60 * 60_000) {
+      // Recent smart-wallet ranking is based on measured post-entry checkpoints
+      // only. This avoids crediting a wallet for a token high that happened
+      // before the wallet's detected entry.
+      const recentOutcomeEligible = !isSmartSignal || hasMeasuredRecentOutcome;
+      if (ageMs <= 24 * 60 * 60_000 && recentOutcomeEligible) {
         row.samples24h += 1;
         row.peakRoiSum24h += peakRoi;
         row.hit50_24h += peakRoi >= 50 ? 1 : 0;
       }
-      if (ageMs <= 7 * 24 * 60 * 60_000) {
+      if (ageMs <= 7 * 24 * 60 * 60_000 && recentOutcomeEligible) {
         row.samples7d += 1;
         row.peakRoiSum7d += peakRoi;
         row.hit50_7d += peakRoi >= 50 ? 1 : 0;
@@ -233,30 +264,34 @@ export class WalletPerformanceWorker {
         const entry = detectedEntry > 0 ? detectedEntry : finite(token?.initial_price_usd);
         if (!(signalAt > 0 && entry > 0 && price > 0)) continue;
         const ageMin = Math.max(0, (now - signalAt) / 60_000);
-        const key = String(signal?.id || `${signal?.token_id}:${signal?.created_at}`);
+        const key = signalOutcomeKey(signal);
         const row = outcomes[key] && typeof outcomes[key] === 'object' ? outcomes[key] : {
           signalId: signal?.id || null,
           tokenId: signal?.token_id || null,
           entryAt: signal?.created_at || null,
           entryPriceUsd: entry,
-          checkpoints: {}
+          checkpoints: {},
+          sampledAt: {}
         };
         row.checkpoints ||= {};
+        row.sampledAt ||= {};
         for (const minute of OUTCOME_CHECKPOINT_MINUTES) {
           const cp = String(minute);
-          if (ageMin >= minute && row.checkpoints[cp] == null) {
+          if (row.checkpoints[cp] == null && outcomeCheckpointDue(ageMin, minute)) {
             row.checkpoints[cp] = Number(((price / entry - 1) * 100).toFixed(2));
+            row.sampledAt[cp] = {
+              at: new Date(now).toISOString(),
+              ageMinutes: Number(ageMin.toFixed(2))
+            };
             outcomeUpdates += 1;
           }
         }
-        const peak = finite(token?.highest_price_usd);
-        if (peak > 0) row.peakRoiPct = Number(((peak / entry - 1) * 100).toFixed(2));
         row.lastPriceUsd = price;
         row.updatedAt = new Date().toISOString();
         outcomes[key] = row;
       }
 
-      const performance = summarizeWalletPerformance(signalRows, tokenById, now);
+      const performance = summarizeWalletPerformance(signalRows, tokenById, now, outcomes);
       if (this.settings.enabled) {
         await this.settings.set(PERFORMANCE_KEY, JSON.stringify({
           updatedAt: new Date().toISOString(),

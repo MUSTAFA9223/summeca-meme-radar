@@ -1,9 +1,9 @@
 {
   "name": "summeca-meme-radar",
-  "version": "0.51.0",
+  "version": "0.51.1",
   "private": true,
   "type": "module",
-  "description": "Lean multichain radar for Arc, Solana, BNB Chain, and Robinhood Chain with smart-wallet cluster detection, dynamic recent-performance scoring, 1/5/15/30/60 minute outcome tracking, late-entry risk labeling, creator/duplicate filtering, improved holder-profile coverage, and preserved manual-confirm live-trading safety gates.",
+  "description": "Lean multichain radar with independent smart-wallet clusters, measured post-entry outcome tracking, dynamic recent-performance scoring, late-entry risk labeling, improved holder-profile coverage, and preserved manual-confirm live-trading safety gates.",
   "scripts": {
     "start": "node src/bootstrap.mjs",
     "dev": "node src/bootstrap.mjs",
