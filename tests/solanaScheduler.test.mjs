@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates, solanaProfileRetryDelayMs } from '../src/signals/solanaUltraEarlyWorker.mjs';
+import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates, solanaProfileProviderCooldownMs, solanaProfileRetryDelayMs } from '../src/signals/solanaUltraEarlyWorker.mjs';
 
 test('fresh initial-buy candidates outrank restored backlog', () => {
   const now = 1_000_000;
@@ -225,4 +225,14 @@ test('holder provider retry backoff grows and caps safely', () => {
   assert.equal(solanaProfileRetryDelayMs(2), 10_000);
   assert.equal(solanaProfileRetryDelayMs(3), 20_000);
   assert.equal(solanaProfileRetryDelayMs(8), 60_000);
+});
+
+
+test('profile provider cooldown treats auth rejection as long-lived and rate limits as bounded', () => {
+  assert.equal(solanaProfileProviderCooldownMs(401), 300_000);
+  assert.equal(solanaProfileProviderCooldownMs(403), 300_000);
+  assert.equal(solanaProfileProviderCooldownMs(429, { attempt: 0 }), 10_000);
+  assert.equal(solanaProfileProviderCooldownMs(429, { attempt: 2 }), 30_000);
+  assert.equal(solanaProfileProviderCooldownMs(429, { retryAfterSec: 90 }), 90_000);
+  assert.equal(solanaProfileProviderCooldownMs(500), 0);
 });
