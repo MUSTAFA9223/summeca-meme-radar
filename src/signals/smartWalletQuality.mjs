@@ -94,8 +94,13 @@ export function mergeSmartCluster(existing, entry, {
   };
 
   const address = String(entry?.walletAddress || entry?.address || '').trim();
+  const txHash = String(entry?.txHash || '').trim();
   const duplicate = base.entries.some((row) => String(row?.walletAddress || row?.address || '').trim() === address);
-  if (!duplicate && address) base.entries.push({ ...entry, observedAtMs: at });
+  const coordinated = Boolean(
+    txHash
+    && base.entries.some((row) => String(row?.txHash || '').trim() === txHash)
+  );
+  if (!duplicate && !coordinated && address) base.entries.push({ ...entry, observedAtMs: at });
   base.lastAt = Math.max(finite(base.lastAt), at);
   base.entries = base.entries
     .filter((row) => finite(now) - finite(row?.observedAtMs, now) <= finite(windowMs, 120_000))
@@ -105,7 +110,7 @@ export function mergeSmartCluster(existing, entry, {
   const shouldNotify = uniqueWallets >= 2
     && (finite(base.lastNotifiedCount) === 0 || uniqueWallets >= finite(base.lastNotifiedCount) + 2);
 
-  return { ...base, uniqueWallets, duplicate, shouldNotify };
+  return { ...base, uniqueWallets, duplicate, coordinated, shouldNotify };
 }
 
 export function shouldSuppressWalletToken(lastAt, {
