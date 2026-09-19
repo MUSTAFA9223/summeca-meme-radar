@@ -501,7 +501,6 @@ class Store {
     });
   }
 }
-}
 
 async function fetchJson(url, options = {}, timeoutMs = 7_000) {
   const controller = new AbortController();
