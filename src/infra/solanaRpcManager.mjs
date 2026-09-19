@@ -42,7 +42,7 @@ export function solanaPublicRpcEndpoints(customUrl = process.env.SOLANA_PROFILE_
 
 export class SharedSolanaRpcManager {
   constructor({
-    fetchImpl = globalThis.fetch,
+    fetchImpl = (...args) => globalThis.fetch(...args),
     nowFn = () => Date.now(),
     sleepImpl = sleep
   } = {}) {
