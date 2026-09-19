@@ -1,7 +1,8 @@
+import { sharedHeliusRpc } from '../infra/solanaRpcManager.mjs';
+
 const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
 
 const cache = new Map();
-let cooldownUntil = 0;
 
 const CACHE_MS = Math.max(2_000, Math.min(60_000, finite(process.env.HELIUS_HOLDER_CACHE_MS, 10_000)));
 const COOLDOWN_MS = Math.max(5_000, Math.min(120_000, finite(process.env.HELIUS_HOLDER_COOLDOWN_MS, 30_000)));
@@ -85,55 +86,26 @@ export async function fetchHeliusHolderProfile(apiKey, mint) {
   const now = Date.now();
   const cached = cache.get(key);
   if (cached && cached.expiresAt > now) return cached.value;
-  if (cooldownUntil > now) {
-    const error = new Error('Helius holder provider cooling down');
-    error.code = 'HELIUS_HOLDER_COOLDOWN';
-    throw error;
-  }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const response = await fetch(`https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'content-type': 'application/json', accept: 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'summeca-holder-profile',
-        method: 'getTokenAccounts',
-        params: {
-          page: 1,
-          limit: LIMIT,
-          displayOptions: {},
-          mint: key
-        }
-      })
-    });
+  const result = await sharedHeliusRpc(apiKey, 'getTokenAccounts', {
+    page: 1,
+    limit: LIMIT,
+    displayOptions: {},
+    mint: key
+  }, {
+    timeoutMs: TIMEOUT_MS,
+    minIntervalMs: 700,
+    cooldown429Ms: COOLDOWN_MS,
+    maxCooldownMs: 120_000
+  });
 
-    if (response.status === 429) {
-      const retryAfterSec = finite(response.headers.get('retry-after'), 0);
-      const retryMs = retryAfterSec > 0 ? Math.min(120_000, retryAfterSec * 1_000) : COOLDOWN_MS;
-      cooldownUntil = Date.now() + Math.max(COOLDOWN_MS, retryMs);
-      const error = new Error('Helius getTokenAccounts HTTP 429');
-      error.code = 'HELIUS_HOLDER_429';
-      throw error;
-    }
-    if (!response.ok) throw new Error(`Helius getTokenAccounts HTTP ${response.status}`);
+  const accounts = result?.token_accounts ?? result?.tokenAccounts ?? [];
+  if (!Array.isArray(accounts) || !accounts.length) return null;
 
-    const body = await response.json();
-    if (body?.error) throw new Error(`Helius getTokenAccounts ${body.error.code}: ${body.error.message}`);
-
-    const accounts = body?.result?.token_accounts ?? body?.result?.tokenAccounts ?? [];
-    if (!Array.isArray(accounts) || !accounts.length) return null;
-
-    // A full page can mean there are more accounts. In that case the profile is
-    // useful telemetry but is never allowed to pass the safety gate.
-    const complete = accounts.length < LIMIT;
-    const profile = holderProfileFromTokenAccounts(accounts, { complete });
-    if (profile) cache.set(key, { value: profile, expiresAt: Date.now() + CACHE_MS });
-    return profile;
-  } finally {
-    clearTimeout(timer);
-  }
+  // A full page can mean there are more accounts. In that case the profile is
+  // useful telemetry but is never allowed to pass the safety gate.
+  const complete = accounts.length < LIMIT;
+  const profile = holderProfileFromTokenAccounts(accounts, { complete });
+  if (profile) cache.set(key, { value: profile, expiresAt: Date.now() + CACHE_MS });
+  return profile;
 }
