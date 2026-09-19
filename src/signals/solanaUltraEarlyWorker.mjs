@@ -37,6 +37,18 @@ export function solanaProfileRetryDelayMs(failures = 1, {
   return Math.min(cap, base * (2 ** (count - 1)));
 }
 
+export function solanaProfileProviderCooldownMs(status, {
+  retryAfterSec = 0,
+  attempt = 0
+} = {}) {
+  const code = Math.floor(finite(status));
+  if (code === 401 || code === 403) return 5 * 60_000;
+  if (code !== 429) return 0;
+  const retryMs = Math.max(0, finite(retryAfterSec)) * 1_000;
+  if (retryMs > 0) return Math.min(120_000, Math.max(5_000, retryMs));
+  return Math.min(60_000, Math.max(5_000, 10_000 * (Math.max(0, Math.floor(finite(attempt))) + 1)));
+}
+
 export function isSolanaPaperProbeEligible({
   rejectionReason = null,
   score = 0,
@@ -297,6 +309,7 @@ class SolanaProfileRpc {
     this.tail = Promise.resolve();
     this.nextAt = 0;
     this.endpointCooldownUntil = new Map();
+    this.methodCooldownUntil = new Map();
   }
 
   call(method, params = []) {
@@ -305,7 +318,11 @@ class SolanaProfileRpc {
       let attempted = 0;
       for (let attempt = 0; attempt < this.endpoints.length; attempt += 1) {
         const endpoint = this.endpoints[(this.index + attempt) % this.endpoints.length];
-        const blockedUntil = finite(this.endpointCooldownUntil.get(endpoint));
+        const methodKey = `${endpoint}::${method}`;
+        const blockedUntil = Math.max(
+          finite(this.endpointCooldownUntil.get(endpoint)),
+          finite(this.methodCooldownUntil.get(methodKey))
+        );
         if (blockedUntil > Date.now()) {
           lastError = new Error(`${method} provider cooling down`);
           continue;
@@ -324,19 +341,21 @@ class SolanaProfileRpc {
             headers: { 'content-type': 'application/json', accept: 'application/json' },
             body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params })
           }).finally(() => clearTimeout(timer));
-          if (response.status === 429) {
-            const retryAfterSec = finite(response.headers.get('retry-after'), 0);
-            const cooldownMs = retryAfterSec > 0
-              ? Math.min(60_000, retryAfterSec * 1_000)
-              : Math.min(60_000, 10_000 * (attempt + 1));
-            this.endpointCooldownUntil.set(endpoint, Date.now() + Math.max(5_000, cooldownMs));
-            lastError = new Error(`${method} HTTP 429`);
+          if ([401, 403, 429].includes(response.status)) {
+            const cooldownMs = solanaProfileProviderCooldownMs(response.status, {
+              retryAfterSec: finite(response.headers.get('retry-after'), 0),
+              attempt
+            });
+            if (response.status === 429) this.endpointCooldownUntil.set(endpoint, Date.now() + cooldownMs);
+            else this.methodCooldownUntil.set(methodKey, Date.now() + cooldownMs);
+            lastError = new Error(`${method} HTTP ${response.status}`);
             continue;
           }
           if (!response.ok) throw new Error(`${method} HTTP ${response.status}`);
           const body = await response.json();
           if (body?.error) throw new Error(`${method} ${body.error.code}: ${body.error.message}`);
           this.endpointCooldownUntil.delete(endpoint);
+          this.methodCooldownUntil.delete(methodKey);
           this.index = (this.index + attempt) % this.endpoints.length;
           return body?.result;
         } catch (error) {
@@ -750,29 +769,22 @@ export class SolanaUltraEarlyWorker {
       }
     }
 
-    try {
-      const gpa = await fetchProgramAccountHolderProfile(mint);
-      if (gpa) {
-        state.profile = gpa;
-        state.profileFailures = 0;
-        state.profileRetryAt = 0;
-        console.log(`[solana:holder-profile] mint=${short(mint)} provider=solana-getProgramAccounts holders=${gpa.observedAccounts} top=${gpa.topUserPct.toFixed(1)}% pass=${gpa.pass ? 'yes' : 'no'}`);
-        return gpa;
-      }
-    } catch (error) {
-      console.warn(`[solana:holder-gpa] mint=${short(mint)} ${error.message}`);
-    }
-
+    // Prefer the lighter standard RPC pair before getProgramAccounts. Public
+    // providers often rate-limit or reject GPA, and trying it first can exhaust
+    // the same endpoint before getTokenLargestAccounts has a chance to succeed.
     try {
       const direct = await fetchHolderProfile(mint);
       if (direct) {
         state.profile = direct;
         state.profileFailures = 0;
         state.profileRetryAt = 0;
+        console.log(`[solana:holder-profile] mint=${short(mint)} provider=solana-rpc holders=${direct.observedAccounts} top=${direct.topUserPct.toFixed(1)}% pass=${direct.pass ? 'yes' : 'no'}`);
         return direct;
       }
     } catch (error) {
-      console.warn(`[solana:holder-rpc] mint=${short(mint)} ${error.message}`);
+      if (!/provider cooling down/i.test(String(error?.message ?? error))) {
+        console.warn(`[solana:holder-rpc] mint=${short(mint)} ${error.message}`);
+      }
     }
 
     try {
@@ -786,6 +798,23 @@ export class SolanaUltraEarlyWorker {
       }
     } catch (error) {
       console.warn(`[solana:holder-fallback] mint=${short(mint)} ${error.message}`);
+    }
+
+    // Expensive last resort only. Method-specific 401/403 cooldowns keep an RPC
+    // that rejects GPA from being retried for every fresh token.
+    try {
+      const gpa = await fetchProgramAccountHolderProfile(mint);
+      if (gpa) {
+        state.profile = gpa;
+        state.profileFailures = 0;
+        state.profileRetryAt = 0;
+        console.log(`[solana:holder-profile] mint=${short(mint)} provider=solana-getProgramAccounts holders=${gpa.observedAccounts} top=${gpa.topUserPct.toFixed(1)}% pass=${gpa.pass ? 'yes' : 'no'}`);
+        return gpa;
+      }
+    } catch (error) {
+      if (!/provider cooling down/i.test(String(error?.message ?? error))) {
+        console.warn(`[solana:holder-gpa] mint=${short(mint)} ${error.message}`);
+      }
     }
 
     state.profileFailures = Math.min(8, Math.max(0, Math.floor(finite(state.profileFailures))) + 1);
