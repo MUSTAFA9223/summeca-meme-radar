@@ -2,7 +2,7 @@ import { env } from '../config/env.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { fetchPumpNativeMarket } from '../feeds/pumpFunNative.mjs';
-import { sharedSolanaPublicRpc } from '../infra/solanaRpcManager.mjs';
+import { sharedHeliusRpc, sharedSolanaPublicRpc } from '../infra/solanaRpcManager.mjs';
 
 const STATE_KEY = 'auto_smart_wallet_discovery_v1';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -40,9 +40,23 @@ const short = (value) => {
 };
 const money = (value) => {
   const n = finite(value);
-  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (Math.abs(n) >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-  return `$${n.toFixed(n >= 10 ? 2 : 4)}`;
+  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return `${n.toFixed(n >= 10 ? 2 : 4)}`;
+};
+const priceText = (value) => {
+  const n = finite(value);
+  if (!(n > 0)) return '—';
+  if (n >= 1) return `${n.toFixed(4)}`;
+  if (n >= 0.01) return `${n.toFixed(6)}`;
+  if (n >= 0.000001) return `${n.toFixed(9)}`;
+  return `${n.toExponential(4)}`;
+};
+const utcTime = (value) => {
+  const n = finite(value);
+  if (!(n > 0)) return '—';
+  const ms = n < 10_000_000_000 ? n * 1_000 : n;
+  return new Date(ms).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
 };
 const normalizeNetwork = (chain) => {
   const key = low(chain);
@@ -108,6 +122,21 @@ export function scoreAutoSmartWallet(row, {
   ), 0, 100);
   const promoted = samples >= minSamples && score >= minScore && avgPeakRoi >= minAveragePeakRoi;
   return { samples, avgPeakRoi, hit50, hit100, score, promoted };
+}
+
+export function smartWalletSignalStats(wallet = {}) {
+  const samples = Math.max(0, Math.floor(finite(wallet?.samples)));
+  const hit50 = Math.max(0, Math.floor(finite(wallet?.hit50)));
+  const hit100 = Math.max(0, Math.floor(finite(wallet?.hit100)));
+  return {
+    score: clamp(Math.round(finite(wallet?.score)), 0, 100),
+    samples,
+    avgPeakRoi: finite(wallet?.avgPeakRoi),
+    hit50,
+    hit100,
+    hit50Rate: samples ? hit50 / samples * 100 : 0,
+    hit100Rate: samples ? hit100 / samples * 100 : 0
+  };
 }
 
 export function applyWinnerEvidence(existing, {
@@ -251,6 +280,77 @@ export function extractSolanaRpcWinnerBuyers(transactions, mint, limit = 12) {
   return [...out.values()];
 }
 
+
+export function extractSolanaWalletBuy(tx, walletAddress) {
+  const wallet = String(walletAddress || '').trim();
+  const txMessage = tx?.transaction?.message;
+  if (!SOLANA.test(wallet) || !txMessage) return null;
+
+  const keys = (txMessage.accountKeys || []).map((entry) =>
+    typeof entry === 'string' ? entry : String(entry?.pubkey || entry?.address || '')
+  );
+  const walletIndex = keys.indexOf(wallet);
+  if (walletIndex < 0) return null;
+
+  const preSol = Array.isArray(tx?.meta?.preBalances) ? tx.meta.preBalances : [];
+  const postSol = Array.isArray(tx?.meta?.postBalances) ? tx.meta.postBalances : [];
+  let spentLamports = Math.max(0, finite(preSol[walletIndex]) - finite(postSol[walletIndex]));
+  if (walletIndex === 0) spentLamports = Math.max(0, spentLamports - finite(tx?.meta?.fee));
+
+  const balanceMap = (rows) => {
+    const map = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (String(row?.owner || '') !== wallet) continue;
+      const mint = String(row?.mint || '');
+      if (!SOLANA.test(mint) || mint === 'So11111111111111111111111111111111111111112') continue;
+      const raw = String(row?.uiTokenAmount?.amount ?? '0');
+      const decimals = Math.max(0, Math.floor(finite(row?.uiTokenAmount?.decimals)));
+      const uiRaw = row?.uiTokenAmount?.uiAmountString ?? row?.uiTokenAmount?.uiAmount;
+      const ui = Number(uiRaw);
+      map.set(mint, {
+        raw: /^\d+$/.test(raw) ? BigInt(raw) : 0n,
+        decimals,
+        ui: Number.isFinite(ui) ? ui : Number(raw || 0) / (10 ** decimals)
+      });
+    }
+    return map;
+  };
+
+  const pre = balanceMap(tx?.meta?.preTokenBalances);
+  const post = balanceMap(tx?.meta?.postTokenBalances);
+  const logText = (tx?.meta?.logMessages || []).join('\n').toLowerCase();
+  const explicitTrade = /instruction:\s*(?:buy|buyexact|swap)\b|\bswap\b/.test(logText);
+  let best = null;
+
+  for (const mint of new Set([...pre.keys(), ...post.keys()])) {
+    const before = pre.get(mint) || { raw: 0n, ui: 0 };
+    const after = post.get(mint) || { raw: 0n, ui: 0 };
+    const rawDelta = after.raw - before.raw;
+    const uiDelta = finite(after.ui) - finite(before.ui);
+    if (rawDelta <= 0n && !(uiDelta > 0)) continue;
+    const candidate = {
+      mint,
+      tokenAmount: uiDelta > 0 ? uiDelta : null,
+      tokenAmountRaw: rawDelta > 0n ? rawDelta.toString() : null
+    };
+    if (!best || finite(candidate.tokenAmount) > finite(best.tokenAmount)) best = candidate;
+  }
+
+  if (!best) return null;
+  if (!explicitTrade && spentLamports < 500_000) return null;
+
+  const blockTime = finite(tx?.blockTime);
+  const solSpent = spentLamports / 1_000_000_000;
+  return {
+    ...best,
+    solSpent,
+    blockTime: blockTime > 0 ? blockTime : null,
+    blockTimeMs: blockTime > 0 ? blockTime * 1_000 : null,
+    signature: String(tx?._signature || tx?.signature || '')
+  };
+}
+
+
 export function extractEvmWinnerBuyers(logs, tokenAddress, pairAddress = '', limit = 20) {
   const token = low(tokenAddress);
   const pair = low(pairAddress);
@@ -329,29 +429,41 @@ class Store {
     return Array.isArray(rows) ? rows[0] ?? null : null;
   }
 
-  async insertSignal(tokenId, network, wallet, market, txHash) {
+  async insertSignal(tokenId, network, wallet, market, txHash, entryContext = {}) {
+    const stats = smartWalletSignalStats(wallet);
+    const blockTime = finite(entryContext?.blockTime);
+    const detectedPriceUsd = finite(market?.priceUsd);
     return this.request('signals', {
       method: 'POST',
       prefer: 'return=minimal',
       body: {
         token_id: tokenId,
         signal_type: 'entry',
-        entry_score: clamp(Math.round(55 + wallet.score * 0.35), 0, 100),
+        entry_score: clamp(Math.round(55 + stats.score * 0.35), 0, 100),
         risk_score: 25,
         reason: {
           trigger: `${network}-auto-smart-wallet-buy`,
           origin: 'auto-smart-wallet-discovery',
           network,
           auto_discovered: true,
-          wallet_score: wallet.score,
-          wallet_samples: wallet.samples,
+          wallet_score: stats.score,
+          wallet_samples: stats.samples,
+          wallet_avg_peak_roi_pct: Number(stats.avgPeakRoi.toFixed(2)),
+          wallet_hit_50: stats.hit50,
+          wallet_hit_100: stats.hit100,
+          wallet_hit_50_rate_pct: Number(stats.hit50Rate.toFixed(2)),
+          wallet_hit_100_rate_pct: Number(stats.hit100Rate.toFixed(2)),
           tx: txHash,
+          wallet_buy_block_time: blockTime > 0 ? blockTime : null,
+          detected_price_usd: detectedPriceUsd > 0 ? detectedPriceUsd : null,
+          estimated_sol_spent: finite(entryContext?.solSpent) > 0 ? finite(entryContext.solSpent) : null,
+          token_amount_received: finite(entryContext?.tokenAmount) > 0 ? finite(entryContext.tokenAmount) : null,
           confirming_wallets: 1,
           wallets: [{
             network,
             address: wallet.address,
             label: wallet.label,
-            score: wallet.score,
+            score: stats.score,
             paid_usd: 0
           }],
           liquidity_usd: finite(market?.liquidityUsd),
@@ -664,6 +776,8 @@ export class SmartWalletDiscoveryWorker {
         `درجة الاكتشاف: ${wallet.score}/100`,
         `عدد العملات الناجحة الداعمة: ${wallet.samples}`,
         `متوسط أعلى صعود بعد الرصد: +${finite(wallet.avgPeakRoi).toFixed(1)}%`,
+        `نجاح +50%: ${smartWalletSignalStats(wallet).hit50}/${smartWalletSignalStats(wallet).samples} (${smartWalletSignalStats(wallet).hit50Rate.toFixed(0)}%)`,
+        `نجاح +100%: ${smartWalletSignalStats(wallet).hit100}/${smartWalletSignalStats(wallet).samples} (${smartWalletSignalStats(wallet).hit100Rate.toFixed(0)}%)`,
         '',
         evidenceLines.length ? '🧾 العملات التي دعمت ترقية هذه المحفظة:' : '',
         ...evidenceLines,
@@ -765,12 +879,41 @@ export class SmartWalletDiscoveryWorker {
     }
   }
 
-  async marketSignal(network, tokenAddress, wallet, txHash) {
+  async marketSignal(network, tokenAddress, wallet, txHash, entryContext = {}) {
     const market = await dexMarket(network, tokenAddress).catch(() => null);
     if (!market?.priceUsd || market.liquidityUsd < 2_000 || market.sells5m < 1) return false;
 
+    const stats = smartWalletSignalStats(wallet);
+    const signature = String(entryContext?.signature || txHash || '');
+    const hasTransactionTime = finite(entryContext?.blockTimeMs) > 0 || finite(entryContext?.blockTime) > 0;
+    const observedAtMs = finite(entryContext?.blockTimeMs) > 0
+      ? finite(entryContext.blockTimeMs)
+      : (finite(entryContext?.blockTime) > 0 ? finite(entryContext.blockTime) * 1_000 : Date.now());
+    const observedAtIso = new Date(observedAtMs).toISOString();
+    const solSpent = finite(entryContext?.solSpent);
+    const tokenAmount = finite(entryContext?.tokenAmount);
+
+    wallet.lastBuyAt = observedAtIso;
+    wallet.lastBuyTokenAddress = tokenAddress;
+    wallet.lastBuyTokenSymbol = market.symbol || 'TOKEN';
+    wallet.lastBuyTxHash = signature;
+    wallet.lastDetectedPriceUsd = finite(market.priceUsd);
+    wallet.lastEstimatedSolSpent = solSpent > 0 ? solSpent : null;
+
     const token = await this.store.upsertToken(network, tokenAddress, market).catch(() => null);
-    if (token?.id) await this.store.insertSignal(token.id, network, wallet, market, txHash).catch(() => null);
+    if (token?.id) {
+      await this.store.insertSignal(token.id, network, wallet, market, signature, {
+        ...entryContext,
+        blockTime: finite(entryContext?.blockTime),
+        blockTimeMs: observedAtMs,
+        solSpent: solSpent > 0 ? solSpent : null,
+        tokenAmount: tokenAmount > 0 ? tokenAmount : null
+      }).catch(() => null);
+    }
+
+    console.log(
+      `[auto-smart:entry] wallet=${short(wallet.address)} mint=${short(tokenAddress)} score=${stats.score} price=${finite(market.priceUsd)} solSpent=${solSpent > 0 ? solSpent.toFixed(6) : 'na'}`
+    );
 
     if (env.telegramBotToken) {
       const chatId = env.telegramChatId || await this.settings.get('telegram_chat_id').catch(() => '');
@@ -793,13 +936,16 @@ export class SmartWalletDiscoveryWorker {
         if (network === 'solana') {
           buttons.splice(2, 0, [{ text: '👀 متابعة العملة', callback_data: `watch:add:${tokenAddress}` }]);
         }
+
         await telegramApi(env.telegramBotToken, 'sendMessage', {
           chat_id: String(chatId),
           text: [
             '🧠🔥 محفظة ذكية دخلت عملة جديدة',
             '',
             `العملة: $${market.symbol} • الشبكة: ${label}`,
-            `🏆 درجة المحفظة: ${wallet.score}/100 • عدد الأدلة: ${wallet.samples}`,
+            `🏆 درجة المحفظة: ${stats.score}/100 • أدلة تاريخية: ${stats.samples}`,
+            `📈 متوسط أعلى صعود تاريخي: +${stats.avgPeakRoi.toFixed(1)}%`,
+            `🎯 +50%: ${stats.hit50}/${stats.samples} (${stats.hit50Rate.toFixed(0)}%) • +100%: ${stats.hit100}/${stats.samples} (${stats.hit100Rate.toFixed(0)}%)`,
             '',
             '👛 عنوان المحفظة الذكية:',
             wallet.address,
@@ -807,10 +953,15 @@ export class SmartWalletDiscoveryWorker {
             '🪙 عقد العملة التي دخلتها:',
             tokenAddress,
             '',
+            `⏱️ ${hasTransactionTime ? 'وقت المعاملة' : 'وقت الرصد'}: ${utcTime(observedAtMs)}`,
+            `💵 سعر السوق عند رصد الدخول: ${priceText(market.priceUsd)}`,
+            solSpent > 0 ? `◎ انخفاض SOL الصافي في المعاملة: ~${solSpent.toFixed(6)} SOL` : '',
+            tokenAmount > 0 ? `🪙 كمية التوكن المستلمة تقريبًا: ${tokenAmount.toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '',
             `💧 السيولة: ${money(market.liquidityUsd)} • القيمة السوقية: ${money(market.marketCapUsd)}`,
             `5 دقائق — شراء: ${market.buys5m} • بيع: ${market.sells5m} • الحركة: ${finite(market.priceChange5mPct).toFixed(1)}%`,
-            txHash ? `🔗 المعاملة: ${txHash}` : '',
+            signature ? `🔗 المعاملة: ${signature}` : '',
             '',
+            'ℹ️ سعر الدخول المعروض هو سعر السوق عند رصد المعاملة، وليس سعر تنفيذ المحفظة الدقيق.',
             'يمكنك نسخ العقد أو فتح الشراء من الأزرار أدناه.',
             '⚠️ دخول المحفظة الذكية ليس ضمانًا لصعود العملة.'
           ].filter(Boolean).join('\n'),
@@ -820,53 +971,31 @@ export class SmartWalletDiscoveryWorker {
     }
     return true;
   }
-
   async solanaRpc(method, params = []) {
-    const endpoints = [
-      env.heliusApiKey ? `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(env.heliusApiKey)}` : '',
-      'https://solana-rpc.publicnode.com',
-      'https://api.mainnet-beta.solana.com'
-    ].filter(Boolean);
-    let last;
-    for (const endpoint of endpoints) {
+    let lastError = null;
+    if (env.heliusApiKey) {
       try {
-        return await rpc(endpoint, method, params);
+        return await sharedHeliusRpc(env.heliusApiKey, method, params, {
+          timeoutMs: 8_000,
+          minIntervalMs: 500,
+          cooldown429Ms: 60_000,
+          maxCooldownMs: 180_000
+        });
       } catch (error) {
-        last = error;
+        lastError = error;
       }
     }
-    throw last || new Error(`Solana ${method} failed`);
-  }
 
-  parseSolanaBuy(tx, walletAddress) {
-    const txMessage = tx?.transaction?.message;
-    if (!txMessage) return null;
-    const keys = (txMessage.accountKeys || []).map((entry) => typeof entry === 'string' ? entry : String(entry?.pubkey || ''));
-    const index = keys.indexOf(walletAddress);
-    if (index < 0) return null;
-    const preBalances = Array.isArray(tx?.meta?.preBalances) ? tx.meta.preBalances : [];
-    const postBalances = Array.isArray(tx?.meta?.postBalances) ? tx.meta.postBalances : [];
-    if (finite(postBalances[index]) >= finite(preBalances[index])) return null;
-
-    const mapBalances = (rows) => {
-      const map = new Map();
-      for (const item of Array.isArray(rows) ? rows : []) {
-        if (String(item?.owner || '') !== walletAddress) continue;
-        const mint = String(item?.mint || '');
-        const amount = String(item?.uiTokenAmount?.amount ?? '0');
-        if (SOLANA.test(mint) && /^\d+$/.test(amount)) map.set(mint, BigInt(amount));
-      }
-      return map;
-    };
-    const pre = mapBalances(tx?.meta?.preTokenBalances);
-    const post = mapBalances(tx?.meta?.postTokenBalances);
-    let best = null;
-    for (const mint of new Set([...pre.keys(), ...post.keys()])) {
-      const delta = (post.get(mint) || 0n) - (pre.get(mint) || 0n);
-      if (delta <= 0n) continue;
-      if (!best || delta > best.delta) best = { mint, delta };
+    try {
+      return await sharedSolanaPublicRpc(method, params, {
+        purpose: 'normal',
+        timeoutMs: 8_000,
+        minIntervalMs: 700,
+        maxAttempts: 3
+      });
+    } catch (error) {
+      throw error || lastError || new Error(`Solana ${method} failed`);
     }
-    return best?.mint || null;
   }
 
   async monitorSolanaWallet(wallet) {
@@ -879,20 +1008,29 @@ export class SmartWalletDiscoveryWorker {
       wallet.lastMonitorCursor = signatures[0]?.signature || '';
       return true;
     }
+
     const fresh = [];
     for (const row of signatures) {
       if (row.signature === wallet.lastMonitorCursor) break;
       fresh.push(row);
     }
     wallet.lastMonitorCursor = signatures[0]?.signature || wallet.lastMonitorCursor;
+
     for (const row of fresh.reverse().slice(-4)) {
       const tx = await this.solanaRpc('getTransaction', [row.signature, {
         encoding: 'jsonParsed',
         commitment: 'confirmed',
         maxSupportedTransactionVersion: 0
       }]).catch(() => null);
-      const mint = this.parseSolanaBuy(tx, wallet.address);
-      if (mint) await this.marketSignal('solana', mint, wallet, row.signature);
+      const buy = extractSolanaWalletBuy(tx, wallet.address);
+      if (buy?.mint) {
+        await this.marketSignal('solana', buy.mint, wallet, row.signature, {
+          ...buy,
+          signature: row.signature,
+          blockTime: buy.blockTime || finite(row?.blockTime),
+          blockTimeMs: buy.blockTimeMs || (finite(row?.blockTime) > 0 ? finite(row.blockTime) * 1_000 : null)
+        });
+      }
       await sleep(100);
     }
     return true;

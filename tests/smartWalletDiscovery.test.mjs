@@ -6,7 +6,9 @@ import {
   extractEvmWinnerBuyers,
   extractSolanaWinnerBuyers,
   extractSolanaRpcWinnerBuyers,
+  extractSolanaWalletBuy,
   scoreAutoSmartWallet,
+  smartWalletSignalStats,
   solanaMonitorBatchSize
 } from '../src/signals/smartWalletDiscoveryWorker.mjs';
 
@@ -211,4 +213,68 @@ test('Solana smart-wallet monitoring never exceeds the configured batch cap', ()
     targetSweepMs: 30_000,
     maxBatch: 7
   }), 7);
+});
+
+
+test('Solana monitored wallet buy exposes token, amount, SOL spend, and block time', () => {
+  const wallet = 'J2Gys26qFcmetpneVYTcpeRMwLMNE2RRdtJCSkwxVKjG';
+  const mint = '9xQeWvG816bUx9EPfEZ5QxvT1c2fv7FzYfg41ZfYgS3';
+  const tx = {
+    blockTime: 1_700_000_000,
+    transaction: { message: { accountKeys: [{ pubkey: wallet }] } },
+    meta: {
+      fee: 5_000,
+      preBalances: [2_000_000_000],
+      postBalances: [1_799_995_000],
+      preTokenBalances: [],
+      postTokenBalances: [{
+        mint,
+        owner: wallet,
+        uiTokenAmount: { amount: '2500000', decimals: 6, uiAmountString: '2.5' }
+      }],
+      logMessages: ['Program log: Instruction: Buy']
+    }
+  };
+
+  const buy = extractSolanaWalletBuy(tx, wallet);
+  assert.equal(buy.mint, mint);
+  assert.equal(buy.tokenAmount, 2.5);
+  assert.equal(Number(buy.solSpent.toFixed(6)), 0.2);
+  assert.equal(buy.blockTime, 1_700_000_000);
+  assert.equal(buy.blockTimeMs, 1_700_000_000_000);
+});
+
+test('Solana monitored wallet parser rejects a free token receipt with no trade spend', () => {
+  const wallet = 'J2Gys26qFcmetpneVYTcpeRMwLMNE2RRdtJCSkwxVKjG';
+  const mint = '9xQeWvG816bUx9EPfEZ5QxvT1c2fv7FzYfg41ZfYgS3';
+  const tx = {
+    transaction: { message: { accountKeys: [{ pubkey: wallet }] } },
+    meta: {
+      fee: 5_000,
+      preBalances: [2_000_000_000],
+      postBalances: [1_999_995_000],
+      preTokenBalances: [],
+      postTokenBalances: [{
+        mint,
+        owner: wallet,
+        uiTokenAmount: { amount: '1000000', decimals: 6, uiAmountString: '1' }
+      }],
+      logMessages: ['Program log: Instruction: Transfer']
+    }
+  };
+  assert.equal(extractSolanaWalletBuy(tx, wallet), null);
+});
+
+test('smart-wallet signal stats expose historical hit rates', () => {
+  const stats = smartWalletSignalStats({
+    score: 82,
+    samples: 4,
+    avgPeakRoi: 137.5,
+    hit50: 3,
+    hit100: 1
+  });
+  assert.equal(stats.score, 82);
+  assert.equal(stats.samples, 4);
+  assert.equal(stats.hit50Rate, 75);
+  assert.equal(stats.hit100Rate, 25);
 });
