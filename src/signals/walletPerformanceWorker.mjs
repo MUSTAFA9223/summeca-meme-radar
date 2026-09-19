@@ -76,7 +76,7 @@ export function summarizeWalletPerformance(signals, tokenById) {
     const peakRoi = (high / entry - 1) * 100;
     for (const w of walletFromSignal(signal, chain)) {
       const key = `${w.network || chain}:${w.address}`;
-      const row = map.get(key) || { key, network: w.network || chain, address: w.address, label: w.label, samples: 0, peakRoiSum: 0, hit25: 0, hit50: 0, hit100: 0, paidUsd: 0, entryScoreSum: 0, riskSum: 0 };
+      const row = map.get(key) || { key, network: w.network || chain, address: w.address, label: w.label, samples: 0, peakRoiSum: 0, hit25: 0, hit50: 0, hit100: 0, paidUsd: 0, entryScoreSum: 0, riskSum: 0, lastSignalAtMs: 0, lastSignalAt: null, lastTokenAddress: '', lastTokenSymbol: '', lastDetectedPriceUsd: 0, lastTxHash: '' };
       row.label ||= w.label;
       row.samples += 1;
       row.peakRoiSum += peakRoi;
@@ -86,6 +86,15 @@ export function summarizeWalletPerformance(signals, tokenById) {
       row.paidUsd += w.paidUsd;
       row.entryScoreSum += finite(signal.entry_score);
       row.riskSum += finite(signal.risk_score);
+      const signalAtMs = Date.parse(String(signal?.created_at || '')) || 0;
+      if (signalAtMs >= finite(row.lastSignalAtMs)) {
+        row.lastSignalAtMs = signalAtMs;
+        row.lastSignalAt = signal?.created_at || null;
+        row.lastTokenAddress = String(token?.address || '');
+        row.lastTokenSymbol = String(token?.symbol || 'TOKEN');
+        row.lastDetectedPriceUsd = finite(signal?.reason?.detected_price_usd, finite(token?.initial_price_usd));
+        row.lastTxHash = String(signal?.reason?.tx || '');
+      }
       map.set(key, row);
     }
   }
