@@ -240,6 +240,10 @@ async function walletLeaderboard() {
     prior.autoScore = finite(w.score);
     prior.autoSamples = finite(w.samples);
     prior.autoAvgPeakRoi = finite(w.avgPeakRoi);
+    prior.lastBuyTokenAddress = String(w.lastBuyTokenAddress || '');
+    prior.lastBuyTokenSymbol = String(w.lastBuyTokenSymbol || '');
+    prior.lastBuyAt = String(w.lastBuyAt || '');
+    prior.lastDetectedPriceUsd = finite(w.lastDetectedPriceUsd);
     base.set(id.key, prior);
   }
   const rows = await supabaseRows('signals?select=created_at,entry_score,risk_score,reason,tokens(chain)&order=created_at.desc&limit=250');
@@ -271,7 +275,18 @@ async function walletLeaderboard() {
     const auto = w.autoDiscovered
       ? ` | تلقائي ${w.autoSamples} نجاحات • متوسط القمة +${finite(w.autoAvgPeakRoi).toFixed(0)}%`
       : '';
-    lines.push(`${i + 1}. [${String(w.network || 'unknown').toUpperCase()}] ${w.label} • ${w.evidence}/100`, `   إشارات ${w.signals} | تجمعات ${w.clusters} | تدفق موثق ${money(w.paidUsd)} | متوسط الدخول ${w.avgEntry.toFixed(0)}${auto}`);
+    lines.push(
+      `${i + 1}. [${String(w.network || 'unknown').toUpperCase()}] ${w.label} • ${w.evidence}/100`,
+      `   👛 ${w.address}`,
+      `   إشارات ${w.signals} | تجمعات ${w.clusters} | تدفق موثق ${money(w.paidUsd)} | متوسط الدخول ${w.avgEntry.toFixed(0)}${auto}`
+    );
+    if (w.lastBuyTokenAddress) {
+      lines.push(
+        `   🪙 آخر دخول: ${w.lastBuyTokenSymbol || 'TOKEN'}`,
+        `   العقد: ${w.lastBuyTokenAddress}`,
+        `   وقت الرصد: ${w.lastBuyAt ? w.lastBuyAt.replace('T', ' ').replace('Z', ' UTC') : '—'}`
+      );
+    }
   }
   if (!ranked.length) lines.push('لا توجد أدلة كافية حتى الآن.');
   lines.push('', '📈 ترتيب الأداء والعائد سيتفعّل تلقائيًا عندما تتوفر عينات موثوقة كافية.');
