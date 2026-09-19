@@ -885,7 +885,10 @@ export class SmartWalletDiscoveryWorker {
 
     const stats = smartWalletSignalStats(wallet);
     const signature = String(entryContext?.signature || txHash || '');
-    const observedAtMs = finite(entryContext?.blockTimeMs) > 0 ? finite(entryContext.blockTimeMs) : Date.now();
+    const hasTransactionTime = finite(entryContext?.blockTimeMs) > 0 || finite(entryContext?.blockTime) > 0;
+    const observedAtMs = finite(entryContext?.blockTimeMs) > 0
+      ? finite(entryContext.blockTimeMs)
+      : (finite(entryContext?.blockTime) > 0 ? finite(entryContext.blockTime) * 1_000 : Date.now());
     const observedAtIso = new Date(observedAtMs).toISOString();
     const solSpent = finite(entryContext?.solSpent);
     const tokenAmount = finite(entryContext?.tokenAmount);
@@ -950,7 +953,7 @@ export class SmartWalletDiscoveryWorker {
             '🪙 عقد العملة التي دخلتها:',
             tokenAddress,
             '',
-            `⏱️ وقت المعاملة: ${utcTime(observedAtMs)}`,
+            `⏱️ ${hasTransactionTime ? 'وقت المعاملة' : 'وقت الرصد'}: ${utcTime(observedAtMs)}`,
             `💵 سعر السوق عند رصد الدخول: ${priceText(market.priceUsd)}`,
             solSpent > 0 ? `◎ انخفاض SOL الصافي في المعاملة: ~${solSpent.toFixed(6)} SOL` : '',
             tokenAmount > 0 ? `🪙 كمية التوكن المستلمة تقريبًا: ${tokenAmount.toLocaleString('en-US', { maximumFractionDigits: 6 })}` : '',
