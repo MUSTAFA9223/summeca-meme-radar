@@ -2,6 +2,7 @@ import { env } from '../config/env.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { fetchPumpNativeMarket } from '../feeds/pumpFunNative.mjs';
+import { sharedSolanaPublicRpc } from '../infra/solanaRpcManager.mjs';
 
 const STATE_KEY = 'auto_smart_wallet_discovery_v1';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -437,20 +438,12 @@ async function findBlockNearTime(rpcUrl, targetMs, latest) {
 }
 
 async function solanaHistoryRpc(method, params = []) {
-  const endpoints = [
-    process.env.SOLANA_PROFILE_RPC_URL || '',
-    'https://solana-rpc.publicnode.com',
-    'https://api.mainnet-beta.solana.com'
-  ].filter(Boolean);
-  let last = null;
-  for (const endpoint of endpoints) {
-    try {
-      return await rpc(endpoint, method, params);
-    } catch (error) {
-      last = error;
-    }
-  }
-  throw last || new Error(`Solana public RPC ${method} failed`);
+  return sharedSolanaPublicRpc(method, params, {
+    purpose: 'background',
+    timeoutMs: 8_000,
+    minIntervalMs: 900,
+    maxAttempts: 2
+  });
 }
 
 async function harvestSolanaRpcFallback(token) {

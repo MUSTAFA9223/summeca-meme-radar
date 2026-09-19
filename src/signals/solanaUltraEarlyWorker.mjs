@@ -6,6 +6,7 @@ import { fetchTokenOverview, fetchTokenSecurity } from '../feeds/birdeye.mjs';
 import { fetchPumpNativeMarkets } from '../feeds/pumpFunNative.mjs';
 import { fetchHeliusHolderProfile, holderProfileFromParsedProgramAccounts } from '../feeds/heliusTokenHolders.mjs';
 import { SolanaTradeCandidateBridge } from './solanaTradeCandidateBridge.mjs';
+import { sharedSolanaPublicRpc, solanaRpcCooldownMs } from '../infra/solanaRpcManager.mjs';
 
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
@@ -41,12 +42,13 @@ export function solanaProfileProviderCooldownMs(status, {
   retryAfterSec = 0,
   attempt = 0
 } = {}) {
-  const code = Math.floor(finite(status));
-  if (code === 401 || code === 403) return 5 * 60_000;
-  if (code !== 429) return 0;
-  const retryMs = Math.max(0, finite(retryAfterSec)) * 1_000;
-  if (retryMs > 0) return Math.min(120_000, Math.max(5_000, retryMs));
-  return Math.min(60_000, Math.max(5_000, 10_000 * (Math.max(0, Math.floor(finite(attempt))) + 1)));
+  return solanaRpcCooldownMs(status, {
+    retryAfterSec,
+    attempt,
+    base429Ms: 10_000,
+    authCooldownMs: 300_000,
+    maxCooldownMs: 120_000
+  });
 }
 
 export function isSolanaPaperProbeEligible({
@@ -300,80 +302,9 @@ function normalizeMarket(pair, mint) {
   };
 }
 
-class SolanaProfileRpc {
-  constructor() {
-    const custom = String(process.env.SOLANA_PROFILE_RPC_URL ?? '').trim();
-    this.endpoints = [custom, 'https://rpc.solanatracker.io/public', 'https://solana-rpc.publicnode.com', 'https://api.mainnet-beta.solana.com'].filter(Boolean);
-    this.index = 0;
-    this.id = 0;
-    this.tail = Promise.resolve();
-    this.nextAt = 0;
-    this.endpointCooldownUntil = new Map();
-    this.methodCooldownUntil = new Map();
-  }
-
-  call(method, params = []) {
-    const task = this.tail.then(async () => {
-      let lastError = null;
-      let attempted = 0;
-      for (let attempt = 0; attempt < this.endpoints.length; attempt += 1) {
-        const endpoint = this.endpoints[(this.index + attempt) % this.endpoints.length];
-        const methodKey = `${endpoint}::${method}`;
-        const blockedUntil = Math.max(
-          finite(this.endpointCooldownUntil.get(endpoint)),
-          finite(this.methodCooldownUntil.get(methodKey))
-        );
-        if (blockedUntil > Date.now()) {
-          lastError = new Error(`${method} provider cooling down`);
-          continue;
-        }
-
-        attempted += 1;
-        const waitMs = Math.max(0, this.nextAt - Date.now());
-        if (waitMs) await sleep(waitMs);
-        this.nextAt = Date.now() + 650;
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 4_500);
-          const response = await fetch(endpoint, {
-            method: 'POST',
-            signal: controller.signal,
-            headers: { 'content-type': 'application/json', accept: 'application/json' },
-            body: JSON.stringify({ jsonrpc: '2.0', id: ++this.id, method, params })
-          }).finally(() => clearTimeout(timer));
-          if ([401, 403, 429].includes(response.status)) {
-            const cooldownMs = solanaProfileProviderCooldownMs(response.status, {
-              retryAfterSec: finite(response.headers.get('retry-after'), 0),
-              attempt
-            });
-            if (response.status === 429) this.endpointCooldownUntil.set(endpoint, Date.now() + cooldownMs);
-            else this.methodCooldownUntil.set(methodKey, Date.now() + cooldownMs);
-            lastError = new Error(`${method} HTTP ${response.status}`);
-            continue;
-          }
-          if (!response.ok) throw new Error(`${method} HTTP ${response.status}`);
-          const body = await response.json();
-          if (body?.error) throw new Error(`${method} ${body.error.code}: ${body.error.message}`);
-          this.endpointCooldownUntil.delete(endpoint);
-          this.methodCooldownUntil.delete(methodKey);
-          this.index = (this.index + attempt) % this.endpoints.length;
-          return body?.result;
-        } catch (error) {
-          lastError = error;
-        }
-      }
-      if (!attempted) throw lastError || new Error(`${method} providers cooling down`);
-      throw lastError || new Error(`${method} failed`);
-    });
-    this.tail = task.catch(() => undefined);
-    return task;
-  }
-}
-
-const profileRpc = new SolanaProfileRpc();
 
 async function fetchProgramAccountHolderProfile(mint) {
-  const rows = await profileRpc.call('getProgramAccounts', [
+  const rows = await sharedSolanaPublicRpc('getProgramAccounts', [
     'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
     {
       commitment: 'processed',
@@ -383,15 +314,21 @@ async function fetchProgramAccountHolderProfile(mint) {
         { memcmp: { offset: 0, bytes: mint } }
       ]
     }
-  ]);
+  ], { purpose: 'profile', timeoutMs: 4_500 });
   return holderProfileFromParsedProgramAccounts(rows);
 }
 
 async function fetchHolderProfile(mint) {
-  const [supplyResult, largestResult] = await Promise.all([
-    profileRpc.call('getTokenSupply', [mint, { commitment: 'processed' }]),
-    profileRpc.call('getTokenLargestAccounts', [mint, { commitment: 'processed' }])
-  ]);
+  const supplyResult = await sharedSolanaPublicRpc(
+    'getTokenSupply',
+    [mint, { commitment: 'processed' }],
+    { purpose: 'profile', timeoutMs: 4_500 }
+  );
+  const largestResult = await sharedSolanaPublicRpc(
+    'getTokenLargestAccounts',
+    [mint, { commitment: 'processed' }],
+    { purpose: 'profile', timeoutMs: 4_500 }
+  );
   const supply = finite(supplyResult?.value?.amount);
   if (!(supply > 0)) return null;
   const balances = (Array.isArray(largestResult?.value) ? largestResult.value : [])

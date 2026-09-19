@@ -1,36 +1,9 @@
+import { sharedHeliusRpc, sharedSolanaPublicRpc } from '../infra/solanaRpcManager.mjs';
+
 const PUMP_FUN_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const SOLANA_TRACKER_PUBLIC_RPC = 'https://rpc.solanatracker.io/public';
-const PUBLICNODE_SOLANA_RPC = 'https://solana-rpc.publicnode.com';
-const PUBLIC_SOLANA_RPC = 'https://api.mainnet-beta.solana.com';
 const HELIUS_BACKOFF_MS = 180_000;
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const publicRpcLanes = [
-  {
-    endpoint: SOLANA_TRACKER_PUBLIC_RPC,
-    provider: 'Solana Tracker Public RPC',
-    minIntervalMs: 300,
-    tail: Promise.resolve(),
-    nextAt: 0
-  },
-  {
-    endpoint: PUBLICNODE_SOLANA_RPC,
-    provider: 'PublicNode Solana RPC',
-    minIntervalMs: 300,
-    tail: Promise.resolve(),
-    nextAt: 0
-  },
-  {
-    endpoint: PUBLIC_SOLANA_RPC,
-    provider: 'Public Solana RPC',
-    minIntervalMs: 350,
-    tail: Promise.resolve(),
-    nextAt: 0
-  }
-];
-let publicRpcCursor = 0;
-let heliusRateLimitedUntil = 0;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 let lastFallbackWarningAt = 0;
 
 const pubkey = (value) => {
@@ -66,67 +39,35 @@ export function extractPumpCreateMint(transaction, programId = PUMP_FUN_PROGRAM_
   return newMint ?? null;
 }
 
-async function rpcAt(endpoint, method, params, timeoutMs = 6000, provider = 'Solana RPC') {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 'summeca-direct-create', method, params })
-    });
-    if (!response.ok) throw new Error(`${provider} ${method} HTTP ${response.status}`);
-    const body = await response.json();
-    if (body?.error) throw new Error(`${provider} ${method} ${body.error.code}: ${body.error.message}`);
-    return body?.result ?? null;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function queuedLaneRpc(lane, method, params, timeoutMs) {
-  const task = lane.tail.then(async () => {
-    const waitMs = Math.max(0, lane.nextAt - Date.now());
-    if (waitMs) await sleep(waitMs);
-    lane.nextAt = Date.now() + lane.minIntervalMs;
-    return rpcAt(lane.endpoint, method, params, timeoutMs, lane.provider);
-  });
-  lane.tail = task.catch(() => undefined);
-  return task;
-}
-
-const isTransientRpcError = (error) => /HTTP 429|HTTP 5\d\d|fetch failed|aborted|timeout/i.test(String(error?.message ?? error));
+const isTransientRpcError = (error) =>
+  /HTTP 429|HTTP 5\d\d|fetch failed|aborted|timeout|cooling down/i.test(String(error?.message ?? error));
 
 async function publicReadRpc(method, params, timeoutMs = 6000) {
-  const start = publicRpcCursor++ % publicRpcLanes.length;
-  const primary = publicRpcLanes[start];
-  const fallback = publicRpcLanes[(start + 1) % publicRpcLanes.length];
-
-  try {
-    return await queuedLaneRpc(primary, method, params, timeoutMs);
-  } catch (error) {
-    if (!isTransientRpcError(error)) throw error;
-    return queuedLaneRpc(fallback, method, params, timeoutMs);
-  }
+  return sharedSolanaPublicRpc(method, params, {
+    purpose: 'critical',
+    timeoutMs,
+    minIntervalMs: 350,
+    maxAttempts: 3
+  });
 }
 
 async function rpc(apiKey, method, params, timeoutMs = 6000) {
-  if (!apiKey || Date.now() < heliusRateLimitedUntil) {
-    return publicReadRpc(method, params, timeoutMs);
-  }
+  if (!apiKey) return publicReadRpc(method, params, timeoutMs);
 
-  const helius = `https://mainnet.helius-rpc.com/?api-key=${encodeURIComponent(apiKey)}`;
   try {
-    return await rpcAt(helius, method, params, timeoutMs, 'Helius');
+    return await sharedHeliusRpc(apiKey, method, params, {
+      timeoutMs,
+      minIntervalMs: 350,
+      cooldown429Ms: HELIUS_BACKOFF_MS,
+      maxCooldownMs: HELIUS_BACKOFF_MS
+    });
   } catch (error) {
     if (!isTransientRpcError(error)) throw error;
     const message = String(error?.message ?? error);
-    if (/HTTP 429/i.test(message)) heliusRateLimitedUntil = Date.now() + HELIUS_BACKOFF_MS;
     const now = Date.now();
     if (now - lastFallbackWarningAt > 10_000) {
       lastFallbackWarningAt = now;
-      console.warn(`[direct-create:rpc-fallback] ${message}; using dual throttled read-only RPC lanes`);
+      console.warn(`[direct-create:rpc-fallback] ${message}; using shared throttled public RPC pool`);
     }
     return publicReadRpc(method, params, timeoutMs);
   }
