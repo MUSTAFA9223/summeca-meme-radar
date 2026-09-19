@@ -86,3 +86,35 @@ test('wallet-token dedupe suppresses repeats only inside TTL', () => {
   assert.equal(shouldSuppressWalletToken(100_000, { now: 150_000, ttlMs: 60_000 }), true);
   assert.equal(shouldSuppressWalletToken(100_000, { now: 170_001, ttlMs: 60_000 }), false);
 });
+
+
+test('cluster rejects two wallets observed through the same transaction as coordinated evidence', () => {
+  const first = mergeSmartCluster(null, {
+    walletAddress: 'wallet-a',
+    dynamicScore: 88,
+    txHash: 'same-tx',
+    observedAtMs: 100_000
+  }, { now: 100_000, windowMs: 120_000 });
+
+  const coordinated = mergeSmartCluster(first, {
+    walletAddress: 'wallet-b',
+    dynamicScore: 91,
+    txHash: 'same-tx',
+    observedAtMs: 102_000
+  }, { now: 102_000, windowMs: 120_000 });
+
+  assert.equal(coordinated.uniqueWallets, 1);
+  assert.equal(coordinated.coordinated, true);
+  assert.equal(coordinated.shouldNotify, false);
+
+  const independent = mergeSmartCluster(coordinated, {
+    walletAddress: 'wallet-c',
+    dynamicScore: 86,
+    txHash: 'other-tx',
+    observedAtMs: 105_000
+  }, { now: 105_000, windowMs: 120_000 });
+
+  assert.equal(independent.uniqueWallets, 2);
+  assert.equal(independent.coordinated, false);
+  assert.equal(independent.shouldNotify, true);
+});
