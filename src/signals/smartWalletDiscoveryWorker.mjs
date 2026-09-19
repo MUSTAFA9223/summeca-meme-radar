@@ -631,8 +631,10 @@ async function harvestSolana(token) {
 
   const native = await fetchPumpNativeMarket(token.address, { includeFlow: true }).catch(() => null);
   if (Array.isArray(native?.buyerWallets) && native.buyerWallets.length) {
+    const creator = String(native?.creator || '').trim();
     buyers = native.buyerWallets
       .filter((row) => SOLANA.test(String(row?.address || '')))
+      .filter((row) => !creator || String(row?.address || '') !== creator)
       .slice(0, 12)
       .map((row) => ({
         address: String(row.address),
@@ -663,10 +665,14 @@ async function harvestSolana(token) {
       return [];
     });
     buyers = extractSolanaWinnerBuyers(rows, token.address, 12);
+    const creator = String(native?.creator || '').trim();
+    if (creator) buyers = buyers.filter((row) => row.address !== creator);
   }
 
   if (buyers.length) return buyers;
-  return harvestSolanaRpcFallback(token);
+  const fallback = await harvestSolanaRpcFallback(token);
+  const creator = String(native?.creator || '').trim();
+  return creator ? fallback.filter((row) => row.address !== creator) : fallback;
 }
 
 async function harvestEvm(token, network) {
