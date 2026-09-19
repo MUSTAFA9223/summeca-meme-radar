@@ -851,14 +851,17 @@ export class SmartWalletDiscoveryWorker {
     const walletLines = rows.map((row, index) =>
       `${index + 1}) ${row.walletAddress} • score ${finite(row.dynamicScore, row.walletScore).toFixed(0)}/100`
     );
-    const buttons = [
-      [
-        { text: '📋 نسخ العقد', copy_text: { text: tokenAddress } },
-        { text: '🔎 تحليل العملة', callback_data: `term:a:sol:${tokenAddress}` }
-      ],
-      [{ text: '👀 متابعة العملة', callback_data: `watch:add:${tokenAddress}` }]
-    ];
-    if (!late) buttons.splice(1, 0, [{ text: '🟢 شراء مع التأكيد', callback_data: `p6:b:sol:${tokenAddress}` }]);
+    const networkKey = cluster.network === 'solana' ? 'sol' : cluster.network === 'robinhood' ? 'rh' : cluster.network;
+    const buttons = [[
+      { text: '📋 نسخ العقد', copy_text: { text: tokenAddress } },
+      { text: '🔎 تحليل العملة', callback_data: `term:a:${networkKey}:${tokenAddress}` }
+    ]];
+    if (cluster.network === 'solana') {
+      if (!late) buttons.push([{ text: '🟢 شراء مع التأكيد', callback_data: `p6:b:sol:${tokenAddress}` }]);
+      buttons.push([{ text: '👀 متابعة العملة', callback_data: `watch:add:${tokenAddress}` }]);
+    } else if (!late) {
+      buttons.push([{ text: '🟢 معاينة شراء', callback_data: `term:b:${networkKey}:${tokenAddress}` }]);
+    }
     await telegramApi(env.telegramBotToken, 'sendMessage', {
       chat_id: String(chatId),
       text: [
@@ -1107,6 +1110,7 @@ export class SmartWalletDiscoveryWorker {
             '',
             `العملة: $${market.symbol} • الشبكة: ${label}`,
             `🏆 الدرجة الديناميكية: ${finite(wallet.dynamicScore, stats.score).toFixed(0)}/100 • أدلة تاريخية: ${stats.samples}`,
+            `🧭 Signal Score (محفظة + زخم): ${finite(cluster.score).toFixed(0)}/100`,
             `📈 متوسط أعلى صعود تاريخي: +${stats.avgPeakRoi.toFixed(1)}%`,
             `🎯 +50%: ${stats.hit50}/${stats.samples} (${stats.hit50Rate.toFixed(0)}%) • +100%: ${stats.hit100}/${stats.samples} (${stats.hit100Rate.toFixed(0)}%)`,
             '',
