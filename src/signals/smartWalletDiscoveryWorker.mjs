@@ -462,7 +462,7 @@ class Store {
       prefer: 'return=minimal',
       body: {
         token_id: tokenId,
-        signal_type: confirmingWallets >= 2 ? 'smart_cluster' : 'entry',
+        signal_type: 'entry',
         entry_score: entryScore,
         risk_score: entryContext?.timing?.late ? 55 : 25,
         reason: {
