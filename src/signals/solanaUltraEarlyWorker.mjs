@@ -27,6 +27,7 @@ const boolEnv = (name, fallback = true) => {
   return !['false', '0', 'off', 'no'].includes(raw);
 };
 const numEnv = (name, fallback, min, max) => Math.max(min, Math.min(max, finite(process.env[name], fallback)));
+const tokenSupplyCache = new Map();
 
 export function solanaProfileRetryDelayMs(failures = 1, {
   baseMs = 5_000,
@@ -49,6 +50,12 @@ export function solanaProfileProviderCooldownMs(status, {
     authCooldownMs: 300_000,
     maxCooldownMs: 120_000
   });
+}
+
+export function shouldTrySolanaGpaFallback(failures = 0, minFailures = 2) {
+  const count = Math.max(0, Math.floor(finite(failures)));
+  const threshold = Math.max(0, Math.floor(finite(minFailures, 2)));
+  return count >= threshold;
 }
 
 export function isSolanaPaperProbeEligible({
@@ -318,24 +325,45 @@ async function fetchProgramAccountHolderProfile(mint) {
   return holderProfileFromParsedProgramAccounts(rows);
 }
 
-async function fetchHolderProfile(mint) {
+async function fetchTokenSupplyAmount(mint) {
+  const key = String(mint || '');
+  const now = Date.now();
+  const cached = tokenSupplyCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.amount;
+
   const supplyResult = await sharedSolanaPublicRpc(
     'getTokenSupply',
-    [mint, { commitment: 'processed' }],
+    [key, { commitment: 'processed' }],
     { purpose: 'profile', timeoutMs: 4_500 }
   );
+  const amount = finite(supplyResult?.value?.amount);
+  if (amount > 0) {
+    tokenSupplyCache.set(key, { amount, expiresAt: now + 5 * 60_000 });
+    if (tokenSupplyCache.size > 1_000) {
+      for (const [mintKey, row] of tokenSupplyCache) {
+        if (row.expiresAt <= now) tokenSupplyCache.delete(mintKey);
+      }
+    }
+  }
+  return amount;
+}
+
+async function fetchHolderProfile(mint) {
+  // Largest-accounts is the scarce call on public RPC. Do it first so a rate
+  // limit does not waste a getTokenSupply request that cannot produce a profile.
   const largestResult = await sharedSolanaPublicRpc(
     'getTokenLargestAccounts',
     [mint, { commitment: 'processed' }],
     { purpose: 'profile', timeoutMs: 4_500 }
   );
-  const supply = finite(supplyResult?.value?.amount);
-  if (!(supply > 0)) return null;
   const balances = (Array.isArray(largestResult?.value) ? largestResult.value : [])
     .map((row) => finite(row?.amount))
     .filter((amount) => amount > 0)
     .sort((a, b) => b - a);
   if (!balances.length) return null;
+
+  const supply = await fetchTokenSupplyAmount(mint);
+  if (!(supply > 0)) return null;
 
   const shares = balances.map((amount) => amount / supply * 100);
   const curveExcluded = shares[0] >= 20;
@@ -452,6 +480,7 @@ export class SolanaUltraEarlyWorker {
     this.breakoutConfirmGapMs = numEnv('SOLANA_BREAKOUT_CONFIRM_GAP_MS', 6_000, 2_000, 60_000);
     this.topScore = numEnv('SOLANA_TOP_MIN_SCORE', 86, 70, 100);
     this.profileRefreshMs = numEnv('SOLANA_HOLDER_REFRESH_MS', 4_000, 2_000, 15_000);
+    this.gpaFallbackAfterFailures = Math.round(numEnv('SOLANA_GPA_FALLBACK_AFTER_FAILURES', 2, 0, 8));
     this.pendingMaxAgeMs = numEnv('SOLANA_PENDING_MAX_AGE_MS', 8 * 60_000, 4 * 60_000, 20 * 60_000);
     this.pumpNativeMaxPerCycle = numEnv('PUMP_NATIVE_MAX_PER_CYCLE', 4, 1, 8);
     this.pumpNativeFlowMaxPerCycle = numEnv('PUMP_NATIVE_FLOW_MAX_PER_CYCLE', 2, 0, 4);
@@ -701,8 +730,9 @@ export class SolanaUltraEarlyWorker {
         return helius;
       }
     } catch (error) {
-      if (error?.code !== 'HELIUS_HOLDER_COOLDOWN') {
-        console.warn(`[solana:holder-helius] mint=${short(mint)} ${error.message}`);
+      const message = String(error?.message ?? error);
+      if (error?.code !== 'HELIUS_HOLDER_COOLDOWN' && !/provider cooling down/i.test(message)) {
+        console.warn(`[solana:holder-helius] mint=${short(mint)} ${message}`);
       }
     }
 
@@ -737,20 +767,23 @@ export class SolanaUltraEarlyWorker {
       console.warn(`[solana:holder-fallback] mint=${short(mint)} ${error.message}`);
     }
 
-    // Expensive last resort only. Method-specific 401/403 cooldowns keep an RPC
-    // that rejects GPA from being retried for every fresh token.
-    try {
-      const gpa = await fetchProgramAccountHolderProfile(mint);
-      if (gpa) {
-        state.profile = gpa;
-        state.profileFailures = 0;
-        state.profileRetryAt = 0;
-        console.log(`[solana:holder-profile] mint=${short(mint)} provider=solana-getProgramAccounts holders=${gpa.observedAccounts} top=${gpa.topUserPct.toFixed(1)}% pass=${gpa.pass ? 'yes' : 'no'}`);
-        return gpa;
-      }
-    } catch (error) {
-      if (!/provider cooling down/i.test(String(error?.message ?? error))) {
-        console.warn(`[solana:holder-gpa] mint=${short(mint)} ${error.message}`);
+    // GPA is deliberately delayed until lighter providers have failed multiple
+    // profile cycles. This preserves the safety fallback without spending scarce
+    // public-RPC capacity on an expensive method for every fresh token.
+    if (shouldTrySolanaGpaFallback(state.profileFailures, this.gpaFallbackAfterFailures)) {
+      try {
+        const gpa = await fetchProgramAccountHolderProfile(mint);
+        if (gpa) {
+          state.profile = gpa;
+          state.profileFailures = 0;
+          state.profileRetryAt = 0;
+          console.log(`[solana:holder-profile] mint=${short(mint)} provider=solana-getProgramAccounts holders=${gpa.observedAccounts} top=${gpa.topUserPct.toFixed(1)}% pass=${gpa.pass ? 'yes' : 'no'}`);
+          return gpa;
+        }
+      } catch (error) {
+        if (!/provider cooling down/i.test(String(error?.message ?? error))) {
+          console.warn(`[solana:holder-gpa] mint=${short(mint)} ${error.message}`);
+        }
       }
     }
 

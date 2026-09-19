@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates, solanaProfileProviderCooldownMs, solanaProfileRetryDelayMs } from '../src/signals/solanaUltraEarlyWorker.mjs';
+import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates, shouldTrySolanaGpaFallback, solanaProfileProviderCooldownMs, solanaProfileRetryDelayMs } from '../src/signals/solanaUltraEarlyWorker.mjs';
 
 test('fresh initial-buy candidates outrank restored backlog', () => {
   const now = 1_000_000;
@@ -235,4 +235,12 @@ test('profile provider cooldown treats auth rejection as long-lived and rate lim
   assert.equal(solanaProfileProviderCooldownMs(429, { attempt: 2 }), 30_000);
   assert.equal(solanaProfileProviderCooldownMs(429, { retryAfterSec: 90 }), 90_000);
   assert.equal(solanaProfileProviderCooldownMs(500), 0);
+});
+
+
+test('GPA holder fallback waits for repeated lighter-provider failures', () => {
+  assert.equal(shouldTrySolanaGpaFallback(0, 2), false);
+  assert.equal(shouldTrySolanaGpaFallback(1, 2), false);
+  assert.equal(shouldTrySolanaGpaFallback(2, 2), true);
+  assert.equal(shouldTrySolanaGpaFallback(3, 2), true);
 });

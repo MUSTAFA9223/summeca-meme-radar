@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SharedSolanaRpcManager,
+  solanaPublicRpcEndpointKeysForMethod,
   solanaPublicRpcEndpoints,
   solanaRpcCooldownMs
 } from '../src/infra/solanaRpcManager.mjs';
@@ -78,6 +79,51 @@ test('429 cooldown is shared by later callers on the same endpoint lane', async 
   };
 
   await assert.rejects(manager.callEndpoint(options), /HTTP 429/);
+  await assert.rejects(manager.callEndpoint(options), /cooling down/);
+  assert.equal(fetches, 1);
+});
+
+
+test('holder-heavy RPC methods use capability-aware provider order', () => {
+  assert.deepEqual(
+    solanaPublicRpcEndpointKeysForMethod('getTokenLargestAccounts'),
+    ['custom', 'publicnode', 'mainnet', 'tracker']
+  );
+  assert.deepEqual(
+    solanaPublicRpcEndpointKeysForMethod('getProgramAccounts'),
+    ['custom', 'mainnet']
+  );
+});
+
+test('unsupported RPC method is learned and blocked without a second network call', async () => {
+  let now = 10_000;
+  let fetches = 0;
+  const manager = new SharedSolanaRpcManager({
+    nowFn: () => now,
+    sleepImpl: async (ms) => { now += ms; },
+    fetchImpl: async () => {
+      fetches += 1;
+      return new Response(JSON.stringify({
+        jsonrpc: '2.0',
+        error: { code: -32601, message: 'Method getProgramAccounts is not allowed' }
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      });
+    }
+  });
+
+  const options = {
+    key: 'method-capability',
+    url: 'https://rpc.example.invalid',
+    provider: 'Test RPC',
+    method: 'getProgramAccounts',
+    params: [],
+    timeoutMs: 2_000,
+    minIntervalMs: 0
+  };
+
+  await assert.rejects(manager.callEndpoint(options), /not allowed/);
   await assert.rejects(manager.callEndpoint(options), /cooling down/);
   assert.equal(fetches, 1);
 });
