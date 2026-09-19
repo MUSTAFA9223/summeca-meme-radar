@@ -40,6 +40,21 @@ export function solanaPublicRpcEndpoints(customUrl = process.env.SOLANA_PROFILE_
   });
 }
 
+export function solanaPublicRpcEndpointKeysForMethod(method) {
+  const name = String(method || '');
+  if (name === 'getProgramAccounts') return ['custom', 'mainnet'];
+  if (name === 'getTokenLargestAccounts') return ['custom', 'publicnode', 'mainnet', 'tracker'];
+  if (name === 'getTokenSupply') return ['custom', 'tracker', 'publicnode', 'mainnet'];
+  return ['custom', 'tracker', 'publicnode', 'mainnet'];
+}
+
+function orderPublicEndpoints(endpoints, keys) {
+  const byKey = new Map(endpoints.map((row) => [row.key, row]));
+  return (Array.isArray(keys) ? keys : [])
+    .map((key) => byKey.get(String(key)))
+    .filter(Boolean);
+}
+
 export class SharedSolanaRpcManager {
   constructor({
     fetchImpl = (...args) => globalThis.fetch(...args),
@@ -138,6 +153,7 @@ export class SharedSolanaRpcManager {
       if (body?.error) {
         const code = finite(body.error.code);
         const message = String(body.error.message || 'RPC error');
+        const error = new Error(`${provider} ${methodKey} ${body.error.code}: ${message}`);
         if (code === -32005 || /rate limit|too many requests/i.test(message)) {
           lane.endpointCooldownUntil = this.nowFn() + solanaRpcCooldownMs(429, {
             attempt,
@@ -145,7 +161,14 @@ export class SharedSolanaRpcManager {
             maxCooldownMs
           });
         }
-        throw new Error(`${provider} ${methodKey} ${body.error.code}: ${message}`);
+        if (code === -32601 || /method .*not (?:allowed|found)|method not allowed/i.test(message)) {
+          lane.methodCooldownUntil.set(methodKey, this.nowFn() + 60 * 60_000);
+          error.code = 'SOLANA_RPC_METHOD_UNSUPPORTED';
+        } else if (code === -32603 && /upstream returned non-json/i.test(message)) {
+          lane.methodCooldownUntil.set(methodKey, this.nowFn() + 10 * 60_000);
+          error.code = 'SOLANA_RPC_METHOD_DEGRADED';
+        }
+        throw error;
       }
 
       lane.methodCooldownUntil.delete(methodKey);
@@ -161,9 +184,13 @@ export class SharedSolanaRpcManager {
     purpose = 'normal',
     timeoutMs = 6_000,
     minIntervalMs = null,
-    maxAttempts = null
+    maxAttempts = null,
+    endpointKeys = null,
+    rotate = null
   } = {}) {
-    const endpoints = solanaPublicRpcEndpoints();
+    const allEndpoints = solanaPublicRpcEndpoints();
+    const methodKeys = endpointKeys ?? solanaPublicRpcEndpointKeysForMethod(method);
+    const endpoints = orderPublicEndpoints(allEndpoints, methodKeys);
     if (!endpoints.length) throw new Error(`Solana public RPC ${method} has no endpoints`);
 
     const interval = minIntervalMs ?? (
@@ -174,15 +201,17 @@ export class SharedSolanaRpcManager {
           : numEnv('SOLANA_RPC_PUBLIC_MIN_INTERVAL_MS', 700, 250, 10_000)
     );
 
-    const start = this.publicCursor++ % endpoints.length;
+    const shouldRotate = rotate == null ? purpose !== 'profile' : Boolean(rotate);
+    const start = shouldRotate ? this.publicCursor++ % endpoints.length : 0;
     const limit = Math.max(1, Math.min(
       endpoints.length,
       maxAttempts == null ? endpoints.length : Math.floor(finite(maxAttempts, endpoints.length))
     ));
-    let lastError = null;
 
-    for (let attempt = 0; attempt < limit; attempt += 1) {
-      const endpoint = endpoints[(start + attempt) % endpoints.length];
+    let lastError = null;
+    let networkAttempts = 0;
+    for (let offset = 0; offset < endpoints.length && networkAttempts < limit; offset += 1) {
+      const endpoint = endpoints[(start + offset) % endpoints.length];
       try {
         return await this.callEndpoint({
           key: `public:${endpoint.key}`,
@@ -192,10 +221,11 @@ export class SharedSolanaRpcManager {
           params,
           timeoutMs,
           minIntervalMs: interval,
-          attempt
+          attempt: networkAttempts
         });
       } catch (error) {
         lastError = error;
+        if (error?.code !== 'SOLANA_RPC_COOLDOWN') networkAttempts += 1;
       }
     }
 
