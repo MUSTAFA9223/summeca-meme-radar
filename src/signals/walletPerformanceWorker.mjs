@@ -73,7 +73,8 @@ export function summarizeWalletPerformance(signals, tokenById, now = Date.now())
     const token = tokenById.get(String(signal?.token_id || ''));
     if (!token) continue;
     const chain = String(token.chain || signal?.reason?.network || '').toLowerCase();
-    const entry = finite(signal?.reason?.detected_price_usd, finite(token.initial_price_usd));
+    const detectedEntry = finite(signal?.reason?.detected_price_usd);
+    const entry = detectedEntry > 0 ? detectedEntry : finite(token.initial_price_usd);
     const high = finite(token.highest_price_usd, entry);
     if (!(entry > 0 && high > 0)) continue;
     const peakRoi = (high / entry - 1) * 100;
@@ -228,7 +229,8 @@ export class WalletPerformanceWorker {
         const token = tokenById.get(String(signal?.token_id || ''));
         const price = priceByTokenId.get(String(signal?.token_id || ''));
         const signalAt = Date.parse(String(signal?.created_at || '')) || 0;
-        const entry = finite(signal?.reason?.detected_price_usd, finite(token?.initial_price_usd));
+        const detectedEntry = finite(signal?.reason?.detected_price_usd);
+        const entry = detectedEntry > 0 ? detectedEntry : finite(token?.initial_price_usd);
         if (!(signalAt > 0 && entry > 0 && price > 0)) continue;
         const ageMin = Math.max(0, (now - signalAt) / 60_000);
         const key = String(signal?.id || `${signal?.token_id}:${signal?.created_at}`);
