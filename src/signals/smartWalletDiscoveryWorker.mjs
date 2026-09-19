@@ -2,7 +2,7 @@ import { env } from '../config/env.mjs';
 import { AppSettings } from '../storage/appSettings.mjs';
 import { telegramApi } from '../notifiers/telegram.mjs';
 import { fetchPumpNativeMarket } from '../feeds/pumpFunNative.mjs';
-import { sharedSolanaPublicRpc } from '../infra/solanaRpcManager.mjs';
+import { sharedHeliusRpc, sharedSolanaPublicRpc } from '../infra/solanaRpcManager.mjs';
 
 const STATE_KEY = 'auto_smart_wallet_discovery_v1';
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
@@ -40,9 +40,23 @@ const short = (value) => {
 };
 const money = (value) => {
   const n = finite(value);
-  if (Math.abs(n) >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (Math.abs(n) >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-  return `$${n.toFixed(n >= 10 ? 2 : 4)}`;
+  if (Math.abs(n) >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (Math.abs(n) >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+  return `${n.toFixed(n >= 10 ? 2 : 4)}`;
+};
+const priceText = (value) => {
+  const n = finite(value);
+  if (!(n > 0)) return '—';
+  if (n >= 1) return `${n.toFixed(4)}`;
+  if (n >= 0.01) return `${n.toFixed(6)}`;
+  if (n >= 0.000001) return `${n.toFixed(9)}`;
+  return `${n.toExponential(4)}`;
+};
+const utcTime = (value) => {
+  const n = finite(value);
+  if (!(n > 0)) return '—';
+  const ms = n < 10_000_000_000 ? n * 1_000 : n;
+  return new Date(ms).toISOString().replace('T', ' ').replace('.000Z', ' UTC');
 };
 const normalizeNetwork = (chain) => {
   const key = low(chain);
@@ -108,6 +122,21 @@ export function scoreAutoSmartWallet(row, {
   ), 0, 100);
   const promoted = samples >= minSamples && score >= minScore && avgPeakRoi >= minAveragePeakRoi;
   return { samples, avgPeakRoi, hit50, hit100, score, promoted };
+}
+
+export function smartWalletSignalStats(wallet = {}) {
+  const samples = Math.max(0, Math.floor(finite(wallet?.samples)));
+  const hit50 = Math.max(0, Math.floor(finite(wallet?.hit50)));
+  const hit100 = Math.max(0, Math.floor(finite(wallet?.hit100)));
+  return {
+    score: clamp(Math.round(finite(wallet?.score)), 0, 100),
+    samples,
+    avgPeakRoi: finite(wallet?.avgPeakRoi),
+    hit50,
+    hit100,
+    hit50Rate: samples ? hit50 / samples * 100 : 0,
+    hit100Rate: samples ? hit100 / samples * 100 : 0
+  };
 }
 
 export function applyWinnerEvidence(existing, {
@@ -250,6 +279,77 @@ export function extractSolanaRpcWinnerBuyers(transactions, mint, limit = 12) {
   }
   return [...out.values()];
 }
+
+
+export function extractSolanaWalletBuy(tx, walletAddress) {
+  const wallet = String(walletAddress || '').trim();
+  const txMessage = tx?.transaction?.message;
+  if (!SOLANA.test(wallet) || !txMessage) return null;
+
+  const keys = (txMessage.accountKeys || []).map((entry) =>
+    typeof entry === 'string' ? entry : String(entry?.pubkey || entry?.address || '')
+  );
+  const walletIndex = keys.indexOf(wallet);
+  if (walletIndex < 0) return null;
+
+  const preSol = Array.isArray(tx?.meta?.preBalances) ? tx.meta.preBalances : [];
+  const postSol = Array.isArray(tx?.meta?.postBalances) ? tx.meta.postBalances : [];
+  let spentLamports = Math.max(0, finite(preSol[walletIndex]) - finite(postSol[walletIndex]));
+  if (walletIndex === 0) spentLamports = Math.max(0, spentLamports - finite(tx?.meta?.fee));
+
+  const balanceMap = (rows) => {
+    const map = new Map();
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (String(row?.owner || '') !== wallet) continue;
+      const mint = String(row?.mint || '');
+      if (!SOLANA.test(mint) || mint === 'So11111111111111111111111111111111111111112') continue;
+      const raw = String(row?.uiTokenAmount?.amount ?? '0');
+      const decimals = Math.max(0, Math.floor(finite(row?.uiTokenAmount?.decimals)));
+      const uiRaw = row?.uiTokenAmount?.uiAmountString ?? row?.uiTokenAmount?.uiAmount;
+      const ui = Number(uiRaw);
+      map.set(mint, {
+        raw: /^\d+$/.test(raw) ? BigInt(raw) : 0n,
+        decimals,
+        ui: Number.isFinite(ui) ? ui : Number(raw || 0) / (10 ** decimals)
+      });
+    }
+    return map;
+  };
+
+  const pre = balanceMap(tx?.meta?.preTokenBalances);
+  const post = balanceMap(tx?.meta?.postTokenBalances);
+  const logText = (tx?.meta?.logMessages || []).join('\n').toLowerCase();
+  const explicitTrade = /instruction:\s*(?:buy|buyexact|swap)\b|\bswap\b/.test(logText);
+  let best = null;
+
+  for (const mint of new Set([...pre.keys(), ...post.keys()])) {
+    const before = pre.get(mint) || { raw: 0n, ui: 0 };
+    const after = post.get(mint) || { raw: 0n, ui: 0 };
+    const rawDelta = after.raw - before.raw;
+    const uiDelta = finite(after.ui) - finite(before.ui);
+    if (rawDelta <= 0n && !(uiDelta > 0)) continue;
+    const candidate = {
+      mint,
+      tokenAmount: uiDelta > 0 ? uiDelta : null,
+      tokenAmountRaw: rawDelta > 0n ? rawDelta.toString() : null
+    };
+    if (!best || finite(candidate.tokenAmount) > finite(best.tokenAmount)) best = candidate;
+  }
+
+  if (!best) return null;
+  if (!explicitTrade && spentLamports < 500_000) return null;
+
+  const blockTime = finite(tx?.blockTime);
+  const solSpent = spentLamports / 1_000_000_000;
+  return {
+    ...best,
+    solSpent,
+    blockTime: blockTime > 0 ? blockTime : null,
+    blockTimeMs: blockTime > 0 ? blockTime * 1_000 : null,
+    signature: String(tx?._signature || tx?.signature || '')
+  };
+}
+
 
 export function extractEvmWinnerBuyers(logs, tokenAddress, pairAddress = '', limit = 20) {
   const token = low(tokenAddress);
