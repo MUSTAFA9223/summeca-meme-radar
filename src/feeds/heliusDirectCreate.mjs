@@ -3,6 +3,7 @@ import { sharedHeliusRpc, sharedSolanaPublicRpc } from '../infra/solanaRpcManage
 const PUMP_FUN_PROGRAM_ID = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const HELIUS_BACKOFF_MS = 180_000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
 let lastFallbackWarningAt = 0;
 
 const pubkey = (value) => {
