@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates, shouldTrySolanaGpaFallback, solanaProfileProviderCooldownMs, solanaProfileRetryDelayMs } from '../src/signals/solanaUltraEarlyWorker.mjs';
+import { advanceSolanaEarlyConfirmation, isSolanaBreakoutEligible, isSolanaEarlyAlertEligible, isSolanaPaperProbeEligible, selectSolanaMarketCandidates, shouldTrySolanaGpaFallback, solanaHolderProfileNeeded, solanaProfileProviderCooldownMs, solanaProfileRetryDelayMs } from '../src/signals/solanaUltraEarlyWorker.mjs';
 
 test('fresh initial-buy candidates outrank restored backlog', () => {
   const now = 1_000_000;
@@ -243,4 +243,11 @@ test('GPA holder fallback waits for repeated lighter-provider failures', () => {
   assert.equal(shouldTrySolanaGpaFallback(1, 2), false);
   assert.equal(shouldTrySolanaGpaFallback(2, 2), true);
   assert.equal(shouldTrySolanaGpaFallback(3, 2), true);
+});
+
+
+test('holder profile work is skipped only when the candidate cannot reach qualified score', () => {
+  assert.equal(solanaHolderProfileNeeded(46, 72, 25), false);
+  assert.equal(solanaHolderProfileNeeded(47, 72, 25), true);
+  assert.equal(solanaHolderProfileNeeded(60, 72, 25), true);
 });
